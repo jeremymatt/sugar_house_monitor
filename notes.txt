@@ -1,0 +1,1 @@
+@reboot sleep 30 && DISPLAY=:0 /home/releaser/.venv/bin/python /home/releaser/sugar_house_monitor/ultrasonic_distance_test.py > /home/releaser/crontab.log 2>&1
