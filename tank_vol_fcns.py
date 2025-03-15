@@ -66,8 +66,6 @@ class TANK:
         self.dim_df = tank_dims_dict[tank_name]['dim_df']
         self.bottom_dist = tank_dims_dict[tank_name]['bottom_dist']
 
-
-
         self.output_fn = os.path.join(data_store_directory,'{}.csv'.format(tank_name))
 
         if os.path.isfile(self.output_fn):
@@ -75,19 +73,18 @@ class TANK:
         else:
             self.history_df = pd.DataFrame()
 
-
-
-    def update_tank_status(self,dist_to_surf):
+    def update_status(self,dist_to_surf):
         self.dist_to_surf = dist_to_surf
         self.get_gal_in_tank()
         ts = dt.datetime.now()
         ind = len(self.history_df)
         row_data = [str(ts),ts.year,ts.month,ts.day,ts.hour,ts.minute,ts.second,dist_to_surf,self.depth,self.current_gallons]
         self.history_df.loc[ind,['timestamp','yr','mo','day','hr','m','s','surf_dist','depth','gal']] = row_data
+        self.history_df.to_csv(self.output_fn)
 
     def get_gal_in_tank(self):
         depth = self.bottom_dist-self.dist_to_surf
-        self.depth = depth
+        self.depth = np.round(depth,2)
         if depth>self.dim_df['depths'].max():
             depth = self.dim_df['depths'].max()
 

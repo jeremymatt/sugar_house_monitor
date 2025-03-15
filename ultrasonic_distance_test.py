@@ -5,6 +5,7 @@ import numpy as np
 import adafruit_character_lcd.character_lcd_rgb_i2c as character_lcd
 import board
 import busio
+import tank_vol_fcns as TVF
 
 lcd_red = [100,0,0]
 lcd_off = [0,0,0]
@@ -55,7 +56,7 @@ def exit_program(lcd):
         uart.close()
 
 def main():
-
+    brookside = TVF.TANK('brookside')
     lcd = init_display()
     lcd.clear()
     run = True
@@ -64,17 +65,29 @@ def main():
     try:
         while run:
             if measure:
-                # print('Reading distance...')
-                distance = read_distance()
-                if not isinstance(distance,type(None)):
-                    distance /= 25.4
-                    distance = np.round(distance,2)
-                    print(f"Distance: {distance}in")
-                    cur_msg = '{} in'.format(distance)
-                    if not cur_msg == prev_msg:
-                        lcd.clear()
-                        lcd.message = cur_msg
-                        prev_msg = cur_msg
+                cur_readings = []
+                for i in range(20):
+                    distance = read_distance()
+                    if not isinstance(distance,type(None)):
+                        distance /= 25.4
+                        distance = np.round(distance,2)
+                        cur_readings.append(distance)
+
+                    time.sleep(0.25)
+                
+                if len(cur_readings)>0:
+                    distance = np.mean(cur_readings)
+                    brookside.update_status(distance)
+                    
+                    cur_msg = 'depth: {}in\nGal: {}'.format(brookside.depth,brookside.current_gallons)
+                    print('\n{}'.format(cur_msg))
+                else:
+                    cur_msg = 'no valid\nreadings'
+
+                if not cur_msg == prev_msg:
+                    lcd.clear()
+                    lcd.message = cur_msg
+                    prev_msg = cur_msg
 
             if lcd.down_button:
                 measure = False
