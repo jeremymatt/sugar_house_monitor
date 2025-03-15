@@ -80,7 +80,7 @@ def main():
                     brookside.update_status(distance)
                     
                     cur_msg = 'depth: {}in\nGal: {}'.format(brookside.depth,brookside.current_gallons)
-                    print('\n{}'.format(cur_msg))
+                    print('distance: {}in\n{}'.format(distance,cur_msg))
                 else:
                     cur_msg = 'no valid\nreadings'
 
