@@ -66,7 +66,7 @@ def main():
         while run:
             if measure:
                 cur_readings = []
-                for i in range(20):
+                for i in range(8):
                     distance = read_distance()
                     if not isinstance(distance,type(None)):
                         distance /= 25.4
@@ -100,7 +100,7 @@ def main():
                 run = False
                 exit_program(lcd)
             else:
-                time.sleep(0.25)  # Adjust the delay as needed
+                time.sleep(28)  # Adjust the delay as needed
 
         
     except(KeyboardInterrupt, SystemExit): #when you press ctrl+c

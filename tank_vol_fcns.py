@@ -51,8 +51,8 @@ tank_dims_dict['roadside']['radius'] = roadside_radius
 tank_dims_dict['roadside']['dim_df'] = roadside_dimension_df
 tank_dims_dict['roadside']['bottom_dist'] = 56
 
-data_store_directory = os.path.join(os.path.expanduser(),'sugar_house_monitor','data')
-if not data_store_directory:
+data_store_directory = os.path.join(os.path.expanduser('~'),'sugar_house_monitor','data')
+if not os.path.isdir(data_store_directory):
     os.makedirs(data_store_directory)
 
 
@@ -70,6 +70,7 @@ class TANK:
 
         if os.path.isfile(self.output_fn):
             self.history_df = pd.read_csv(self.output_fn)
+            self.history_df.set_index('Unnamed: 0',inplace=True,drop=True)
         else:
             self.history_df = pd.DataFrame()
 
