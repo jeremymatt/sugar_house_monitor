@@ -42,7 +42,7 @@ tank_dims_dict['brookside']['width'] = brookside_width
 tank_dims_dict['brookside']['height'] = brookside_height
 tank_dims_dict['brookside']['radius'] = brookside_radius
 tank_dims_dict['brookside']['dim_df'] = brookside_dimension_df
-tank_dims_dict['brookside']['bottom_dist'] = 56 #inches from the sensor to the bottom of the tank
+tank_dims_dict['brookside']['bottom_dist'] = 55.125 #inches from the sensor to the bottom of the tank
 tank_dims_dict['roadside'] = {}
 tank_dims_dict['roadside']['length'] = roadside_length
 tank_dims_dict['roadside']['width'] = roadside_width
@@ -88,6 +88,8 @@ class TANK:
         self.depth = np.round(depth,2)
         if depth>self.dim_df['depths'].max():
             depth = self.dim_df['depths'].max()
+
+        print('\nbottom_dist: {}\ndist_reading: {}\nraw_depth: {}\nadjusted_depth:{}\n'.format(self.bottom_dist,self.dist_to_surf,self.depth,depth))
 
         ind = self.dim_df.loc[self.dim_df['depths']<=depth].index[-1]
         bottom_depth = self.dim_df.loc[ind,'depths']

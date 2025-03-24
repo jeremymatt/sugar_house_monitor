@@ -77,10 +77,12 @@ def main():
                 
                 if len(cur_readings)>0:
                     distance = np.mean(cur_readings)
-                    brookside.update_status(distance)
-                    
-                    cur_msg = 'depth: {}in\nGal: {}'.format(brookside.depth,brookside.current_gallons)
-                    print('distance: {}in\n{}'.format(distance,cur_msg))
+                    try:
+                        brookside.update_status(distance)              
+                        cur_msg = 'Depth: {}in\nGal: {}'.format(brookside.depth,brookside.current_gallons)
+                        print('distance: {}in\n{}'.format(distance,cur_msg))
+                    except:
+                        print("\n\n*******************\n***\nERROR ERROR ERROR\n***\n*****************\n\n")    
                 else:
                     cur_msg = 'no valid\nreadings'
 
@@ -100,7 +102,7 @@ def main():
                 run = False
                 exit_program(lcd)
             else:
-                time.sleep(28)  # Adjust the delay as needed
+                time.sleep(13)  # Adjust the delay as needed
 
         
     except(KeyboardInterrupt, SystemExit): #when you press ctrl+c
