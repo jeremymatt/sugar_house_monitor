@@ -14,7 +14,8 @@ lcd_off = [0,0,0]
 GPIO.setmode(GPIO.BCM)
 
 # Set up the serial port for UART communication
-uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
+# uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
+uart = serial.Serial("/dev/ttyAMA4", baudrate=9600, timeout=0.5)
 
 # Constants
 COM = 0x55
