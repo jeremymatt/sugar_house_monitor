@@ -1,36 +1,3 @@
-// function sendCommand(command,document) {
-//     console.log(`Sending command: ${command}`);
-//     fetch("/update", {
-//         method: "POST",
-//         headers: { "Content-Type": "application/json" },
-//         body: JSON.stringify({ command }),
-//     })
-//     .then(response => {
-//         console.log(`Response status: ${response.status}`);
-//         return response.json();
-//     })
-//     .then(data => {
-//         console.log("Response data:", data);
-//         updatePage(data,document);
-//     })
-//     .catch(error => console.error("Error sending command:", error));
-// }
-
-
-// function updatePage(data,document) {
-//     console.log("Data received in updatePage:", data);
-
-//     // Update text fields
-//     // document.getElementById("door_current_state").innerText = data.door_current_state;
-//     // document.getElementById("door_error_state").innerText = data.door_error_state;
-//     // document.getElementById("door_auto_state").innerText = data.door_auto_state;
-
-//     document.getElementById("light_current_state").innerText = data.light_current_state;
-//     // document.getElementById("light_auto_state").innerText = data.light_auto_state;
-
-//     // document.getElementById("system_time").innerText = data.system_time;
-// }
-
 function sendCommand(command) {
     console.log(`Sending command: ${command}`);
     fetch("/update", {
@@ -53,20 +20,20 @@ function updatePage(data) {
     console.log("Data received in updatePage:", data);
 
     // Update text fields
-    document.getElementById("door_current_state").innerText = data.door_current_state;
-    document.getElementById("door_motor_state").innerText = data.door_motor_state;
-    document.getElementById("door_error_state").innerText = data.door_error_state;
-    document.getElementById("door_auto_state").innerText = data.door_auto_state;
-
-    document.getElementById("light_current_state").innerText = data.light_current_state;
-    document.getElementById("light_auto_state").innerText = data.light_auto_state;
+    document.getElementById("brookside_current_gallons").innerText = data.brookside.current_gallons;
+    document.getElementById("brookside_rate_str").innerText = data.brookside.rate_str;
+    document.getElementById("brookside_remaining_time").innerText = data.brookside.remaining_time;
+    
+    document.getElementById("roadside_current_gallons").innerText = data.roadside.current_gallons;
+    document.getElementById("roadside_rate_str").innerText = data.roadside.rate_str;
+    document.getElementById("roadside_remaining_time").innerText = data.roadside.remaining_time;
 
     document.getElementById("system_time").innerText = data.system_time;
 }
 
 
 document.addEventListener("DOMContentLoaded", () => {
-    const updateInterval = 1000; // Update every second
+    const updateInterval = 1000*15; // Update every second
 
     
     function fetchUpdate() {

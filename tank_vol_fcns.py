@@ -4,6 +4,7 @@ import datetime as dt
 import os
 import time
 from multiprocessing import Queue
+import serial
 from hampel import hampel
 
 df_col_order = ['datetime','timestamp','yr','mo','day','hr','m','s','surf_dist','depth','gal']
@@ -76,23 +77,26 @@ data_store_directory = os.path.join(os.path.expanduser('~'),'sugar_house_monitor
 if not os.path.isdir(data_store_directory):
     os.makedirs(data_store_directory)
 
-
-
-
-def run_tank_controller(tank_name,uart,num_to_average,delay,queue_dict,readings_per_min=4):
-    tank = tank(tank_name,uart,num_to_average,delay,tank_dims_dict=tank_dims_dict)
-    reading_wait_time = max([0.25,(60/readings_per_min-num_to_average*delay)])
+def run_tank_controller(tank_name,queue_dict,measurement_rate_params):
+    num_to_average,delay,readings_per_min = measurement_rate_params
+    reading_wait_time = dt.timedelta(seconds=60/readings_per_min)
     command_queue = queue_dict['name']['command']
     response_queue = queue_dict['name']['response']
+    uart = queue_dict['name']['uart']
+    tank = tank(tank_name,uart,num_to_average,delay)
+    update_time = dt.datetime.now()-dt.timedelta(days=1)
     while True:
-        tank.update_status()
+        now = dt.datetime.now()
+        if now>update_time:
+            update_time = now+reading_wait_time
+            tank.update_status()
         # Check for commands from the main process
         if not command_queue.empty():
             command = command_queue.get()
             parts = command.split(':')
             if len(parts)==2:
                 command = parts[0]
-                command_val = parts[1]
+                command_val = int(parts[1])
             allowable_commands = [
                 'update',
                 'set_mins_back'
@@ -101,9 +105,9 @@ def run_tank_controller(tank_name,uart,num_to_average,delay,queue_dict,readings_
                 if command == "update":
                     tank.get_tank_rate()
                 if command == "set_mins_back":
-                    tank.get_tank_rate(command_val)
+                    tank.update_mins_back(command_val)
+                    tank.get_tank_rate()
                 response_queue.put(tank.return_current_state())
-        time.sleep(reading_wait_time)
 
 
 class TANK:
@@ -191,8 +195,8 @@ class TANK:
             self.history_df.loc[ind,df_col_order] = row_data
             self.history_df[df_col_order[1:]].to_csv(self.output_fn)
 
-    def set_mins_back(self,mins_back):
-        self.mins_back = mins_back
+    def update_mins_back(self,mins_back):
+        self.mins_back += mins_back
 
     def get_tank_rate(self):
         window_size = 50
@@ -246,7 +250,13 @@ class TANK:
         state['rate']  = self.tank_rate
         state['filling'] = self.filling
         state['emptying'] = self.emptying
-        state['remaining_time'] = str(self.remaining_time)
+        state['rate_str'] = '---'
+        state['remaining_time'] = 'N/A'
+        state['rate_str'] = '{}gals/hr over previous {}mins'.format(self.tank_rate,self.mins_back)
+        if self.filling:
+            state['remaining_time'] = 'Full in {}'.format(self.remaining_time)
+        if self.emptying:
+            state['remaining_time'] = 'Empty in {}'.format(self.remaining_time)
         state['mins_back'] = self.mins_back
 
         return state

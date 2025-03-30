@@ -44,15 +44,17 @@ def start_ngrok(port, static_ngrok_url):
         print(f"Failed to start Ngrok: {e}")
         return None
    
-def cleanup(ngrok_process,controller_process):
+def cleanup(ngrok_process,tank_processes):
     print("\nCleaning up...")
     if ngrok_process:
         ngrok_process.terminate()
         print("ngrok process terminated.")
-    if controller_process:
-        controller_process.terminate()
-        print("Coop controller process terminated.")
-    sys.exit(0)
+    
+    for key in tank_processes.keys():
+        if tank_processes[key]:
+            tank_processes[key].terminate()
+            print("{} controller process terminated.".format(key))
+        sys.exit(0)
 
 # Signal handler
 def signal_handler(sig, frame):
@@ -69,10 +71,18 @@ if __name__ == '__main__':
         print("Ngrok failed to start. Exiting.")
         exit(1)
 
-    print('\nINIT CONTROLLER PROCESS\n')
-    controller_process = Process(target=CF.run_coop_controller, args=(CF.command_queue, CF.response_queue))
-    print('\nSTART CONTROLLER PROCESS\n')
-    controller_process.start()
+    num_to_average = 8
+    delay = 0.25
+    readings_per_min = 4
+
+    measurement_rate_params = (num_to_average,delay,readings_per_min)
+
+    tank_processes = {}
+    for name in TVF.tank_names:
+        print('\nINIT {} CONTROLLER PROCESS\n'.format(name))
+        tank_processes[name] = Process(target=TVF.run_tank_controller, args=(name,TVF.queue_dict,measurement_rate_params))
+        print('\nSTART {} CONTROLLER PROCESS\n'.format(name))
+        tank_processes[name].start()
 
     # Start Flask app
     try:
@@ -81,5 +91,5 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"Failed to start Flask app: {e}")
     finally:
-        cleanup(ngrok_process,controller_process)
+        cleanup(ngrok_process,tank_processes)
     
