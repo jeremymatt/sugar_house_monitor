@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Coop Controller</title>
+    <script src="/static/script.js" defer></script>
+</head>
+<body>
+    <h1>COOP CONTROLLER</h1>
+
+
+    <h2>Door</h2>
+    <strong>Current state:</strong> <span id="door_current_state">Unknown</span><br>
+    <strong>Motor state:</strong> <span id="door_motor_state">Unknown</span><br>
+    <strong>Error state:</strong> <span id="door_error_state">Unknown</span><br>
+    <strong>Auto-door state:</strong> <span id="door_auto_state">Unknown</span><br>
+    <button style="background-color:rgb(142, 247, 142);" onclick="sendCommand('raise_door')">Raise</button>
+    <button style="background-color:rgb(142, 247, 142);" onclick="sendCommand('lower_door')">Lower</button>
+    <button style="background-color:rgb(237, 115, 115);" onclick="sendCommand('stop_door')">Stop</button>
+    <button style="background-color:grey;" onclick="sendCommand('cancel_override_door')">Auto</button><br><br>
+
+    <h2>Light</h2>
+    <strong>Current state:</strong> <span id="light_current_state">Unknown</span><br>
+    <strong>Auto-light state:</strong> <span id="light_auto_state">Unknown</span><br>
+    <button style="background-color:rgb(142, 247, 142);" onclick="sendCommand('light_on')">On</button>
+    <button style="background-color:rgb(237, 115, 115);" onclick="sendCommand('light_off')">Off</button>
+    <button style="background-color:grey;" onclick="sendCommand('cancel_override_light')">Auto</button><br><br>
+
+    <button style="background-color:grey;" onclick="sendCommand('clear_errors')">Clear errors</button><br><br>
+
+    System time: <span id="system_time">Unknown</span><br><br>
+
+    <form method="post" action="/logout">
+        <button type="submit" style="background-color:orange;">Logout</button>
+    </form>
+    
+
+</body>
+</html>

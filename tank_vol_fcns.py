@@ -3,9 +3,23 @@ import numpy as np
 import datetime as dt
 import os
 import time
+from multiprocessing import Queue
 from hampel import hampel
 
 df_col_order = ['datetime','timestamp','yr','mo','day','hr','m','s','surf_dist','depth','gal']
+
+tank_names = ['brookside','roadside']
+
+queue_dict = {}
+for name in tank_names:
+    queue_dict[name] = {}
+    queue_dict[name]['command'] = Queue()
+    queue_dict[name]['response'] = Queue()
+
+
+queue_dict['brookside']['uart'] = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
+queue_dict['roadside']['uart'] = serial.Serial("/dev/ttyAMA5", baudrate=9600, timeout=0.5)
+
 
 def calc_gallons_interp(df,length):
     df.loc[0,'gals_interp'] = 0
@@ -63,6 +77,35 @@ if not os.path.isdir(data_store_directory):
     os.makedirs(data_store_directory)
 
 
+
+
+def run_tank_controller(tank_name,uart,num_to_average,delay,queue_dict,readings_per_min=4):
+    tank = tank(tank_name,uart,num_to_average,delay,tank_dims_dict=tank_dims_dict)
+    reading_wait_time = max([0.25,(60/readings_per_min-num_to_average*delay)])
+    command_queue = queue_dict['name']['command']
+    response_queue = queue_dict['name']['response']
+    while True:
+        tank.update_status()
+        # Check for commands from the main process
+        if not command_queue.empty():
+            command = command_queue.get()
+            parts = command.split(':')
+            if len(parts)==2:
+                command = parts[0]
+                command_val = parts[1]
+            allowable_commands = [
+                'update',
+                'set_mins_back'
+            ]
+            if command in allowable_commands:
+                if command == "update":
+                    tank.get_tank_rate()
+                if command == "set_mins_back":
+                    tank.get_tank_rate(command_val)
+                response_queue.put(tank.return_current_state())
+        time.sleep(reading_wait_time)
+
+
 class TANK:
     def __init__(self,tank_name,uart,num_to_average,delay,tank_dims_dict=tank_dims_dict):
         self.name = tank_name
@@ -76,6 +119,7 @@ class TANK:
         self.radius = tank_dims_dict[tank_name]['radius']
         self.dim_df = tank_dims_dict[tank_name]['dim_df']
         self.bottom_dist = tank_dims_dict[tank_name]['bottom_dist']
+        self.mins_back = 30
 
         self.output_fn = os.path.join(data_store_directory,'{}.csv'.format(tank_name))
 
@@ -89,8 +133,6 @@ class TANK:
 
 
         self.current_day = dt.datetime.now().day
-
-            
 
     def read_distance(self):
         self.uart.write(bytes([self.uart_trigger]))
@@ -149,92 +191,65 @@ class TANK:
             self.history_df.loc[ind,df_col_order] = row_data
             self.history_df[df_col_order[1:]].to_csv(self.output_fn)
 
-    """
-history_df = brookside.history_df
-import datetime as dt
-from hampel import hampel
+    def set_mins_back(self,mins_back):
+        self.mins_back = mins_back
 
-window_size = 50
-hampel_unfiltered = int(window_size/2)+1
-n_sigma = .25
-
-mins_back = 30
-
-result = hampel(history_df.gal,window_size = window_size,n_sigma=float(n_sigma))
-history_df['gal_filter'] = result.filtered_data
-temp_df = history_df[:-hampel_unfiltered].copy()
-
-
-rate_window_lim = history_df.loc[history_df.index[-1],'datetime']-dt.timedelta(minutes=mins_back)
-rate_window = history_df.loc[history_df.datetime>rate_window_lim]
-
-timedelta = rate_window.datetime.diff()
-d_hrs = [val.total_seconds()/3600 for val in timedelta[timedelta.index[1:]]]
-d_hrs.insert(0,0)
-poly = np.polyfit(np.cumsum(d_hrs),rate_window.gal,1)
-
-tank_rate = np.round(poly[0],1)
-filling = False
-emptying = False
-if tank_rate > 5:
-    filling = True
-
-elif tank_rate < -5:
-    emptying = True
-
-remaining_time = 'N/A'
-if filling:
-    hours = (max(dim_df.gals_interp)-poly[1])/poly[0]-sum(d_hrs)
-    remaining_time = dt.timedelta(hours=hours)
-    remaining_time = dt.timedelta(seconds=remaining_time.seconds)
-
-if emptying:
-    hours = (0-poly[1])/poly[0]-sum(d_hrs)
-    remaining_time = dt.timedelta(hours=hours)
-    remaining_time = dt.timedelta(seconds=remaining_time.seconds)
-
-    """            
-
-    def get_tank_rate(self,mins_back):
+    def get_tank_rate(self):
         window_size = 50
         hampel_unfiltered = int(window_size/2)+1
-        n_sigma = .25
-        result = hampel(self.history_df.gal,window_size = window_size,n_sigma=float(n_sigma))
-        self.history_df['gal_filter'] = result.filtered_data
-        temp_df = self.history_df[:-hampel_unfiltered].copy()
-        rate_window_lim = temp_df.loc[temp_df.index[-1],'datetime']-dt.timedelta(minutes=mins_back)
-        rate_window = temp_df.loc[temp_df.datetime>rate_window_lim]
 
-        if len(rate_window)<5:
-            self.tank_rate = None
-        else:
-            timedelta = rate_window.datetime.diff()
-            d_hrs = [val.total_seconds()/3600 for val in timedelta[timedelta.index[1:]]]
-            d_hrs.insert(0,0)
-            poly = np.polyfit(np.cumsum(d_hrs),rate_window.gal_filter,1)
-
-            self.tank_rate = np.round(poly[0],1)
+        if len(self.history_df)<hampel_unfiltered+10:
+            
             self.filling = False
             self.emptying = False
-            if self.tank_rate > 5:
-                self.filling = True
-            elif self.tank_rate < -5:
-                self.emptying = True
+            self.remaining_time = 'not enough data'
+            self.tank_rate = 'ND'
+        else:
+            n_sigma = .25
+            result = hampel(self.history_df.gal,window_size = window_size,n_sigma=float(n_sigma))
+            self.history_df['gal_filter'] = result.filtered_data
+            temp_df = self.history_df[:-hampel_unfiltered].copy()
+            rate_window_lim = temp_df.loc[temp_df.index[-1],'datetime']-dt.timedelta(minutes=self.mins_back)
+            rate_window = temp_df.loc[temp_df.datetime>rate_window_lim]
 
-            self.remaining_time = 'N/A'
-            if self.filling:
-                hours = (max(self.dim_df.gals_interp)-poly[1])/poly[0]-sum(d_hrs)
-                self.remaining_time = dt.timedelta(hours=hours)
-                self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
-            if self.emptying:
-                hours = (0-poly[1])/poly[0]-sum(d_hrs)
-                self.remaining_time = dt.timedelta(hours=hours)
-                self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
+            if len(rate_window)<5:
+                self.tank_rate = "ND"
+            else:
+                timedelta = rate_window.datetime.diff()
+                d_hrs = [val.total_seconds()/3600 for val in timedelta[timedelta.index[1:]]]
+                d_hrs.insert(0,0)
+                poly = np.polyfit(np.cumsum(d_hrs),rate_window.gal_filter,1)
+
+                self.tank_rate = np.round(poly[0],1)
+                self.filling = False
+                self.emptying = False
+                if self.tank_rate > 5:
+                    self.filling = True
+                elif self.tank_rate < -5:
+                    self.emptying = True
+
+                self.remaining_time = 'N/A'
+                if self.filling:
+                    hours = (max(self.dim_df.gals_interp)-poly[1])/poly[0]-sum(d_hrs)
+                    self.remaining_time = dt.timedelta(hours=hours)
+                    self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
+                if self.emptying:
+                    hours = (0-poly[1])/poly[0]-sum(d_hrs)
+                    self.remaining_time = dt.timedelta(hours=hours)
+                    self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
 
             
+    def return_current_state(self):
+        state = {}
+        state['name'] = self.name
+        state['current_gallons'] = self.current_gallons
+        state['rate']  = self.tank_rate
+        state['filling'] = self.filling
+        state['emptying'] = self.emptying
+        state['remaining_time'] = str(self.remaining_time)
+        state['mins_back'] = self.mins_back
 
-
-
+        return state
 
 
 
@@ -243,10 +258,8 @@ if emptying:
         self.depth = np.round(depth,2)
         depth = max([0,depth])
         depth = min([depth,self.dim_df['depths'].max()])
-        # if depth>self.dim_df['depths'].max():
-        #     depth = self.dim_df['depths'].max()
 
-        print('\nbottom_dist: {}\ndist_reading: {}\nraw_depth: {}\nadjusted_depth:{}\n'.format(self.bottom_dist,self.dist_to_surf,self.depth,depth))
+        print('{}:\nbottom_dist: {}\ndist_reading: {}\nraw_depth: {}\nadjusted_depth:{}\n'.format(self.name,self.bottom_dist,self.dist_to_surf,self.depth,depth))
 
         ind = self.dim_df.loc[self.dim_df['depths']<=depth].index[-1]
         bottom_depth = self.dim_df.loc[ind,'depths']
