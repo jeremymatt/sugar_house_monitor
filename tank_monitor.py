@@ -77,26 +77,8 @@ def main():
             if measure:
                 brookside.update_status()
                 roadside.update_status()
-                cur_readings = []
-                for i in range(8):
-                    distance = read_distance()
-                    if not isinstance(distance,type(None)):
-                        distance /= 25.4
-                        distance = np.round(distance,2)
-                        cur_readings.append(distance)
 
-                    time.sleep(0.25)
-                
-                if len(cur_readings)>0:
-                    distance = np.mean(cur_readings)
-                    try:
-                        brookside.update_status(distance)              
-                        cur_msg = 'Depth: {}in\nGal: {}'.format(brookside.depth,brookside.current_gallons)
-                        print('distance: {}in\n{}'.format(distance,cur_msg))
-                    except:
-                        print("\n\n*******************\n***\nERROR ERROR ERROR\n***\n*****************\n\n")    
-                else:
-                    cur_msg = 'no valid\nreadings'
+                cur_msg = 'BS:{}/{}\nRS:{}/{}'.format(brookside.current_gallons,brookside.tank_rate,roadside.current_gallons,roadside.tank_rate)
 
                 if not cur_msg == prev_msg:
                     lcd.clear()

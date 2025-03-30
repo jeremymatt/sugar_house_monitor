@@ -152,8 +152,19 @@ class TANK:
     """
 history_df = brookside.history_df
 import datetime as dt
+from hampel import hampel
+
+window_size = 50
+hampel_unfiltered = int(window_size/2)+1
+n_sigma = .25
 
 mins_back = 30
+
+result = hampel(history_df.gal,window_size = window_size,n_sigma=float(n_sigma))
+history_df['gal_filter'] = result.filtered_data
+temp_df = history_df[:-hampel_unfiltered].copy()
+
+
 rate_window_lim = history_df.loc[history_df.index[-1],'datetime']-dt.timedelta(minutes=mins_back)
 rate_window = history_df.loc[history_df.datetime>rate_window_lim]
 
@@ -190,8 +201,8 @@ if emptying:
         n_sigma = .25
         result = hampel(self.history_df.gal,window_size = window_size,n_sigma=float(n_sigma))
         self.history_df['gal_filter'] = result.filtered_data
-        temp_df = self.history_df[-hampel_unfiltered:].copy()
-        rate_window_lim = temp_df[temp_df.index[-1],'datetime']-dt.timedelta(minutes=mins_back)
+        temp_df = self.history_df[:-hampel_unfiltered].copy()
+        rate_window_lim = temp_df.loc[temp_df.index[-1],'datetime']-dt.timedelta(minutes=mins_back)
         rate_window = temp_df.loc[temp_df.datetime>rate_window_lim]
 
         if len(rate_window)<5:
