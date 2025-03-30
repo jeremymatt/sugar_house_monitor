@@ -9,6 +9,8 @@ data_path = os.path.join(os.getcwd(),'data')
 
 data_fn = 'brookside_working_complete.csv'
 
+col_order = ['datetime','timestamp','yr','mo','day','hr','m','s','surf_dist','depth','gal']
+
 # data_fn = os.path.expanduser('~/sugar_house_monitor/data/brookside_working2.csv')
 data_fn = os.path.expanduser(os.path.join(data_path,data_fn))
 
