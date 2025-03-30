@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import os
+import time
+from hampel import hampel
 
 
 def calc_gallons_interp(df,length):
@@ -16,6 +18,10 @@ def calc_gallons_interp(df,length):
         df.loc[i,'gals_interp'] = df.loc[i-1,'gals_interp']+gals
 
     return df
+
+def calculate_checksum(buffer):
+    # Ensures that the checksum is constrained to a single byte (8 bits)
+    return (buffer[0] + buffer[1] + buffer[2]) & 0xFF
 
 brookside_length = 191.5
 brookside_width = 48
@@ -57,8 +63,12 @@ if not os.path.isdir(data_store_directory):
 
 
 class TANK:
-    def __init__(self,tank_name,tank_dims_dict=tank_dims_dict):
+    def __init__(self,tank_name,uart,num_to_average,delay,tank_dims_dict=tank_dims_dict):
         self.name = tank_name
+        self.uart = uart
+        self.num_to_average = num_to_average
+        self.delay = delay
+        self.uart_trigger = 0x55
         self.length = tank_dims_dict[tank_name]['length']
         self.width = tank_dims_dict[tank_name]['width']
         self.height = tank_dims_dict[tank_name]['height']
@@ -74,20 +84,59 @@ class TANK:
         else:
             self.history_df = pd.DataFrame()
 
-    def update_status(self,dist_to_surf):
-        self.dist_to_surf = dist_to_surf
-        self.get_gal_in_tank()
-        ts = dt.datetime.now()
-        ind = len(self.history_df)
-        row_data = [str(ts),ts.year,ts.month,ts.day,ts.hour,ts.minute,ts.second,dist_to_surf,self.depth,self.current_gallons]
-        self.history_df.loc[ind,['timestamp','yr','mo','day','hr','m','s','surf_dist','depth','gal']] = row_data
-        self.history_df.to_csv(self.output_fn)
+            
+
+    def read_distance(self):
+        self.uart.write(bytes([self.uart_trigger]))
+        time.sleep(0.1)
+        Distance = None
+        if self.uart.in_waiting > 0:
+            time.sleep(0.004)
+            if self.uart.read(1) == b'\xff':  # Judge packet header
+                buffer_RTT = self.uart.read(3)
+                if len(buffer_RTT) == 3:
+                    CS = calculate_checksum(b'\xff' + buffer_RTT)
+                    if buffer_RTT[2] == CS:
+                        Distance = (buffer_RTT[0] << 8) + buffer_RTT[1]  # Calculate distance
+
+        return Distance
+    
+    def get_average_distance(self):
+        cur_readings = []
+        for i in range(self.num_to_average):
+            distance = self.read_distance()
+            if not isinstance(distance,type(None)):
+                distance /= 25.4
+                distance = np.round(distance,2)
+                cur_readings.append(distance)
+
+            time.sleep(self.delay)
+        
+        if len(cur_readings)>0:
+            self.dist_to_surf = np.mean(cur_readings)
+        else:
+            self.dist_to_surf = None
+
+    def update_status(self):
+        self.get_average_distance()
+        if isinstance(self.dist_to_surf,type(None)):
+            print('ERROR ({} at {}): No distance measurement')
+            self.error_state = 'Invalid distance measurement'
+        else:
+            self.get_gal_in_tank()
+            ts = dt.datetime.now()
+            ind = len(self.history_df)
+            row_data = [str(ts),ts.year,ts.month,ts.day,ts.hour,ts.minute,ts.second,self.dist_to_surf,self.depth,self.current_gallons]
+            self.history_df.loc[ind,['timestamp','yr','mo','day','hr','m','s','surf_dist','depth','gal']] = row_data
+            self.history_df.to_csv(self.output_fn)
 
     def get_gal_in_tank(self):
         depth = self.bottom_dist-self.dist_to_surf
         self.depth = np.round(depth,2)
-        if depth>self.dim_df['depths'].max():
-            depth = self.dim_df['depths'].max()
+        depth = max([0,depth])
+        depth = min([depth,self.dim_df['depths'].max()])
+        # if depth>self.dim_df['depths'].max():
+        #     depth = self.dim_df['depths'].max()
 
         print('\nbottom_dist: {}\ndist_reading: {}\nraw_depth: {}\nadjusted_depth:{}\n'.format(self.bottom_dist,self.dist_to_surf,self.depth,depth))
 
