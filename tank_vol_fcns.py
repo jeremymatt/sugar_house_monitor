@@ -5,6 +5,7 @@ import os
 import time
 from hampel import hampel
 
+df_col_order = ['datetime','timestamp','yr','mo','day','hr','m','s','surf_dist','depth','gal']
 
 def calc_gallons_interp(df,length):
     df.loc[0,'gals_interp'] = 0
@@ -27,7 +28,7 @@ brookside_length = 191.5
 brookside_width = 48
 brookside_height = 40.75
 brookside_radius = 17
-brookside_depths = [0,1,2,3,4,5,6,7,8,9,10,11,12,13.25,20,25,30,36.25] #inches
+brookside_depths = [0,1,2,3,4,5,6,7,8,9,10,11,12,13.25,20,25,30,36.5] #inches
 brookside_widths = [10,19.25,27.25,33.25,37,39.5,41.5,43,44,45.5,46.5,47.375,47.75,48,48,48,48,48]
 brookside_dimension_df = pd.DataFrame({'depths':brookside_depths,'widths':brookside_widths})
 brookside_dimension_df = calc_gallons_interp(brookside_dimension_df,brookside_length)
@@ -81,8 +82,13 @@ class TANK:
         if os.path.isfile(self.output_fn):
             self.history_df = pd.read_csv(self.output_fn)
             self.history_df.set_index('Unnamed: 0',inplace=True,drop=True)
+            self.history_df['datetime'] = pd.to_datetime(self.history_df['timestamp'])
+            self.history_df = self.history_df[df_col_order]
         else:
             self.history_df = pd.DataFrame()
+
+
+        self.current_day = dt.datetime.now().day
 
             
 
@@ -119,16 +125,107 @@ class TANK:
 
     def update_status(self):
         self.get_average_distance()
+
+        if self.current_day != dt.datetime.now().day:
+            cur_time = dt.datetime.now()
+            self.current_day = cur_time.day
+
+            old_data = self.history_df[self.history_df.datetime<(cur_time-dt.timedelta(days=1))]
+            if len(old_data)>0:
+                min_date = min(old_data.datetime)
+                fn = os.path.join(data_store_directory,'{}_{}_{}_{}.csv'.format(self.name,min_date.year,str(min_date.month).zfill(2),str(min_date.day).zfill(2)))
+                old_data[df_col_order[1:]].to_csv(fn)
+                self.history_df = self.history_df[self.history_df.datetime>=(cur_time-dt.timedelta(days=1))]  
+
         if isinstance(self.dist_to_surf,type(None)):
             print('ERROR ({} at {}): No distance measurement')
             self.error_state = 'Invalid distance measurement'
+            self.status_message = 'ERR:no dist meas'
         else:
             self.get_gal_in_tank()
             ts = dt.datetime.now()
             ind = len(self.history_df)
-            row_data = [str(ts),ts.year,ts.month,ts.day,ts.hour,ts.minute,ts.second,self.dist_to_surf,self.depth,self.current_gallons]
-            self.history_df.loc[ind,['timestamp','yr','mo','day','hr','m','s','surf_dist','depth','gal']] = row_data
-            self.history_df.to_csv(self.output_fn)
+            row_data = [pd.to_datetime(ts),str(ts),ts.year,ts.month,ts.day,ts.hour,ts.minute,ts.second,self.dist_to_surf,self.depth,self.current_gallons]
+            self.history_df.loc[ind,df_col_order] = row_data
+            self.history_df[df_col_order[1:]].to_csv(self.output_fn)
+
+    """
+history_df = brookside.history_df
+import datetime as dt
+
+mins_back = 30
+rate_window_lim = history_df.loc[history_df.index[-1],'datetime']-dt.timedelta(minutes=mins_back)
+rate_window = history_df.loc[history_df.datetime>rate_window_lim]
+
+timedelta = rate_window.datetime.diff()
+d_hrs = [val.total_seconds()/3600 for val in timedelta[timedelta.index[1:]]]
+d_hrs.insert(0,0)
+poly = np.polyfit(np.cumsum(d_hrs),rate_window.gal,1)
+
+tank_rate = np.round(poly[0],1)
+filling = False
+emptying = False
+if tank_rate > 5:
+    filling = True
+
+elif tank_rate < -5:
+    emptying = True
+
+remaining_time = 'N/A'
+if filling:
+    hours = (max(dim_df.gals_interp)-poly[1])/poly[0]-sum(d_hrs)
+    remaining_time = dt.timedelta(hours=hours)
+    remaining_time = dt.timedelta(seconds=remaining_time.seconds)
+
+if emptying:
+    hours = (0-poly[1])/poly[0]-sum(d_hrs)
+    remaining_time = dt.timedelta(hours=hours)
+    remaining_time = dt.timedelta(seconds=remaining_time.seconds)
+
+    """            
+
+    def get_tank_rate(self,mins_back):
+        window_size = 50
+        hampel_unfiltered = int(window_size/2)+1
+        n_sigma = .25
+        result = hampel(self.history_df.gal,window_size = window_size,n_sigma=float(n_sigma))
+        self.history_df['gal_filter'] = result.filtered_data
+        temp_df = self.history_df[-hampel_unfiltered:].copy()
+        rate_window_lim = temp_df[temp_df.index[-1],'datetime']-dt.timedelta(minutes=mins_back)
+        rate_window = temp_df.loc[temp_df.datetime>rate_window_lim]
+
+        if len(rate_window)<5:
+            self.tank_rate = None
+        else:
+            timedelta = rate_window.datetime.diff()
+            d_hrs = [val.total_seconds()/3600 for val in timedelta[timedelta.index[1:]]]
+            d_hrs.insert(0,0)
+            poly = np.polyfit(np.cumsum(d_hrs),rate_window.gal_filter,1)
+
+            self.tank_rate = np.round(poly[0],1)
+            self.filling = False
+            self.emptying = False
+            if self.tank_rate > 5:
+                self.filling = True
+            elif self.tank_rate < -5:
+                self.emptying = True
+
+            self.remaining_time = 'N/A'
+            if self.filling:
+                hours = (max(self.dim_df.gals_interp)-poly[1])/poly[0]-sum(d_hrs)
+                self.remaining_time = dt.timedelta(hours=hours)
+                self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
+            if self.emptying:
+                hours = (0-poly[1])/poly[0]-sum(d_hrs)
+                self.remaining_time = dt.timedelta(hours=hours)
+                self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
+
+            
+
+
+
+
+
 
     def get_gal_in_tank(self):
         depth = self.bottom_dist-self.dist_to_surf
@@ -150,4 +247,4 @@ class TANK:
             vol = self.length*(depth-bottom_depth)*(bottom_width+top_width)/2
             gallons += vol/231
 
-        self.current_gallons = np.round(gallons,0)
+        self.current_gallons = np.round(gallons,2)

@@ -15,10 +15,8 @@ GPIO.setmode(GPIO.BCM)
 
 # Set up the serial port for UART communication
 brookside_uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
-roadside_uart = serial.Serial("/dev/ttyAMA4", baudrate=9600, timeout=0.5)
+roadside_uart = serial.Serial("/dev/ttyAMA5", baudrate=9600, timeout=0.5)
 
-# Constants
-COM = 0x55
 
 def init_display():        
     lcd_columns = 16
@@ -57,9 +55,18 @@ def exit_program(lcd):
         brookside_uart.close()
         roadside_uart.close()
 
+num_to_average = 8
+delay = 0.25
+"""
+brookside = TVF.TANK('brookside',brookside_uart,num_to_average,delay)
+brookside.get_tank_rate(60)
+print('rate: {} time: {}'.format(brookside.tank_rate,brookside.remaining_time))
+
+"""
+
 def main():
-    brookside = TVF.TANK('brookside',brookside_uart)
-    roadside = TVF.TANK('roadside',roadside_uart)
+    brookside = TVF.TANK('brookside',brookside_uart,num_to_average,delay)
+    roadside = TVF.TANK('roadside',roadside_uart,num_to_average,delay)
     lcd = init_display()
     lcd.clear()
     run = True
@@ -68,6 +75,8 @@ def main():
     try:
         while run:
             if measure:
+                brookside.update_status()
+                roadside.update_status()
                 cur_readings = []
                 for i in range(8):
                     distance = read_distance()
