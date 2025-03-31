@@ -308,13 +308,19 @@ class TANK:
                     d_hrs.insert(0,0)
                     poly = np.polyfit(np.cumsum(d_hrs),rate_window.gal_filter,1)
 
-                    self.tank_rate = np.round(poly[0],1)
                     self.filling = False
                     self.emptying = False
-                    if self.tank_rate > 5:
-                        self.filling = True
-                    elif self.tank_rate < -5:
-                        self.emptying = True
+                    if np.isnan(poly[0]):
+                        self.tank_rate = 'nan'
+                        self.history_df.to_csv('./data/nan.csv')
+                        print(rate_window)
+                        print(d_hrs)
+                    else:
+                        self.tank_rate = np.round(poly[0],1)
+                        if self.tank_rate > 5:
+                            self.filling = True
+                        elif self.tank_rate < -5:
+                            self.emptying = True
 
                     self.remaining_time = 'N/A'
                     if self.filling:
