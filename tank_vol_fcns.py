@@ -84,7 +84,7 @@ tank_dims_dict['roadside']['width'] = roadside_width
 tank_dims_dict['roadside']['height'] = roadside_height
 tank_dims_dict['roadside']['radius'] = roadside_radius
 tank_dims_dict['roadside']['dim_df'] = roadside_dimension_df
-tank_dims_dict['roadside']['bottom_dist'] = 56
+tank_dims_dict['roadside']['bottom_dist'] = 56 #inches from the sensor to the bottom of the tank
 
 data_store_directory = os.path.join(os.path.expanduser('~'),'sugar_house_monitor','data')
 if not os.path.isdir(data_store_directory):
@@ -364,11 +364,12 @@ class TANK:
 
     def get_gal_in_tank(self):
         depth = self.bottom_dist-self.dist_to_surf
-        self.depth = np.round(depth,2)
+        self.raw_depth = np.round(depth,2)
         depth = max([0,depth])
         depth = min([depth,self.dim_df['depths'].max()])
+        self.depth = depth
 
-        print('{}:\nbottom_dist: {}\ndist_reading: {}\nraw_depth: {}\nadjusted_depth:{}\n'.format(self.name,self.bottom_dist,self.dist_to_surf,self.depth,depth))
+        print('{}:\nbottom_dist: {}\ndist_reading: {}\nraw_depth: {}\nadjusted_depth:{}\n'.format(self.name,self.bottom_dist,self.dist_to_surf,self.raw_depth,depth))
 
         ind = self.dim_df.loc[self.dim_df['depths']<=depth].index[-1]
         bottom_depth = self.dim_df.loc[ind,'depths']
