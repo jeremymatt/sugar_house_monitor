@@ -32,6 +32,10 @@ function updatePage(data) {
     document.getElementById("roadside_sap_surface").innerText = data.roadside.dist_to_surf;
     document.getElementById("roadside_sap_depth").innerText = data.roadside.depth;
 
+    
+    document.getElementById("rate_window").innerText = data.roadside.mins_back;
+   
+
     document.getElementById("system_time").innerText = data.system_time;
 }
 

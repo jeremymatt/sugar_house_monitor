@@ -279,6 +279,8 @@ class TANK:
 
     def update_mins_back(self,mins_back):
         self.mins_back += mins_back
+        self.mins_back = max([5,self.mins_back])
+        self.mins_back = min([240,self.mins_back])
 
     def get_tank_rate(self):
         now = dt.datetime.now()
@@ -327,7 +329,7 @@ class TANK:
     def return_screen_data(self):
         state = {}
         state['name'] = self.name
-        state[0] = '{} \\ {}gph'.format(int(self.current_gallons),self.tank_rate,1)
+        state[0] = '{} | {}gph'.format(int(self.current_gallons),self.tank_rate,1)
         state[1] = 'raw dst: {}"'.format(self.dist_to_surf)
         state[2] = 'depth: {}"'.format(self.depth)
         return state
@@ -341,8 +343,13 @@ class TANK:
         state['emptying'] = self.emptying
         state['rate_str'] = '---'
         state['remaining_time'] = 'N/A'
-        state['dist_to_surf'] = 'raw dst: {}"'.format(self.dist_to_surf)
-        state['depth'] = 'depth: {}"'.format(self.depth)
+        try:
+            state['dist_to_surf'] = np.round(self.dist_to_surf,3)
+            state['depth'] = np.round(self.depth,3)
+        except:
+            state['dist_to_surf'] = '???'
+            state['depth'] =  '???'
+
         if self.filling:
             state['remaining_time'] = 'Full in {}(hh:mm:ss)'.format(self.remaining_time)
             state['rate_str'] = '{}gals/hr over previous {}mins'.format(self.tank_rate,self.mins_back)
