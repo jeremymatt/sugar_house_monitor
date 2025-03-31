@@ -4,22 +4,35 @@ import datetime as dt
 import os
 import time
 from multiprocessing import Queue
+import adafruit_character_lcd.character_lcd_rgb_i2c as character_lcd
+import board
+import busio
+import RPi.GPIO as GPIO
 import serial
 from hampel import hampel
+
+
+#Set the GPIO pin numbering mode
+GPIO.setmode(GPIO.BCM)
 
 df_col_order = ['datetime','timestamp','yr','mo','day','hr','m','s','surf_dist','depth','gal']
 
 tank_names = ['brookside','roadside']
 
 queue_dict = {}
-for name in tank_names:
-    queue_dict[name] = {}
-    queue_dict[name]['command'] = Queue()
-    queue_dict[name]['response'] = Queue()
+for tank_name in tank_names:
+    queue_dict[tank_name] = {}
+    queue_dict[tank_name]['command'] = Queue()
+    queue_dict[tank_name]['response'] = Queue()
+    queue_dict[tank_name]['screen_response'] = Queue()
 
 
 queue_dict['brookside']['uart'] = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
 queue_dict['roadside']['uart'] = serial.Serial("/dev/ttyAMA5", baudrate=9600, timeout=0.5)
+
+
+lcd_red = [100,0,0]
+lcd_off = [0,0,0]
 
 
 def calc_gallons_interp(df,length):
@@ -76,14 +89,72 @@ tank_dims_dict['roadside']['bottom_dist'] = 56
 data_store_directory = os.path.join(os.path.expanduser('~'),'sugar_house_monitor','data')
 if not os.path.isdir(data_store_directory):
     os.makedirs(data_store_directory)
+    
+
+def init_display():        
+    lcd_columns = 16
+    lcd_rows = 2
+    i2c = busio.I2C(board.SCL, board.SDA)
+    lcd = character_lcd.Character_LCD_RGB_I2C(i2c, lcd_columns, lcd_rows)
+    lcd.color = lcd_red
+    return lcd
+
+def run_lcd_screen(lcd,queue_dict):
+    lcd.clear()
+    lcd.message = "HELLO"
+    time.sleep(2)
+    lcd.clear()
+
+    next_update = dt.datetime.now() - dt.timedelta(days=1)
+    screen_update_frequency = dt.timedelta(seconds=15)
+
+    tank_ctr = 0
+    param_ctr = 0
+    prev_msg = 'none'
+    cur_msg = 'weekend'
+
+    while True:
+        now = dt.datetime.now()
+        if now > next_update:
+            next_update = now+screen_update_frequency
+            responses = {}
+            for ind,tank_name in enumerate(tank_names):
+                queue_dict[tank_name]['command'].put('update_screen')
+                while queue_dict[tank_name]['screen_response'].empty():
+                    time.sleep(0.1)
+                responses[ind] = queue_dict[tank_name]['screen_response'].get()
+
+        if tank_ctr in responses.keys():
+            if param_ctr in responses[tank_ctr].keys():
+                cur_msg = '{}\n{}'.format(responses[tank_ctr]['name'],responses[tank_ctr][param_ctr])
+            else:
+                print('{} param ctr not in keys: {}'.format(param_ctr,responses[tank_ctr].keys()))
+        else:
+            print('{} not in keys: {}'.format(tank_ctr,responses.keys()))
+        if not cur_msg == prev_msg:
+            lcd.clear()
+            lcd.message = cur_msg
+            prev_msg = cur_msg
+        
+        if lcd.down_button:
+            tank_ctr -= 1
+        if lcd.up_button:
+            tank_ctr += 1
+        if lcd.left_button:
+            param_ctr -= 1
+        if lcd.right_button:
+            param_ctr += 1
+        tank_ctr %= 2
+        param_ctr %= 3
 
 def run_tank_controller(tank_name,queue_dict,measurement_rate_params):
-    num_to_average,delay,readings_per_min = measurement_rate_params
+    num_to_average,delay,readings_per_min,window_size,n_sigma,rate_update_dt = measurement_rate_params
     reading_wait_time = dt.timedelta(seconds=60/readings_per_min)
-    command_queue = queue_dict['name']['command']
-    response_queue = queue_dict['name']['response']
-    uart = queue_dict['name']['uart']
-    tank = tank(tank_name,uart,num_to_average,delay)
+    command_queue = queue_dict[tank_name]['command']
+    response_queue = queue_dict[tank_name]['response']
+    screen_response_queue = queue_dict[tank_name]['screen_response']
+    uart = queue_dict[tank_name]['uart']
+    tank = TANK(tank_name,uart,num_to_average,delay,window_size,n_sigma,rate_update_dt)
     update_time = dt.datetime.now()-dt.timedelta(days=1)
     while True:
         now = dt.datetime.now()
@@ -99,23 +170,32 @@ def run_tank_controller(tank_name,queue_dict,measurement_rate_params):
                 command_val = int(parts[1])
             allowable_commands = [
                 'update',
+                'update_screen',
                 'set_mins_back'
             ]
             if command in allowable_commands:
-                if command == "update":
+                if command == 'update_screen':
                     tank.get_tank_rate()
-                if command == "set_mins_back":
-                    tank.update_mins_back(command_val)
-                    tank.get_tank_rate()
-                response_queue.put(tank.return_current_state())
+                    screen_response_queue.put(tank.return_screen_data())
+                else:
+                    if command == "update":
+                        tank.get_tank_rate()
+                    if command == "set_mins_back":
+                        tank.update_mins_back(command_val)
+                        tank.get_tank_rate()
+                    response_queue.put(tank.return_current_state())
 
 
 class TANK:
-    def __init__(self,tank_name,uart,num_to_average,delay,tank_dims_dict=tank_dims_dict):
+    def __init__(self,tank_name,uart,num_to_average,delay,window_size,n_sigma,rate_update_dt,tank_dims_dict=tank_dims_dict):
         self.name = tank_name
         self.uart = uart
         self.num_to_average = num_to_average
         self.delay = delay
+        self.window_size = window_size
+        self.n_sigma = n_sigma
+        self.rate_update_dt = dt.timedelta(seconds=rate_update_dt)
+        self.next_rate_update = dt.datetime.now()-dt.timedelta(days=1)
         self.uart_trigger = 0x55
         self.length = tank_dims_dict[tank_name]['length']
         self.width = tank_dims_dict[tank_name]['width']
@@ -124,6 +204,8 @@ class TANK:
         self.dim_df = tank_dims_dict[tank_name]['dim_df']
         self.bottom_dist = tank_dims_dict[tank_name]['bottom_dist']
         self.mins_back = 30
+        self.filling = False
+        self.emptying = False
 
         self.output_fn = os.path.join(data_store_directory,'{}.csv'.format(tank_name))
 
@@ -199,64 +281,72 @@ class TANK:
         self.mins_back += mins_back
 
     def get_tank_rate(self):
-        window_size = 50
-        hampel_unfiltered = int(window_size/2)+1
+        now = dt.datetime.now()
+        if now > self.next_rate_update:
+            self.next_rate_update = now + self.rate_update_dt
+            hampel_unfiltered = int(self.window_size/2)+1
 
-        if len(self.history_df)<hampel_unfiltered+10:
-            
-            self.filling = False
-            self.emptying = False
-            self.remaining_time = 'not enough data'
-            self.tank_rate = 'ND'
-        else:
-            n_sigma = .25
-            result = hampel(self.history_df.gal,window_size = window_size,n_sigma=float(n_sigma))
-            self.history_df['gal_filter'] = result.filtered_data
-            temp_df = self.history_df[:-hampel_unfiltered].copy()
-            rate_window_lim = temp_df.loc[temp_df.index[-1],'datetime']-dt.timedelta(minutes=self.mins_back)
-            rate_window = temp_df.loc[temp_df.datetime>rate_window_lim]
-
-            if len(rate_window)<5:
-                self.tank_rate = "ND"
-            else:
-                timedelta = rate_window.datetime.diff()
-                d_hrs = [val.total_seconds()/3600 for val in timedelta[timedelta.index[1:]]]
-                d_hrs.insert(0,0)
-                poly = np.polyfit(np.cumsum(d_hrs),rate_window.gal_filter,1)
-
-                self.tank_rate = np.round(poly[0],1)
+            if len(self.history_df)<hampel_unfiltered+10:
                 self.filling = False
                 self.emptying = False
-                if self.tank_rate > 5:
-                    self.filling = True
-                elif self.tank_rate < -5:
-                    self.emptying = True
+                self.remaining_time = 'not enough data'
+                self.tank_rate = 'ND'
+            else:
+                result = hampel(self.history_df.gal,window_size = self.window_size,n_sigma=float(self.n_sigma))
+                self.history_df['gal_filter'] = result.filtered_data
+                temp_df = self.history_df[:-hampel_unfiltered].copy()
+                rate_window_lim = temp_df.loc[temp_df.index[-1],'datetime']-dt.timedelta(minutes=self.mins_back)
+                rate_window = temp_df.loc[temp_df.datetime>rate_window_lim]
 
-                self.remaining_time = 'N/A'
-                if self.filling:
-                    hours = (max(self.dim_df.gals_interp)-poly[1])/poly[0]-sum(d_hrs)
-                    self.remaining_time = dt.timedelta(hours=hours)
-                    self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
-                if self.emptying:
-                    hours = (0-poly[1])/poly[0]-sum(d_hrs)
-                    self.remaining_time = dt.timedelta(hours=hours)
-                    self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
+                if len(rate_window)<5:
+                    self.tank_rate = "ND"
+                else:
+                    timedelta = rate_window.datetime.diff()
+                    d_hrs = [val.total_seconds()/3600 for val in timedelta[timedelta.index[1:]]]
+                    d_hrs.insert(0,0)
+                    poly = np.polyfit(np.cumsum(d_hrs),rate_window.gal_filter,1)
 
-            
+                    self.tank_rate = np.round(poly[0],1)
+                    self.filling = False
+                    self.emptying = False
+                    if self.tank_rate > 5:
+                        self.filling = True
+                    elif self.tank_rate < -5:
+                        self.emptying = True
+
+                    self.remaining_time = 'N/A'
+                    if self.filling:
+                        hours = (max(self.dim_df.gals_interp)-poly[1])/poly[0]-sum(d_hrs)
+                        self.remaining_time = dt.timedelta(hours=hours)
+                        self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
+                    if self.emptying:
+                        hours = (0-poly[1])/poly[0]-sum(d_hrs)
+                        self.remaining_time = dt.timedelta(hours=hours)
+                        self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
+
+    def return_screen_data(self):
+        state = {}
+        state['name'] = self.name
+        state[0] = '{} \\ {}gph'.format(int(self.current_gallons),self.tank_rate,1)
+        state[1] = 'raw dst: {}"'.format(self.dist_to_surf)
+        state[2] = 'depth: {}"'.format(self.depth)
+        return state
+
     def return_current_state(self):
         state = {}
         state['name'] = self.name
-        state['current_gallons'] = self.current_gallons
+        state['current_gallons'] = np.round(self.current_gallons,0)
         state['rate']  = self.tank_rate
         state['filling'] = self.filling
         state['emptying'] = self.emptying
         state['rate_str'] = '---'
         state['remaining_time'] = 'N/A'
-        state['rate_str'] = '{}gals/hr over previous {}mins'.format(self.tank_rate,self.mins_back)
         if self.filling:
-            state['remaining_time'] = 'Full in {}'.format(self.remaining_time)
+            state['remaining_time'] = 'Full in {}(hh:mm:ss)'.format(self.remaining_time)
+            state['rate_str'] = '{}gals/hr over previous {}mins'.format(self.tank_rate,self.mins_back)
         if self.emptying:
-            state['remaining_time'] = 'Empty in {}'.format(self.remaining_time)
+            state['remaining_time'] = 'Empty in {}(hh:mm:ss)'.format(self.remaining_time)
+            state['rate_str'] = '{}gals/hr over previous {}mins'.format(self.tank_rate,self.mins_back)
         state['mins_back'] = self.mins_back
 
         return state

@@ -40,7 +40,7 @@ def index():
     if session.get("authenticated"):
         return render_template("template.html")
     else:
-        return render_template('login.html')    
+        return render_template("template.html") 
         
 @app.route('/update', methods=['GET','POST'])
 def update():
