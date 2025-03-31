@@ -341,6 +341,8 @@ class TANK:
         state['emptying'] = self.emptying
         state['rate_str'] = '---'
         state['remaining_time'] = 'N/A'
+        state['dist_to_surf'] = 'raw dst: {}"'.format(self.dist_to_surf)
+        state['depth'] = 'depth: {}"'.format(self.depth)
         if self.filling:
             state['remaining_time'] = 'Full in {}(hh:mm:ss)'.format(self.remaining_time)
             state['rate_str'] = '{}gals/hr over previous {}mins'.format(self.tank_rate,self.mins_back)

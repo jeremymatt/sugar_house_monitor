@@ -23,10 +23,14 @@ function updatePage(data) {
     document.getElementById("brookside_current_gallons").innerText = data.brookside.current_gallons;
     document.getElementById("brookside_rate_str").innerText = data.brookside.rate_str;
     document.getElementById("brookside_remaining_time").innerText = data.brookside.remaining_time;
+    document.getElementById("brookside_sap_surface").innerText = data.brookside.dist_to_surf;
+    document.getElementById("brookside_sap_depth").innerText = data.brookside.depth;
     
     document.getElementById("roadside_current_gallons").innerText = data.roadside.current_gallons;
     document.getElementById("roadside_rate_str").innerText = data.roadside.rate_str;
     document.getElementById("roadside_remaining_time").innerText = data.roadside.remaining_time;
+    document.getElementById("roadside_sap_surface").innerText = data.roadside.dist_to_surf;
+    document.getElementById("roadside_sap_depth").innerText = data.roadside.depth;
 
     document.getElementById("system_time").innerText = data.system_time;
 }
