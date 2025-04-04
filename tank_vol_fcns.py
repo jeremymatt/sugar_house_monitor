@@ -357,11 +357,21 @@ class TANK:
             state['depth'] =  '???'
 
         if self.filling:
-            state['remaining_time'] = 'Full in {}(hh:mm:ss)'.format(self.remaining_time)
+            now = dt.datetime.now()
+            remaining_hrs = np.round(self.remaining_time.seconds/3600,1)
+            # state['remaining_time'] = 'Full in {}(hh:mm:ss)'.format(self.remaining_time)
+            remaining_time_prefix = 'Full'
             state['rate_str'] = '{}gals/hr over previous {}mins'.format(self.tank_rate,self.mins_back)
         if self.emptying:
-            state['remaining_time'] = 'Empty in {}(hh:mm:ss)'.format(self.remaining_time)
+            # state['remaining_time'] = 'Empty in {}(hh:mm:ss)'.format(self.remaining_time)
+            remaining_time_prefix = 'Empty'
             state['rate_str'] = '{}gals/hr over previous {}mins'.format(self.tank_rate,self.mins_back)
+
+        if self.filling or self.emptying:
+            full_time = dt.datetime.now()+self.remaining_time
+            remaining_hrs = np.round(self.remaining_time.seconds/3600,1)
+            state['remaining_time'] = '{} at {} ({}hrs)'.format(remaining_time_prefix, full_time.strftime('%I:%M%p'),remaining_hrs)
+
         state['mins_back'] = self.mins_back
 
         return state
