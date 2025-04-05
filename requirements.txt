@@ -1,5 +1,5 @@
+wheel
 numpy
-adafruit-blinka
 flask
 adafruit-circuitpython-charlcd
 hampel

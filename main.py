@@ -69,9 +69,9 @@ if __name__ == '__main__':
     port = 8080
 
     if TVF.testing:
-        ngrok_static_url = 'amused-wired-stork.ngrok-free.app'
-    else:
         ngrok_static_url = 'arriving-seahorse-exotic.ngrok-free.app'
+    else:
+        ngrok_static_url = 'amused-wired-stork.ngrok-free.app'
         # Start Ngrok
 
     ngrok_process = start_ngrok(port, ngrok_static_url)
