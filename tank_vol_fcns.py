@@ -84,7 +84,7 @@ tank_dims_dict['roadside']['width'] = roadside_width
 tank_dims_dict['roadside']['height'] = roadside_height
 tank_dims_dict['roadside']['radius'] = roadside_radius
 tank_dims_dict['roadside']['dim_df'] = roadside_dimension_df
-tank_dims_dict['roadside']['bottom_dist'] = 56 #inches from the sensor to the bottom of the tank
+tank_dims_dict['roadside']['bottom_dist'] = 50.75 #inches from the sensor to the bottom of the tank
 
 data_store_directory = os.path.join(os.path.expanduser('~'),'sugar_house_monitor','data')
 if not os.path.isdir(data_store_directory):
@@ -343,21 +343,20 @@ class TANK:
     def return_current_state(self):
         state = {}
         state['name'] = self.name
-        state['current_gallons'] = np.round(self.current_gallons,0)
-        state['rate']  = self.tank_rate
-        state['filling'] = self.filling
-        state['emptying'] = self.emptying
+        state['current_gallons'] = str(np.round(self.current_gallons,0))
+        state['rate']  = str(self.tank_rate)
+        state['filling'] = str(self.filling)
+        state['emptying'] = str(self.emptying)
         state['rate_str'] = '---'
         state['remaining_time'] = 'N/A'
         try:
-            state['dist_to_surf'] = np.round(self.dist_to_surf,3)
-            state['depth'] = np.round(self.depth,3)
+            state['dist_to_surf'] = str(np.round(self.dist_to_surf,3))
+            state['depth'] = str(np.round(self.depth,3))
         except:
             state['dist_to_surf'] = '???'
             state['depth'] =  '???'
 
         if self.filling:
-            now = dt.datetime.now()
             remaining_hrs = np.round(self.remaining_time.seconds/3600,1)
             # state['remaining_time'] = 'Full in {}(hh:mm:ss)'.format(self.remaining_time)
             remaining_time_prefix = 'Full'
