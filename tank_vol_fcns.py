@@ -188,7 +188,7 @@ def run_tank_controller(tank_name,queue_dict,measurement_rate_params):
                         tank.update_mins_back(command_val)
                         tank.get_tank_rate()
                     if command == "reset_dataframe":
-                        tank.reset_dataframe(self,-1)
+                        tank.reset_dataframe(-1)
                     response_queue.put(tank.return_current_state())
 
 
@@ -291,7 +291,7 @@ class TANK:
             cur_time = dt.datetime.now()
             self.current_day = cur_time.day
 
-            self.reset_dataframe(self,1)
+            self.reset_dataframe(1)
             # old_data = self.history_df[self.history_df.datetime<(cur_time-dt.timedelta(days=1))]
             # if len(old_data)>0:
             #     min_date = min(old_data.datetime)
