@@ -23,8 +23,8 @@ import serial
 
 
 # Set up the serial port for UART communication
-brookside_uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
-roadside_uart = serial.Serial("/dev/ttyAMA5", baudrate=9600, timeout=0.5)
+# brookside_uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
+# roadside_uart = serial.Serial("/dev/ttyAMA5", baudrate=9600, timeout=0.5)
 
 def start_ngrok(port, static_ngrok_url):
     """Start Ngrok with the specified static URL."""
@@ -68,14 +68,16 @@ def signal_handler(sig, frame):
 if __name__ == '__main__':
     port = 8080
 
-    testing = True
-    if not testing:
+    if TVF.testing:
         ngrok_static_url = 'amused-wired-stork.ngrok-free.app'
+    else:
+        ngrok_static_url = 'arriving-seahorse-exotic.ngrok-free.app'
         # Start Ngrok
-        ngrok_process = start_ngrok(port, ngrok_static_url)
-        if not ngrok_process:
-            print("Ngrok failed to start. Exiting.")
-            exit(1)
+
+    ngrok_process = start_ngrok(port, ngrok_static_url)
+    if not ngrok_process:
+        print("Ngrok failed to start. Exiting.")
+        exit(1)
 
     num_to_average = 8 #measurements to average into one reading
     delay = 0.25 #delay (s) between individual measurements
@@ -93,11 +95,11 @@ if __name__ == '__main__':
         print('\nSTART {} CONTROLLER PROCESS\n'.format(tank_name))
         tank_processes[tank_name].start()
 
-
-    lcd = TVF.init_display()
-    print("\nInit screen process\n")
-    screen_process = Process(target=TVF.run_lcd_screen, args=(lcd,TVF.queue_dict))
-    screen_process.start()
+    if not TVF.testing:
+        lcd = TVF.init_display()
+        print("\nInit screen process\n")
+        screen_process = Process(target=TVF.run_lcd_screen, args=(lcd,TVF.queue_dict))
+        screen_process.start()
 
     # Start Flask app
     try:

@@ -11,7 +11,7 @@ import RPi.GPIO as GPIO
 import serial
 from hampel import hampel
 
-
+testing = True
 #Set the GPIO pin numbering mode
 GPIO.setmode(GPIO.BCM)
 
@@ -26,9 +26,12 @@ for tank_name in tank_names:
     queue_dict[tank_name]['response'] = Queue()
     queue_dict[tank_name]['screen_response'] = Queue()
 
-
-queue_dict['brookside']['uart'] = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
-queue_dict['roadside']['uart'] = serial.Serial("/dev/ttyAMA5", baudrate=9600, timeout=0.5)
+if testing:
+    queue_dict['brookside']['uart'] = None
+    queue_dict['roadside']['uart'] = None
+else:
+    queue_dict['brookside']['uart'] = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
+    queue_dict['roadside']['uart'] = serial.Serial("/dev/ttyAMA5", baudrate=9600, timeout=0.5)
 
 
 lcd_red = [100,0,0]
@@ -209,6 +212,7 @@ class TANK:
         self.mins_back = 30
         self.filling = False
         self.emptying = False
+        self.dist_to_surf = None
 
         self.output_fn = os.path.join(data_store_directory,'{}.csv'.format(tank_name))
 
@@ -274,7 +278,14 @@ class TANK:
 
 
     def update_status(self):
-        self.get_average_distance()
+
+        if isinstance(self.uart,type(None)):
+            if isinstance(self.dist_to_surf,type(None)):
+                self.dist_to_surf = 45
+            else:
+                self.dist_to_surf -= 0.05
+        else:
+            self.get_average_distance()
 
         if self.current_day != dt.datetime.now().day:
             cur_time = dt.datetime.now()
