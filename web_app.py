@@ -6,6 +6,7 @@ import os
 import datetime as dt
 import subprocess
 import numpy as np
+import traceback
 # from dotenv import load_dotenv
 
 # Load environment variables from the credentials file
@@ -44,66 +45,72 @@ def index():
     else:
         return render_template("template.html") 
         
-@app.route('/update', methods=['GET','POST'])
+
+@app.route('/update', methods=['GET', 'POST'])
 def update():
-    if request.method == "POST":
-        action = request.json.get('command')
-        print('received post request with action of: {}'.format(action))
-        data = {}
-        for name in TVF.tank_names:
-            TVF.queue_dict[name]['command'].put(action)
-            while TVF.queue_dict[name]['response'].empty():
-                time.sleep(0.1)
-            data[name] = TVF.queue_dict[name]['response'].get()
-        data['system_time'] = dt.datetime.now().strftime('%Y-%m-%d %-I:%M%p')
+    try:
+        if request.method == "POST":
+            action = request.json.get('command')
+            print(f'received post request with action of: {action}')
+            data = {}
+            for name in TVF.tank_names:
+                TVF.queue_dict[name]['command'].put(action)
+                while TVF.queue_dict[name]['response'].empty():
+                    time.sleep(0.1)
+                data[name] = TVF.queue_dict[name]['response'].get()
+            data['system_time'] = dt.datetime.now().strftime('%Y-%m-%d %-I:%M%p')
 
-        combined_gals = 0
-        combined_rate = 0
-        max_combined_gals = 0
-        for tank_name in TVF.tank_names:
-            combined_gals += data[tank_name]['current_gallons']
-            if isinstance(data[tank_name]['rate'], (int, float, complex)):
-                combined_rate += data[tank_name]['rate']
-                data[tank_name]['rate'] = str(data[tank_name]['rate'])
-            max_combined_gals += data[tank_name]['max_gallons']
+            combined_gals = 0
+            combined_rate = 0
+            max_combined_gals = 0
+            for tank_name in TVF.tank_names:
+                combined_gals += data[tank_name]['current_gallons']
+                if isinstance(data[tank_name]['rate'], (int, float, complex)):
+                    combined_rate += data[tank_name]['rate']
+                    data[tank_name]['rate'] = str(data[tank_name]['rate'])
+                max_combined_gals += data[tank_name]['max_gallons']
 
-        timing_est_str = 'N/A'
-        if combined_rate > TVF.not_filling_emptying_buffer:
-            if data['roadside']['filling']:
-                remaining_capacity = data['roadside']['max_gallons'] - data['roadside']['current_gallons']
-            else:
-                remaining_capacity = max_combined_gals - combined_gals
+            timing_est_str = 'N/A'
+            if combined_rate > TVF.not_filling_emptying_buffer:
+                if data['roadside']['filling']:
+                    remaining_capacity = data['roadside']['max_gallons'] - data['roadside']['current_gallons']
+                else:
+                    remaining_capacity = max_combined_gals - combined_gals
+                remaining_hrs = remaining_capacity / combined_rate
+                remaining_time = dt.datetime.now() + dt.timedelta(hours=remaining_hrs)
+                timing_est_str = 'Overflow roadside at {} ({}hrs)'.format(
+                    remaining_time.strftime('%Y-%m-%d %-I:%M%p'), np.round(remaining_hrs, 1))
 
-            remaining_hrs = remaining_capacity/combined_rate
+            if combined_rate < -TVF.not_filling_emptying_buffer:
+                remaining_hrs = (combined_gals - TVF.last_fire_gallons) / abs(combined_rate)
+                remaining_time = dt.datetime.now() + dt.timedelta(hours=remaining_hrs)
+                timing_est_str = 'Last fire ({}gal) at {} ({}hrs)'.format(
+                    TVF.last_fire_gallons, remaining_time.strftime('%Y-%m-%d %-I:%M%p'), np.round(remaining_hrs, 1))
 
-            remaining_time = dt.datetime.now()+dt.timedelta(hours=remaining_hrs)
+            data['combined_gals'] = str(np.round(combined_gals, 0))
+            data['combined_rate'] = str(np.round(combined_rate, 1))
+            data['timing_est_str'] = str(timing_est_str)
 
-            timing_est_str = 'Overflow roadside at {} ({}hrs)'.format(remaining_time.strftime('%Y-%m-%d %-I:%M%p'),np.round(remaining_hrs,1))
+            return jsonify(data)
 
-        if combined_rate < -TVF.not_filling_emptying_buffer:
-            remaining_hrs = (combined_gals-TVF.last_fire_gallons)/np.abs(combined_rate)
-            remaining_time = dt.datetime.now()+dt.timedelta(hours=remaining_hrs)
-
-            timing_est_str = 'Last fire ({}gal) at {} ({}hrs)'.format(TVF.last_fire_gallons,remaining_time.strftime('%Y-%m-%d %-I:%M%p'),np.round(remaining_hrs,1))
-
-
-        data['combined_gals'] = str(np.round(combined_gals,0))
-        data['combined_rate'] = str(np.round(combined_rate,1))
-        data['timing_est_str'] = str(timing_est_str)
-
-        return jsonify(data)
-    elif request.method == "GET":
-        print('received get request')
-        return  '''
-                <!DOCTYPE html>
-                <html>
-                    <head>
-                        <h1> HELLO WORLD </h1>
-                    </head>
-                    <body>
-                        here be chickens
-                    </body>
-                </html>'''
+        elif request.method == "GET":
+            print('received get request')
+            return '''
+                    <!DOCTYPE html>
+                    <html>
+                        <head>
+                            <h1> HELLO WORLD </h1>
+                        </head>
+                        <body>
+                            here be chickens
+                        </body>
+                    </html>'''
+    except Exception as e:
+        log_path = os.path.expanduser("~/flask.log")
+        with open(log_path, "a") as f:
+            f.write("\n\n{}=== Exception in /update route ===\n".format(dt.datetime.now().strftime('%Y-%m-%d %-I:%M%p')))
+            traceback.print_exc(file=f)
+        return jsonify({"error": "Internal server error"}), 500
 
 
 
