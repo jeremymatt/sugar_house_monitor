@@ -4,6 +4,7 @@ import datetime as dt
 import os
 import time
 from multiprocessing import Queue
+import subprocess
 import adafruit_character_lcd.character_lcd_rgb_i2c as character_lcd
 import board
 import busio
@@ -298,6 +299,7 @@ class TANK:
             cur_time = dt.datetime.now()
             self.current_day = cur_time.day
             self.reset_dataframe(1) 
+            subprocess.Popen(["sudo", "reboot", "now"])
 
         if isinstance(self.dist_to_surf,type(None)):
             print('ERROR ({} at {}): No distance measurement')
