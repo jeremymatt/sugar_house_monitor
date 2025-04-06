@@ -64,7 +64,6 @@ def cleanup(ngrok_process,tank_processes,screen_process):
 def signal_handler(sig, frame):
     cleanup()
 
-
 if __name__ == '__main__':
     port = 8080
 
