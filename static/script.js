@@ -19,7 +19,12 @@ function sendCommand(command) {
 function updatePage(data) {
     console.log("Data received in updatePage:", data);
 
+
     // Update text fields
+    document.getElementById("total_current_gallons").innerText = data.combined_gals;
+    document.getElementById("total_rate").innerText = data.combined_rate;
+    document.getElementById("total_timing").innerText = data.timing_est_str;
+
     document.getElementById("brookside_current_gallons").innerText = data.brookside.current_gallons;
     document.getElementById("brookside_rate_str").innerText = data.brookside.rate_str;
     document.getElementById("brookside_remaining_time").innerText = data.brookside.remaining_time;

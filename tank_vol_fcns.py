@@ -11,7 +11,9 @@ import RPi.GPIO as GPIO
 import serial
 from hampel import hampel
 
-testing = True
+testing = False
+not_filling_emptying_buffer = 20  #gallons per min assumed to be zero if abs(rate)<this val
+last_fire_gallons = 100
 #Set the GPIO pin numbering mode
 GPIO.setmode(GPIO.BCM)
 
@@ -59,7 +61,7 @@ brookside_length = 191.5
 brookside_width = 48
 brookside_height = 40.75
 brookside_radius = 17
-brookside_depths = [0,1,2,3,4,5,6,7,8,9,10,11,12,13.25,20,25,30,36.5] #inches
+brookside_depths = [0,1,2,3,4,5,6,7,8,9,10,11,12,13.25,20,25,30,37.5] #inches
 brookside_widths = [10,19.25,27.25,33.25,37,39.5,41.5,43,44,45.5,46.5,47.375,47.75,48,48,48,48,48]
 brookside_dimension_df = pd.DataFrame({'depths':brookside_depths,'widths':brookside_widths})
 brookside_dimension_df = calc_gallons_interp(brookside_dimension_df,brookside_length)
@@ -213,6 +215,7 @@ class TANK:
         self.filling = False
         self.emptying = False
         self.dist_to_surf = None
+        self.max_gals = max(self.dim_df.gals_interp)
 
         self.output_fn = os.path.join(data_store_directory,'{}.csv'.format(tank_name))
 
@@ -221,6 +224,8 @@ class TANK:
             self.history_df.set_index('Unnamed: 0',inplace=True,drop=True)
             self.history_df['datetime'] = pd.to_datetime(self.history_df['timestamp'])
             self.history_df = self.history_df[df_col_order]
+            
+            self.dist_to_surf = min(self.history_df.surf_dist)
         else:
             self.history_df = pd.DataFrame()
 
@@ -281,23 +286,18 @@ class TANK:
 
         if isinstance(self.uart,type(None)):
             if isinstance(self.dist_to_surf,type(None)):
-                self.dist_to_surf = 45
+                self.dist_to_surf = 19
+                print('\nRESET DIST\n')
             else:
-                self.dist_to_surf -= 0.05
+                if self.name == 'brookside':
+                    self.dist_to_surf += 0.05
         else:
             self.get_average_distance()
 
         if self.current_day != dt.datetime.now().day:
             cur_time = dt.datetime.now()
             self.current_day = cur_time.day
-
-            self.reset_dataframe(1)
-            # old_data = self.history_df[self.history_df.datetime<(cur_time-dt.timedelta(days=1))]
-            # if len(old_data)>0:
-            #     min_date = min(old_data.datetime)
-            #     fn = os.path.join(data_store_directory,'{}_{}_{}_{}.csv'.format(self.name,min_date.year,str(min_date.month).zfill(2),str(min_date.day).zfill(2)))
-            #     old_data[df_col_order[1:]].to_csv(fn)
-            #     self.history_df = self.history_df[self.history_df.datetime>=(cur_time-dt.timedelta(days=1))]  
+            self.reset_dataframe(1) 
 
         if isinstance(self.dist_to_surf,type(None)):
             print('ERROR ({} at {}): No distance measurement')
@@ -313,7 +313,7 @@ class TANK:
 
     def update_mins_back(self,mins_back):
         self.mins_back += mins_back
-        self.mins_back = max([5,self.mins_back])
+        self.mins_back = max([2,self.mins_back])
         self.mins_back = min([240,self.mins_back])
 
     def get_tank_rate(self):
@@ -321,6 +321,7 @@ class TANK:
         if now > self.next_rate_update:
             self.next_rate_update = now + self.rate_update_dt
             hampel_unfiltered = int(self.window_size/2)+1
+            print('\nhampel_UF size\n: {}'.format(hampel_unfiltered))
 
             if len(self.history_df)<hampel_unfiltered+10:
                 self.filling = False
@@ -358,7 +359,7 @@ class TANK:
 
                     self.remaining_time = 'N/A'
                     if self.filling:
-                        hours = (max(self.dim_df.gals_interp)-poly[1])/poly[0]-sum(d_hrs)
+                        hours = (self.max_gals-poly[1])/poly[0]-sum(d_hrs)
                         self.remaining_time = dt.timedelta(hours=hours)
                         self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
                     if self.emptying:
@@ -377,10 +378,11 @@ class TANK:
     def return_current_state(self):
         state = {}
         state['name'] = self.name
-        state['current_gallons'] = str(np.round(self.current_gallons,0))
-        state['rate']  = str(self.tank_rate)
-        state['filling'] = str(self.filling)
-        state['emptying'] = str(self.emptying)
+        state['current_gallons'] = np.round(self.current_gallons,0)
+        state['max_gallons'] = self.max_gals
+        state['rate']  = self.tank_rate
+        state['filling'] = self.filling
+        state['emptying'] = self.emptying
         state['rate_str'] = '---'
         state['remaining_time'] = 'N/A'
         try:
@@ -392,11 +394,9 @@ class TANK:
 
         if self.filling:
             remaining_hrs = np.round(self.remaining_time.seconds/3600,1)
-            # state['remaining_time'] = 'Full in {}(hh:mm:ss)'.format(self.remaining_time)
             remaining_time_prefix = 'Full'
             state['rate_str'] = '{}gals/hr over previous {}mins'.format(self.tank_rate,self.mins_back)
         if self.emptying:
-            # state['remaining_time'] = 'Empty in {}(hh:mm:ss)'.format(self.remaining_time)
             remaining_time_prefix = 'Empty'
             state['rate_str'] = '{}gals/hr over previous {}mins'.format(self.tank_rate,self.mins_back)
 

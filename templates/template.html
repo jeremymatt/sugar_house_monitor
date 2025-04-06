@@ -5,33 +5,48 @@
     <script src="/static/script.js" defer></script>
 </head>
 <body>
-    <h1>Tank Status</h1>
+    <h1>Hall Farm Tank Monitor</h1>
+
+    
+    <h2>Combined status</h2>
+        <strong>Current combined volume:</strong> <span id="total_current_gallons">---</span> gallons<br>
+        <strong>Current combined rate:</strong> <span id="total_rate">---</span><br>
+        <strong>Timing estimate:</strong> <span id="total_timing">---</span><br>
+
+
+    
 
     <h2>Brookside</h2>
-         <strong>Current volume:</strong> <span id="brookside_current_gallons">Unknown</span> gallons<br>
-         <strong>Current fill/empty rate:</strong> <span id="brookside_rate_str">Unknown</span><br>
-         <strong>Remaining time:</strong> <span id="brookside_remaining_time">Unknown</span><br>
-         <strong>Raw distance to sap surface:</strong> <span id="brookside_sap_surface">Unknown</span>"<br>
-         <strong>Sap depth:</strong> <span id="brookside_sap_depth">Unknown</span>"<br><br>
+        <strong>Current volume:</strong> <span id="brookside_current_gallons">---</span> gallons<br>
+        <strong>Current fill/empty rate:</strong> <span id="brookside_rate_str">---</span><br>
+        <strong>Remaining time:</strong> <span id="brookside_remaining_time">---</span><br>
+        <strong>Raw distance to sap surface:</strong> <span id="brookside_sap_surface">---</span>"<br>
+        <strong>Sap depth:</strong> <span id="brookside_sap_depth">---</span>"<br><br>
 
 
     <h2>Roadside</h2>
-         <strong>Current volume:</strong> <span id="roadside_current_gallons">Unknown</span> gallons<br>
-         <strong>Current fill/empty rate:</strong> <span id="roadside_rate_str">Unknown</span><br>
-         <strong>Remaining time:</strong> <span id="roadside_remaining_time">Unknown</span><br>
-         <strong>Raw distance to sap surface:</strong> <span id="roadside_sap_surface">Unknown</span>"<br>
-         <strong>Sap depth:</strong> <span id="roadside_sap_depth">Unknown</span>"<br><br>
+        <strong>Current volume:</strong> <span id="roadside_current_gallons">---</span> gallons<br>
+        <strong>Current fill/empty rate:</strong> <span id="roadside_rate_str">---</span><br>
+        <strong>Remaining time:</strong> <span id="roadside_remaining_time">---</span><br>
+        <strong>Raw distance to sap surface:</strong> <span id="roadside_sap_surface">---</span>"<br>
+        <strong>Sap depth:</strong> <span id="roadside_sap_depth">---</span>"<br><br>
 
 
-    <h2>Rate calculation window: <span id="rate_window">Unknown</span>min</h2>
-         <button style="background-color:rgb(142, 247, 142);" onclick="sendCommand('set_mins_back:-5')">-5 Mins</button>  
-    <button style="background-color:rgb(142, 247, 142);" onclick="sendCommand('set_mins_back:+5')">+5 Mins</button><br><br>
+
+    <h1>System Control</h1>
+
+    <h3>Rate calculation window: <span id="rate_window">---</span>min</h3>
+        <button style="background-color:rgb(142, 247, 142);" onclick="sendCommand('set_mins_back:-5')">-5 Mins</button>  
+        <button style="background-color:rgb(142, 247, 142);" onclick="sendCommand('set_mins_back:+5')">+5 Mins</button><br><br>
+    <a href="/confirm">
+        <button style="background-color:rgb(234, 15, 18);">Clear dataframe / Restart Pi</button>
+    </a><br><br>
 
     
-    <button style="background-color:rgb(234, 15, 18);" onclick="sendCommand('reset_dataframe')">RESET DATAFRAME</button><br><br>
+    <!-- <button style="background-color:rgb(234, 15, 18);" onclick="sendCommand('reset_dataframe')">RESET DATAFRAME</button><br><br> -->
     
 
-    System time: <span id="system_time">Unknown</span><br><br>
+    System time: <span id="system_time">---</span><br><br>
 
     <!-- <form method="post" action="/logout">
         <button type="submit" style="background-color:orange;">Logout</button>

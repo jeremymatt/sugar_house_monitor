@@ -70,21 +70,27 @@ if __name__ == '__main__':
 
     if TVF.testing:
         ngrok_static_url = 'arriving-seahorse-exotic.ngrok-free.app'
+        num_to_average = 8 #measurements to average into one reading
+        delay = 0.25 #delay (s) between individual measurements
+        readings_per_min = 4 # number of readings to target per minute
+        window_size = 5 #Hampbel filtering window
+        n_sigma = .25 #threshold for hampbel filter
+        rate_update_dt = 15 #seconds
     else:
         ngrok_static_url = 'amused-wired-stork.ngrok-free.app'
-        # Start Ngrok
-
+        num_to_average = 8 #measurements to average into one reading
+        delay = 0.25 #delay (s) between individual measurements
+        readings_per_min = 4 # number of readings to target per minute
+        window_size = 50 #Hampbel filtering window
+        n_sigma = .25 #threshold for hampbel filter
+        rate_update_dt = 15 #seconds
+    
+    # Start Ngrok
     ngrok_process = start_ngrok(port, ngrok_static_url)
     if not ngrok_process:
         print("Ngrok failed to start. Exiting.")
         exit(1)
 
-    num_to_average = 8 #measurements to average into one reading
-    delay = 0.25 #delay (s) between individual measurements
-    readings_per_min = 4 # number of readings to target per minute
-    window_size = 50 #Hampbel filtering window
-    n_sigma = .25 #threshold for hampbel filter
-    rate_update_dt = 15 #seconds
 
     measurement_rate_params = (num_to_average,delay,readings_per_min,window_size,n_sigma,rate_update_dt)
 
@@ -95,7 +101,9 @@ if __name__ == '__main__':
         print('\nSTART {} CONTROLLER PROCESS\n'.format(tank_name))
         tank_processes[tank_name].start()
 
-    if not TVF.testing:
+    if TVF.testing:
+        screen_process = None
+    else:
         lcd = TVF.init_display()
         print("\nInit screen process\n")
         screen_process = Process(target=TVF.run_lcd_screen, args=(lcd,TVF.queue_dict))

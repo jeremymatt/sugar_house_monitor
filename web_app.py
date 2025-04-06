@@ -1,9 +1,11 @@
-from flask import Flask, session, request, redirect, jsonify, render_template
+from flask import Flask, session, request, redirect, jsonify, render_template, render_template_string
 import hashlib
 import tank_vol_fcns as TVF
 import time
 import os
 import datetime as dt
+import subprocess
+import numpy as np
 # from dotenv import load_dotenv
 
 # Load environment variables from the credentials file
@@ -54,6 +56,41 @@ def update():
                 time.sleep(0.1)
             data[name] = TVF.queue_dict[name]['response'].get()
         data['system_time'] = dt.datetime.now().strftime('%Y-%m-%d %-I:%M%p')
+
+        combined_gals = 0
+        combined_rate = 0
+        max_combined_gals = 0
+        for tank_name in TVF.tank_names:
+            combined_gals += data[tank_name]['current_gallons']
+            if isinstance(data[tank_name]['rate'], (int, float, complex)):
+                combined_rate += data[tank_name]['rate']
+                data[tank_name]['rate'] = str(data[tank_name]['rate'])
+            max_combined_gals += data[tank_name]['max_gallons']
+
+        timing_est_str = 'N/A'
+        if combined_rate > TVF.not_filling_emptying_buffer:
+            if data['roadside']['filling']:
+                remaining_capacity = data['roadside']['max_gallons'] - data['roadside']['current_gallons']
+            else:
+                remaining_capacity = max_combined_gals - combined_gals
+
+            remaining_hrs = remaining_capacity/combined_rate
+
+            remaining_time = dt.datetime.now()+dt.timedelta(hours=remaining_hrs)
+
+            timing_est_str = 'Overflow roadside at {} ({}hrs)'.format(remaining_time.strftime('%Y-%m-%d %-I:%M%p'),np.round(remaining_hrs,1))
+
+        if combined_rate < -TVF.not_filling_emptying_buffer:
+            remaining_hrs = (combined_gals-TVF.last_fire_gallons)/np.abs(combined_rate)
+            remaining_time = dt.datetime.now()+dt.timedelta(hours=remaining_hrs)
+
+            timing_est_str = 'Last fire ({}gal) at {} ({}hrs)'.format(TVF.last_fire_gallons,remaining_time.strftime('%Y-%m-%d %-I:%M%p'),np.round(remaining_hrs,1))
+
+
+        data['combined_gals'] = str(np.round(combined_gals,0))
+        data['combined_rate'] = str(np.round(combined_rate,1))
+        data['timing_est_str'] = str(timing_est_str)
+
         return jsonify(data)
     elif request.method == "GET":
         print('received get request')
@@ -68,6 +105,33 @@ def update():
                     </body>
                 </html>'''
 
+
+
+@app.route("/confirm", methods=["GET", "POST"])
+def confirm():
+    if request.method == "POST":
+        action = request.form.get("action", "Nothing").strip().lower()
+
+        if action == "reset":
+            for name in TVF.tank_names:
+                TVF.queue_dict[name]['command'].put("reset_dataframe")
+            return redirect("/")
+        elif action == "reboot":
+            subprocess.Popen(["sudo", "reboot", "now"])
+            return "Rebooting..."  # Optionally render a "rebooting" page
+        else:
+            return redirect("/")
+
+    return render_template_string("""
+        <h1>What do you want to do?</h1>
+        <form method="POST">
+            <input type="text" name="action" value="Nothing" />
+            <button type="submit">Submit</button>
+        </form>
+        <form action="/" method="GET">
+            <button type="submit">Back</button>
+        </form>
+    """)
 
 @app.route("/logout", methods=["POST"])
 def logout():
