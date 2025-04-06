@@ -349,7 +349,7 @@ class TANK:
                     self.emptying = False
                     if np.isnan(poly[0]):
                         self.tank_rate = 'nan'
-                        self.history_df.to_csv('./data/nan.csv')
+                        self.history_df.to_csv(os.path.expanduser('~/nan.csv'))
                         print(rate_window)
                         print(d_hrs)
                     else:
