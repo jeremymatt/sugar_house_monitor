@@ -91,7 +91,6 @@ if __name__ == '__main__':
         print("Ngrok failed to start. Exiting.")
         exit(1)
 
-
     measurement_rate_params = (num_to_average,delay,readings_per_min,window_size,n_sigma,rate_update_dt)
 
     tank_processes = {}
