@@ -21,7 +21,6 @@ import serial
 # app = Flask(__name__)
 # app.secret_key = 'your_secret_key_here'  # Replace with a strong secret key
 
-
 # Set up the serial port for UART communication
 # brookside_uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
 # roadside_uart = serial.Serial("/dev/ttyAMA5", baudrate=9600, timeout=0.5)
