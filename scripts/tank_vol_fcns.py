@@ -10,8 +10,9 @@ import busio
 import RPi.GPIO as GPIO
 import serial
 from hampel import hampel
+from pathlib import Path
 
-
+scripts_dir = Path(__file__).parent.resolve()
 #Set the GPIO pin numbering mode
 GPIO.setmode(GPIO.BCM)
 
@@ -86,9 +87,8 @@ tank_dims_dict['roadside']['radius'] = roadside_radius
 tank_dims_dict['roadside']['dim_df'] = roadside_dimension_df
 tank_dims_dict['roadside']['bottom_dist'] = 50.75 #inches from the sensor to the bottom of the tank
 
-data_store_directory = os.path.join(os.path.expanduser('~'),'sugar_house_monitor','data')
-if not os.path.isdir(data_store_directory):
-    os.makedirs(data_store_directory)
+data_store_directory = scripts_dir.parent / 'data'
+data_store_directory.mkdir(parents=True, exist_ok=True)
     
 
 def init_display():        
