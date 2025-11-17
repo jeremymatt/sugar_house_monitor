@@ -21,3 +21,6 @@ Planned functionality includes
     dtoverlay=uart5   #TX: GPIO12 /   RX: GPIO13
     ```
     
+# Setup on wordpress site
+1. Clone the https://github.com/jeremymatt/sugar_house_monitor to `~/git/`
+1. `ln -s ~/git/sugar_house_monitor/web \~/mattsmaplesyrup.com/sugar_house_monitor` to create a symlink from the sugar_house_monitor directory to the web directory in the git repo
