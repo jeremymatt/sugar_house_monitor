@@ -1,1 +1,30 @@
-<h1>API access path</h1>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sugar House Monitor API</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 2rem;
+      color: #222;
+      line-height: 1.6;
+    }
+    code {
+      background: #f4f4f4;
+      padding: 0.1rem 0.3rem;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Sugar House Monitor API</h1>
+  <p>Available endpoints:</p>
+  <ul>
+    <li><code>POST /sugar_house_monitor/api/ingest_tank.php</code> – upload processed tank readings</li>
+    <li><code>POST /sugar_house_monitor/api/ingest_pump.php</code> – upload processed pump events</li>
+  </ul>
+  <p>Each request must include the shared API key via the <code>X-API-Key</code> header and provide a JSON array.</p>
+  <p>Successful ingest will trigger <code>scripts/process_status.py</code> which regenerates <code>web/data/status.json</code>.</p>
+</body>
+</html>

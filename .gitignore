@@ -1,5 +1,9 @@
 # project specific ignores
 data/
+config/*.env
+config/*.ini
+config/*.json
+config/*.key
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
