@@ -1,1 +1,379 @@
-<h1>Hello World - sugar_house_monitor</h1>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Matt's Maple Syrup - Sugar House Monitor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    :root {
+      --bg: #101318;
+      --card-bg: #181d24;
+      --card-border: #262c36;
+      --accent: #f2a93b;
+      --accent-soft: rgba(242, 169, 59, 0.15);
+      --text-main: #f5f5f5;
+      --text-muted: #a7afbf;
+      --danger: #ff5f5f;
+      --danger-soft: rgba(255, 95, 95, 0.15);
+      --ok: #4caf50;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #1d2430 0, #101318 50%);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+    }
+
+    .page {
+      width: 100%;
+      max-width: 1100px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+
+    .title-group h1 {
+      font-size: 1.6rem;
+      letter-spacing: 0.04em;
+    }
+
+    .title-group span {
+      display: block;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      margin-top: 0.15rem;
+    }
+
+    .status-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .pill {
+      padding: 0.25rem 0.6rem;
+      border-radius: 999px;
+      border: 1px solid var(--card-border);
+      background: rgba(0, 0, 0, 0.25);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .pill-dot {
+      width: 0.45rem;
+      height: 0.45rem;
+      border-radius: 999px;
+      background: var(--ok);
+    }
+
+    .pill-dot.stale {
+      background: var(--danger);
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+      gap: 1.25rem;
+    }
+
+    @media (max-width: 900px) {
+      main {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    .card {
+      background: var(--card-bg);
+      border-radius: 16px;
+      border: 1px solid var(--card-border);
+      padding: 1rem 1.1rem;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+
+    .card-header h2 {
+      font-size: 1.1rem;
+    }
+
+    .card-subtitle {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .warning-tag {
+      font-size: 0.75rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 999px;
+      border: 1px solid var(--danger);
+      background: var(--danger-soft);
+      color: var(--danger);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+    }
+
+    .metric {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      font-size: 0.85rem;
+    }
+
+    .metric-label {
+      color: var(--text-muted);
+    }
+
+    .metric-value {
+      font-size: 1.1rem;
+    }
+
+    .metric-note {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .tank-level-bar {
+      position: relative;
+      height: 140px;
+      border-radius: 12px;
+      border: 1px solid var(--card-border);
+      overflow: hidden;
+      background: radial-gradient(circle at top, #222b3a, #10141c 70%);
+      margin-top: 0.75rem;
+    }
+
+    .tank-fill {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(to top, rgba(242,169,59,0.9), rgba(242,169,59,0.1));
+      transition: height 0.5s ease-out;
+    }
+
+    .tank-fill-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background-image: linear-gradient(
+        to top,
+        rgba(0,0,0,0.25),
+        transparent 30%,
+        transparent 70%,
+        rgba(255,255,255,0.05)
+      );
+      mix-blend-mode: soft-light;
+    }
+
+    .tank-level-labels {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 0.4rem 0.5rem;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    .last-updated {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 0.5rem;
+    }
+
+    .error-banner {
+      margin-top: 0.75rem;
+      padding: 0.5rem 0.7rem;
+      border-radius: 10px;
+      border: 1px dashed var(--danger);
+      background: var(--danger-soft);
+      font-size: 0.8rem;
+      color: var(--danger);
+    }
+
+    .small {
+      font-size: 0.75rem;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="title-group">
+        <h1>Sugar House Monitor</h1>
+        <span>Matt's Maple Syrup &mdash; live tank and pump status</span>
+      </div>
+      <div class="status-bar">
+        <div id="global-status-pill" class="pill">
+          <span class="pill-dot" id="global-status-dot"></span>
+          <span id="global-status-text">Loading latest data&hellip;</span>
+        </div>
+        <span id="generated-at" class="small"></span>
+      </div>
+    </header>
+
+    <main>
+      <!-- Tanks card -->
+      <section class="card" id="tanks-card">
+        <div class="card-header">
+          <div>
+            <h2>Holding Tanks</h2>
+            <div class="card-subtitle">Brookside &amp; Roadside volumes and flow</div>
+          </div>
+          <div id="tanks-warning" class="warning-tag" style="display:none;">
+            ⚠ Tank readings stale
+          </div>
+        </div>
+
+        <div class="grid">
+          <div>
+            <h3 class="small">Brookside Tank</h3>
+            <div class="tank-level-bar">
+              <div class="tank-fill" id="brookside-fill" style="height:0%;"></div>
+              <div class="tank-fill-overlay"></div>
+              <div class="tank-level-labels">
+                <span>100%</span>
+                <span>75%</span>
+                <span>50%</span>
+                <span>25%</span>
+                <span>0%</span>
+              </div>
+            </div>
+            <div class="grid">
+              <div class="metric">
+                <span class="metric-label">Volume</span>
+                <span class="metric-value" id="brookside-volume">–</span>
+                <span class="metric-note" id="brookside-capacity">Capacity: –</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">Flow</span>
+                <span class="metric-value" id="brookside-flow">–</span>
+                <span class="metric-note" id="brookside-eta">ETA full/empty: –</span>
+              </div>
+            </div>
+            <div class="last-updated" id="brookside-last-updated">Last update: –</div>
+          </div>
+
+          <div>
+            <h3 class="small">Roadside Tank</h3>
+            <div class="tank-level-bar">
+              <div class="tank-fill" id="roadside-fill" style="height:0%;"></div>
+              <div class="tank-fill-overlay"></div>
+              <div class="tank-level-labels">
+                <span>100%</span>
+                <span>75%</span>
+                <span>50%</span>
+                <span>25%</span>
+                <span>0%</span>
+              </div>
+            </div>
+            <div class="grid">
+              <div class="metric">
+                <span class="metric-label">Volume</span>
+                <span class="metric-value" id="roadside-volume">–</span>
+                <span class="metric-note" id="roadside-capacity">Capacity: –</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">Flow</span>
+                <span class="metric-value" id="roadside-flow">–</span>
+                <span class="metric-note" id="roadside-eta">ETA full/empty: –</span>
+              </div>
+            </div>
+            <div class="last-updated" id="roadside-last-updated">Last update: –</div>
+          </div>
+        </div>
+
+        <div id="tanks-error" class="error-banner" style="display:none;">
+          Unable to load tank data. Check network or Pi/server status.
+        </div>
+      </section>
+
+      <!-- Pump card -->
+      <section class="card" id="pump-card">
+        <div class="card-header">
+          <div>
+            <h2>Transfer Pump</h2>
+            <div class="card-subtitle">Last pump cycle and estimated flow into sugar house</div>
+          </div>
+          <div id="pump-warning" class="warning-tag" style="display:none;">
+            ⚠ Pump data stale
+          </div>
+        </div>
+
+        <div class="grid">
+          <div class="metric">
+            <span class="metric-label">Last event</span>
+            <span class="metric-value" id="pump-event-type">–</span>
+            <span class="metric-note" id="pump-last-time">Time: –</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Estimated flow</span>
+            <span class="metric-value" id="pump-flow">–</span>
+            <span class="metric-note" id="pump-run-summary">Run time / interval: –</span>
+          </div>
+        </div>
+
+        <div class="last-updated" id="pump-last-updated">Last update: –</div>
+
+        <div id="pump-error" class="error-banner" style="display:none;">
+          Pump event data unavailable. This is expected if the pump only runs occasionally,
+          but check wiring / Pi if this remains for an extended period.
+        </div>
+      </section>
+    </main>
+
+    <footer class="small" style="margin-top:0.5rem; color:var(--text-muted);">
+      Data provided by Raspberry Pi monitors. This page reads a JSON status file and
+      computes freshness client-side. For debugging or data export, use the Pi / server tools.
+    </footer>
+  </div>
+
+  <script src="/sugar_house_monitor/js/app.js"></script>
+</body>
+</html>
