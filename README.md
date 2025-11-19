@@ -64,9 +64,25 @@ The helper will ask for the public server URL, create `config/` if it does not e
 | "" | `API_KEY` | Shared auth key for both ingest endpoints |
 | "" | `DEBUG_TANK`, `DEBUG_RELEASER` | Enable CSV replay using the synthetic clock |
 | "" | `SYNTHETIC_CLOCK_MULTIPLIER` | Speed multiplier for debug playback |
+| "" | `DEBUG_LOOP_DATA` | Loop through the sample CSVs continuously |
+| "" | `UPLOAD_BATCH_SIZE` | Max unsent rows per HTTP POST (set to 1 on Pump Pi, 2–4 on Tank Pi) |
+| "" | `LOCAL_HTTP_PORT` / `WEB_ROOT` | Host the `web/` directory locally while in debug |
 | `server.env` | `TANK_DB_PATH`, `PUMP_DB_PATH` | SQLite files the ingest PHP scripts write to |
 | "" | `STATUS_JSON_PATH` | Location of `web/data/status.json` |
 | "" | `EXPORT_DIR` | Destination for CSV exports |
+
+### Local debug replay (Tank Pi)
+
+To preview the UI without any field hardware:
+
+1. Copy the sample CSVs in `real_data/` and set `BROOKSIDE_CSV`, `ROADSIDE_CSV`, and `PUMP_EVENTS_CSV` inside `config/tank_pi.env`.
+2. Flip `DEBUG_TANK=true` (and optionally `DEBUG_RELEASER=true`) plus set your desired `SYNTHETIC_CLOCK_MULTIPLIER`.
+3. Run `python3 scripts/main.py`. The script will:
+   - Recreate `web/data/status.json` using the SyntheticClock so events play back in accelerated time.
+   - Serve the `web/` directory via `http://<pi-host>:<LOCAL_HTTP_PORT>/` so you can load the exact same front-end that WordPress uses.
+4. Leave `DEBUG_LOOP_DATA=true` if you want the files to repeat automatically once the replay reaches the newest sample.
+
+Tank Pi batching is configurable via `UPLOAD_BATCH_SIZE` (defaults to 4), whereas Pump Pi should keep that value at 1 so every pump event uploads immediately.
 
 ## Data flow overview
 

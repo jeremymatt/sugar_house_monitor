@@ -18,7 +18,11 @@ def parse_timestamp(value: str) -> datetime:
     value = value.strip()
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d-%H:%M:%S",
+    ):
         try:
             return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
         except ValueError:
