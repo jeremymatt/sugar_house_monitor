@@ -65,7 +65,9 @@ The helper will ask for the public server URL, create `config/` if it does not e
 | "" | `DEBUG_TANK`, `DEBUG_RELEASER` | Enable CSV replay using the synthetic clock |
 | "" | `SYNTHETIC_CLOCK_MULTIPLIER` | Speed multiplier for debug playback |
 | "" | `DEBUG_LOOP_DATA` | Loop through the sample CSVs continuously |
-| "" | `UPLOAD_BATCH_SIZE` | Max unsent rows per HTTP POST (set to 1 on Pump Pi, 2–4 on Tank Pi) |
+| "" | `RESET_ON_DEBUG_START` | When true, deletes both local/server DBs before replay |
+| "" | `UPLOAD_BATCH_SIZE` / `UPLOAD_INTERVAL_SECONDS` | Tank reading batching cadence |
+| "" | `PUMP_UPLOAD_BATCH_SIZE` / `PUMP_UPLOAD_INTERVAL_SECONDS` | Pump event upload cadence (keep batch size = 1) |
 | "" | `LOCAL_HTTP_PORT` / `WEB_ROOT` | Host the `web/` directory locally while in debug |
 | `server.env` | `TANK_DB_PATH`, `PUMP_DB_PATH` | SQLite files the ingest PHP scripts write to |
 | "" | `STATUS_JSON_PATH` | Location of `web/data/status.json` |
@@ -75,14 +77,15 @@ The helper will ask for the public server URL, create `config/` if it does not e
 
 To preview the UI without any field hardware:
 
-1. Copy the sample CSVs in `real_data/` and set `BROOKSIDE_CSV`, `ROADSIDE_CSV`, and `PUMP_EVENTS_CSV` inside `config/tank_pi.env`.
-2. Flip `DEBUG_TANK=true` (and optionally `DEBUG_RELEASER=true`) plus set your desired `SYNTHETIC_CLOCK_MULTIPLIER`.
-3. Run `python3 scripts/main.py`. The script will:
-   - Recreate `web/data/status.json` using the SyntheticClock so events play back in accelerated time.
-   - Serve the `web/` directory via `http://<pi-host>:<LOCAL_HTTP_PORT>/` so you can load the exact same front-end that WordPress uses.
-4. Leave `DEBUG_LOOP_DATA=true` if you want the files to repeat automatically once the replay reaches the newest sample.
+1. Copy or symlink samples in `real_data/` and set `BROOKSIDE_CSV`, `ROADSIDE_CSV`, and `PUMP_EVENTS_CSV` in `config/tank_pi.env`.
+2. Enable `DEBUG_TANK=true` (and optionally `DEBUG_RELEASER=true`) and pick a `SYNTHETIC_CLOCK_MULTIPLIER`.
+3. Keep `RESET_ON_DEBUG_START=true` when you want the Pi to wipe its local SQLite DB and call `/api/reset.php` so the server DBs/status.json are pristine before replay.
+4. Run `python3 scripts/main.py`. The service will:
+   - Recreate `web/data/status.json` based on the local queue (for the fallback UI) and simultaneously POST batches to `ingest_tank.php` / `ingest_pump.php`, just like the live sensors.
+   - Serve the `web/` directory via `http://<pi-host>:<LOCAL_HTTP_PORT>/`. Because the server WordPress instance is also receiving the synthetic data, both sites should show identical telemetry, and CSV exports from `scripts/export_db_to_csv.py` will reflect the replay.
+5. Leave `DEBUG_LOOP_DATA=true` if you want continuous playback once the newest sample is reached.
 
-Tank Pi batching is configurable via `UPLOAD_BATCH_SIZE` (defaults to 4), whereas Pump Pi should keep that value at 1 so every pump event uploads immediately.
+Tank Pi batching is configurable via `UPLOAD_BATCH_SIZE`, while pump events always upload immediately (`PUMP_UPLOAD_BATCH_SIZE=1`).
 
 ## Data flow overview
 

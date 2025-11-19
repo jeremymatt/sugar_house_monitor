@@ -23,6 +23,7 @@
   <ul>
     <li><code>POST /sugar_house_monitor/api/ingest_tank.php</code> – upload processed tank readings</li>
     <li><code>POST /sugar_house_monitor/api/ingest_pump.php</code> – upload processed pump events</li>
+    <li><code>POST /sugar_house_monitor/api/reset.php</code> – truncate server DBs/status (debug only)</li>
   </ul>
   <p>Each request must include the shared API key via the <code>X-API-Key</code> header and provide a JSON array.</p>
   <p>Successful ingest will trigger <code>scripts/process_status.py</code> which regenerates <code>web/data/status.json</code>.</p>

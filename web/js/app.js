@@ -3,11 +3,13 @@
 // ---- CONFIG ----
 
 // Where to load status from.
-// On the WordPress server, this should work as-is.
-// On the tank Pi's local Flask app, you can either:
-//   - serve this same JS and override STATUS_URL in a small inline <script>, or
-//   - replace this constant at deploy time.
-let STATUS_URL = "/sugar_house_monitor/data/status.json";
+const WORDPRESS_STATUS_URL = "/sugar_house_monitor/data/status.json";
+const LOCAL_STATUS_URL = "/data/status.json";
+const STATUS_URL =
+  window.STATUS_URL_OVERRIDE ||
+  (window.location.pathname.startsWith("/sugar_house_monitor")
+    ? WORDPRESS_STATUS_URL
+    : LOCAL_STATUS_URL);
 
 // Staleness thresholds in seconds (server-time-based, but we approximate with browser time).
 // You can tune these as needed.
