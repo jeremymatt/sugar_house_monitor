@@ -13,6 +13,17 @@ if (!is_array($records)) {
 
 $db = connect_sqlite(resolve_repo_path($env['TANK_DB_PATH']));
 
+function ensure_column(PDO $db, string $table, string $column, string $definition): void {
+    $stmt = $db->query("PRAGMA table_info($table)");
+    $columns = [];
+    foreach ($stmt as $row) {
+        $columns[] = $row['name'];
+    }
+    if (!in_array($column, $columns, true)) {
+        $db->exec("ALTER TABLE {$table} ADD COLUMN {$column} {$definition}");
+    }
+}
+
 $db->exec(
     'CREATE TABLE IF NOT EXISTS tank_readings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,6 +32,8 @@ $db->exec(
         surf_dist REAL,
         depth REAL,
         volume_gal REAL,
+        max_volume_gal REAL,
+        level_percent REAL,
         flow_gph REAL,
         eta_full TEXT,
         eta_empty TEXT,
@@ -31,19 +44,25 @@ $db->exec(
         UNIQUE(tank_id, source_timestamp)
     )'
 );
+ensure_column($db, 'tank_readings', 'max_volume_gal', 'REAL');
+ensure_column($db, 'tank_readings', 'level_percent', 'REAL');
 
 $insert = $db->prepare(
     'INSERT INTO tank_readings (
-        tank_id, source_timestamp, surf_dist, depth, volume_gal, flow_gph,
-        eta_full, eta_empty, time_to_full_min, time_to_empty_min, raw_payload, received_at
+        tank_id, source_timestamp, surf_dist, depth, volume_gal, max_volume_gal,
+        level_percent, flow_gph, eta_full, eta_empty, time_to_full_min,
+        time_to_empty_min, raw_payload, received_at
     ) VALUES (
-        :tank_id, :source_timestamp, :surf_dist, :depth, :volume_gal, :flow_gph,
-        :eta_full, :eta_empty, :time_to_full_min, :time_to_empty_min, :raw_payload, :received_at
+        :tank_id, :source_timestamp, :surf_dist, :depth, :volume_gal, :max_volume_gal,
+        :level_percent, :flow_gph, :eta_full, :eta_empty, :time_to_full_min,
+        :time_to_empty_min, :raw_payload, :received_at
     )
     ON CONFLICT(tank_id, source_timestamp) DO UPDATE SET
         surf_dist=excluded.surf_dist,
         depth=excluded.depth,
         volume_gal=excluded.volume_gal,
+        max_volume_gal=excluded.max_volume_gal,
+        level_percent=excluded.level_percent,
         flow_gph=excluded.flow_gph,
         eta_full=excluded.eta_full,
         eta_empty=excluded.eta_empty,
@@ -72,6 +91,8 @@ foreach ($records as $record) {
         ':surf_dist' => $record['surf_dist'] ?? null,
         ':depth' => $record['depth'] ?? null,
         ':volume_gal' => $record['volume_gal'] ?? $record['volume'] ?? null,
+        ':max_volume_gal' => $record['max_volume_gal'] ?? null,
+        ':level_percent' => $record['level_percent'] ?? null,
         ':flow_gph' => $record['flow_gph'] ?? null,
         ':eta_full' => $record['eta_full'] ?? null,
         ':eta_empty' => $record['eta_empty'] ?? null,

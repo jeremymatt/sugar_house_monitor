@@ -1,141 +1,289 @@
-import pandas as pd
-import numpy as np
 import datetime as dt
-import os
+import json
+import sqlite3
 import time
+from dataclasses import dataclass
 from multiprocessing import Queue
-import adafruit_character_lcd.character_lcd_rgb_i2c as character_lcd
-import board
-import busio
-import RPi.GPIO as GPIO
-import serial
-from hampel import hampel
 from pathlib import Path
+from typing import Dict, List, Optional, Sequence
 
-scripts_dir = Path(__file__).parent.resolve()
-#Set the GPIO pin numbering mode
-GPIO.setmode(GPIO.BCM)
+import numpy as np
+import pandas as pd
+from hampel import hampel
 
-df_col_order = ['datetime','timestamp','yr','mo','day','hr','m','s','surf_dist','depth','gal']
+try:
+    import adafruit_character_lcd.character_lcd_rgb_i2c as character_lcd
+    import board
+    import busio
+except ImportError:  # pragma: no cover - only used on Pi hardware
+    character_lcd = None
+    board = None
+    busio = None
 
-tank_names = ['brookside','roadside']
+try:
+    import RPi.GPIO as GPIO
+except ImportError:  # pragma: no cover - only used on Pi hardware
+    GPIO = None
+
+try:
+    import serial
+except ImportError:  # pragma: no cover - serial hardware not available on dev hosts
+    serial = None
+
+if GPIO is not None:  # pragma: no cover - only runs on Pi
+    GPIO.setmode(GPIO.BCM)
+
+df_col_order = [
+    "datetime",
+    "timestamp",
+    "yr",
+    "mo",
+    "day",
+    "hr",
+    "m",
+    "s",
+    "surf_dist",
+    "depth",
+    "gal",
+]
+
+tank_names = ["brookside", "roadside"]
+SERIAL_PORTS = {
+    "brookside": "/dev/serial0",
+    "roadside": "/dev/ttyAMA5",
+}
+DEFAULT_HISTORY_HOURS = 6
+HISTORY_PRUNE_INTERVAL = dt.timedelta(hours=1)
 
 queue_dict = {}
 for tank_name in tank_names:
-    queue_dict[tank_name] = {}
-    queue_dict[tank_name]['command'] = Queue()
-    queue_dict[tank_name]['response'] = Queue()
-    queue_dict[tank_name]['screen_response'] = Queue()
+    queue_dict[tank_name] = {
+        "command": Queue(),
+        "response": Queue(),
+        "screen_response": Queue(),
+        "status_updates": Queue(),
+    }
 
 
-queue_dict['brookside']['uart'] = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
-queue_dict['roadside']['uart'] = serial.Serial("/dev/ttyAMA5", baudrate=9600, timeout=0.5)
-
-
-lcd_red = [100,0,0]
-lcd_off = [0,0,0]
-
-
-def calc_gallons_interp(df,length):
-    df.loc[0,'gals_interp'] = 0
+def calc_gallons_interp(df, length):
+    df.loc[0, "gals_interp"] = 0
     for i in df.index[1:]:
-        bottom_width = df.loc[i-1,'widths']
-        top_width = df.loc[i,'widths']
-        bottom = df.loc[i-1,'depths']
-        top = df.loc[i,'depths']
-        vol = length*(top-bottom)*(top_width+bottom_width)/2
-        gals = np.round(vol/231,3)
-        df.loc[i,'gals_interp'] = df.loc[i-1,'gals_interp']+gals
+        bottom_width = df.loc[i - 1, "widths"]
+        top_width = df.loc[i, "widths"]
+        bottom = df.loc[i - 1, "depths"]
+        top = df.loc[i, "depths"]
+        vol = length * (top - bottom) * (top_width + bottom_width) / 2
+        gals = np.round(vol / 231, 3)
+        df.loc[i, "gals_interp"] = df.loc[i - 1, "gals_interp"] + gals
 
     return df
 
+
 def calculate_checksum(buffer):
-    # Ensures that the checksum is constrained to a single byte (8 bits)
     return (buffer[0] + buffer[1] + buffer[2]) & 0xFF
+
 
 brookside_length = 191.5
 brookside_width = 48
 brookside_height = 40.75
 brookside_radius = 17
-brookside_depths = [0,1,2,3,4,5,6,7,8,9,10,11,12,13.25,20,25,30,36.5] #inches
-brookside_widths = [10,19.25,27.25,33.25,37,39.5,41.5,43,44,45.5,46.5,47.375,47.75,48,48,48,48,48]
-brookside_dimension_df = pd.DataFrame({'depths':brookside_depths,'widths':brookside_widths})
-brookside_dimension_df = calc_gallons_interp(brookside_dimension_df,brookside_length)
+brookside_depths = [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13.25,
+    20,
+    25,
+    30,
+    36.5,
+]
+brookside_widths = [
+    10,
+    19.25,
+    27.25,
+    33.25,
+    37,
+    39.5,
+    41.5,
+    43,
+    44,
+    45.5,
+    46.5,
+    47.375,
+    47.75,
+    48,
+    48,
+    48,
+    48,
+    48,
+]
+brookside_dimension_df = pd.DataFrame({"depths": brookside_depths, "widths": brookside_widths})
+brookside_dimension_df = calc_gallons_interp(brookside_dimension_df, brookside_length)
 
 roadside_length = 178.5
 roadside_width = 54
 roadside_height = 39
 roadside_radius = 18
-roadside_depths = [0,2.75,3.75,4.75,5.75,6.75,8.75,9.75,10.75,11.75,16,20,25,30,35,39]
-roadside_widths = [22,38.75,41.125,43.625,45.375,46.25,48.5,49.25,50.75,51.75,54,54,54,54,54,54]
-roadside_dimension_df = pd.DataFrame({'depths':roadside_depths,'widths':roadside_widths})
-roadside_dimension_df = calc_gallons_interp(roadside_dimension_df,roadside_length)
+roadside_depths = [0, 2.75, 3.75, 4.75, 5.75, 6.75, 8.75, 9.75, 10.75, 11.75, 16, 20, 25, 30, 35, 39]
+roadside_widths = [
+    22,
+    38.75,
+    41.125,
+    43.625,
+    45.375,
+    46.25,
+    48.5,
+    49.25,
+    50.75,
+    51.75,
+    54,
+    54,
+    54,
+    54,
+    54,
+    54,
+]
+roadside_dimension_df = pd.DataFrame({"depths": roadside_depths, "widths": roadside_widths})
+roadside_dimension_df = calc_gallons_interp(roadside_dimension_df, roadside_length)
 
-tank_dims_dict = {}
-tank_dims_dict['brookside'] = {}
-tank_dims_dict['brookside']['length'] = brookside_length
-tank_dims_dict['brookside']['width'] = brookside_width
-tank_dims_dict['brookside']['height'] = brookside_height
-tank_dims_dict['brookside']['radius'] = brookside_radius
-tank_dims_dict['brookside']['dim_df'] = brookside_dimension_df
-tank_dims_dict['brookside']['bottom_dist'] = 55.125 #inches from the sensor to the bottom of the tank
-tank_dims_dict['roadside'] = {}
-tank_dims_dict['roadside']['length'] = roadside_length
-tank_dims_dict['roadside']['width'] = roadside_width
-tank_dims_dict['roadside']['height'] = roadside_height
-tank_dims_dict['roadside']['radius'] = roadside_radius
-tank_dims_dict['roadside']['dim_df'] = roadside_dimension_df
-tank_dims_dict['roadside']['bottom_dist'] = 50.75 #inches from the sensor to the bottom of the tank
+tank_dims_dict = {
+    "brookside": {
+        "length": brookside_length,
+        "width": brookside_width,
+        "height": brookside_height,
+        "radius": brookside_radius,
+        "dim_df": brookside_dimension_df,
+        "bottom_dist": 55.125,
+    },
+    "roadside": {
+        "length": roadside_length,
+        "width": roadside_width,
+        "height": roadside_height,
+        "radius": roadside_radius,
+        "dim_df": roadside_dimension_df,
+        "bottom_dist": 50.75,
+    },
+}
 
-data_store_directory = scripts_dir.parent / 'data'
-data_store_directory.mkdir(parents=True, exist_ok=True)
-    
 
-def init_display():        
+def ensure_utc(ts: dt.datetime) -> dt.datetime:
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=dt.timezone.utc)
+    return ts.astimezone(dt.timezone.utc)
+
+
+def _safe_float(value: Optional[float]) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+@dataclass
+class DebugSample:
+    timestamp: dt.datetime
+    surf_dist: float
+    depth: Optional[float] = None
+    volume_gal: Optional[float] = None
+    flow_gph: Optional[float] = None
+
+
+class DebugTankFeed:
+    """Replay CSV readings in sync with a SyntheticClock."""
+
+    def __init__(self, records: Sequence[DebugSample], clock=None):
+        self.records = sorted(records, key=lambda rec: rec.timestamp)
+        self.clock = clock
+        self.index = 0
+
+    def next_sample(self) -> Optional[DebugSample]:
+        if self.index >= len(self.records):
+            return None
+        sample = self.records[self.index]
+        if self.clock:
+            self.clock.wait_until(sample.timestamp)
+        self.index += 1
+        return sample
+
+
+class TankStatusFileWriter:
+    """Atomically write per-tank status JSON files without locking hassles."""
+
+    def __init__(self, status_dir: Optional[Path], tank_id: str):
+        self.path = None
+        if status_dir:
+            status_dir = Path(status_dir)
+            status_dir.mkdir(parents=True, exist_ok=True)
+            self.path = status_dir / f"status_{tank_id}.json"
+
+    def write(self, payload: Dict) -> None:
+        if not self.path:
+            return
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2))
+        tmp.replace(self.path)
+
+
+def init_display():
+    if None in (character_lcd, board, busio):  # pragma: no cover - requires hardware
+        raise RuntimeError("LCD hardware libraries not available on this host")
     lcd_columns = 16
     lcd_rows = 2
     i2c = busio.I2C(board.SCL, board.SDA)
     lcd = character_lcd.Character_LCD_RGB_I2C(i2c, lcd_columns, lcd_rows)
-    lcd.color = lcd_red
+    lcd.color = [100, 0, 0]
     return lcd
 
-def run_lcd_screen(lcd,queue_dict):
+
+def run_lcd_screen(lcd, queue_dict):  # pragma: no cover - hardware specific
     lcd.clear()
     lcd.message = "HELLO"
     time.sleep(2)
     lcd.clear()
 
-    next_update = dt.datetime.now() - dt.timedelta(days=1)
+    next_update = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
     screen_update_frequency = dt.timedelta(seconds=15)
 
     tank_ctr = 0
     param_ctr = 0
-    prev_msg = 'none'
-    cur_msg = 'weekend'
+    prev_msg = "none"
+    cur_msg = "weekend"
 
     while True:
-        now = dt.datetime.now()
+        now = dt.datetime.now(dt.timezone.utc)
         if now > next_update:
-            next_update = now+screen_update_frequency
+            next_update = now + screen_update_frequency
             responses = {}
-            for ind,tank_name in enumerate(tank_names):
-                queue_dict[tank_name]['command'].put('update_screen')
-                while queue_dict[tank_name]['screen_response'].empty():
+            for ind, tank_name in enumerate(tank_names):
+                queue_dict[tank_name]["command"].put("update_screen")
+                while queue_dict[tank_name]["screen_response"].empty():
                     time.sleep(0.1)
-                responses[ind] = queue_dict[tank_name]['screen_response'].get()
+                responses[ind] = queue_dict[tank_name]["screen_response"].get()
 
         if tank_ctr in responses.keys():
             if param_ctr in responses[tank_ctr].keys():
-                cur_msg = '{}\n{}'.format(responses[tank_ctr]['name'],responses[tank_ctr][param_ctr])
+                cur_msg = "{}\n{}".format(responses[tank_ctr]["name"], responses[tank_ctr][param_ctr])
             else:
-                print('{} param ctr not in keys: {}'.format(param_ctr,responses[tank_ctr].keys()))
+                print("{} param ctr not in keys: {}".format(param_ctr, responses[tank_ctr].keys()))
         else:
-            print('{} not in keys: {}'.format(tank_ctr,responses.keys()))
-        if not cur_msg == prev_msg:
+            print("{} not in keys: {}".format(tank_ctr, responses.keys()))
+        if cur_msg != prev_msg:
             lcd.clear()
             lcd.message = cur_msg
             prev_msg = cur_msg
-        
+
         if lcd.down_button:
             tank_ctr -= 1
         if lcd.up_button:
@@ -147,34 +295,85 @@ def run_lcd_screen(lcd,queue_dict):
         tank_ctr %= 2
         param_ctr %= 3
 
-def run_tank_controller(tank_name,queue_dict,measurement_rate_params):
-    num_to_average,delay,readings_per_min,window_size,n_sigma,rate_update_dt = measurement_rate_params
-    reading_wait_time = dt.timedelta(seconds=60/readings_per_min)
-    command_queue = queue_dict[tank_name]['command']
-    response_queue = queue_dict[tank_name]['response']
-    screen_response_queue = queue_dict[tank_name]['screen_response']
-    uart = queue_dict[tank_name]['uart']
-    tank = TANK(tank_name,uart,num_to_average,delay,window_size,n_sigma,rate_update_dt)
-    update_time = dt.datetime.now()-dt.timedelta(days=1)
+
+def _open_uart(port: Optional[str]):
+    if not port or serial is None:
+        return None
+    try:
+        return serial.Serial(port, baudrate=9600, timeout=0.5)
+    except Exception as exc:  # pragma: no cover - only on Pi
+        print(f"Unable to open UART {port}: {exc}")
+        return None
+
+
+def _clock_now(clock):
+    now = clock.now() if clock else dt.datetime.now(dt.timezone.utc)
+    return ensure_utc(now)
+
+
+def run_tank_controller(
+    tank_name,
+    queue_dict,
+    measurement_rate_params,
+    *,
+    clock=None,
+    debug_records: Optional[Sequence[DebugSample]] = None,
+    history_db_path: Optional[Path] = None,
+    status_dir: Optional[Path] = None,
+    history_hours: int = DEFAULT_HISTORY_HOURS,
+):
+    (
+        num_to_average,
+        delay,
+        readings_per_min,
+        window_size,
+        n_sigma,
+        rate_update_dt,
+    ) = measurement_rate_params
+    reading_wait_time = dt.timedelta(seconds=60 / readings_per_min)
+    command_queue = queue_dict[tank_name]["command"]
+    response_queue = queue_dict[tank_name]["response"]
+    screen_response_queue = queue_dict[tank_name]["screen_response"]
+    status_queue = queue_dict[tank_name]["status_updates"]
+    debug_feed = DebugTankFeed(debug_records, clock) if debug_records else None
+    uart = None if debug_feed else _open_uart(SERIAL_PORTS.get(tank_name))
+
+    tank = TANK(
+        tank_name,
+        uart,
+        num_to_average,
+        delay,
+        window_size,
+        n_sigma,
+        rate_update_dt,
+        tank_dims_dict=tank_dims_dict,
+        clock=clock,
+        debug_feed=debug_feed,
+        history_db_path=history_db_path,
+        status_dir=status_dir,
+        history_hours=history_hours,
+    )
+    update_time = _clock_now(clock) - dt.timedelta(days=1)
     while True:
-        now = dt.datetime.now()
-        if now>update_time:
-            update_time = now+reading_wait_time
-            tank.update_status()
-        # Check for commands from the main process
+        now = _clock_now(clock)
+        if now > update_time:
+            update_time = now + reading_wait_time
+            measurement = tank.update_status()
+            if measurement and status_queue:
+                status_queue.put(measurement)
         if not command_queue.empty():
             command = command_queue.get()
-            parts = command.split(':')
-            if len(parts)==2:
+            parts = command.split(":")
+            if len(parts) == 2:
                 command = parts[0]
                 command_val = int(parts[1])
             allowable_commands = [
-                'update',
-                'update_screen',
-                'set_mins_back'
+                "update",
+                "update_screen",
+                "set_mins_back",
             ]
             if command in allowable_commands:
-                if command == 'update_screen':
+                if command == "update_screen":
                     tank.get_tank_rate()
                     screen_response_queue.put(tank.return_screen_data())
                 else:
@@ -184,218 +383,376 @@ def run_tank_controller(tank_name,queue_dict,measurement_rate_params):
                         tank.update_mins_back(command_val)
                         tank.get_tank_rate()
                     response_queue.put(tank.return_current_state())
+        time.sleep(0.1)
 
 
 class TANK:
-    def __init__(self,tank_name,uart,num_to_average,delay,window_size,n_sigma,rate_update_dt,tank_dims_dict=tank_dims_dict):
+    def __init__(
+        self,
+        tank_name,
+        uart,
+        num_to_average,
+        delay,
+        window_size,
+        n_sigma,
+        rate_update_dt,
+        tank_dims_dict=tank_dims_dict,
+        clock=None,
+        debug_feed: Optional[DebugTankFeed] = None,
+        history_db_path: Optional[Path] = None,
+        status_dir: Optional[Path] = None,
+        history_hours: int = DEFAULT_HISTORY_HOURS,
+    ):
         self.name = tank_name
         self.uart = uart
+        self.clock = clock
+        self.debug_feed = debug_feed
+        self.history_db_path = Path(history_db_path) if history_db_path else None
+        self.history_hours = history_hours
+        self.status_writer = TankStatusFileWriter(status_dir, tank_name)
         self.num_to_average = num_to_average
         self.delay = delay
         self.window_size = window_size
         self.n_sigma = n_sigma
         self.rate_update_dt = dt.timedelta(seconds=rate_update_dt)
-        self.next_rate_update = dt.datetime.now()-dt.timedelta(days=1)
+        self.next_rate_update = self._now() - dt.timedelta(days=1)
+        self.next_prune_time = self._now()
         self.uart_trigger = 0x55
-        self.length = tank_dims_dict[tank_name]['length']
-        self.width = tank_dims_dict[tank_name]['width']
-        self.height = tank_dims_dict[tank_name]['height']
-        self.radius = tank_dims_dict[tank_name]['radius']
-        self.dim_df = tank_dims_dict[tank_name]['dim_df']
-        self.bottom_dist = tank_dims_dict[tank_name]['bottom_dist']
+        dims = tank_dims_dict[tank_name]
+        self.length = dims["length"]
+        self.width = dims["width"]
+        self.height = dims["height"]
+        self.radius = dims["radius"]
+        self.dim_df = dims["dim_df"]
+        self.bottom_dist = dims["bottom_dist"]
         self.mins_back = 30
         self.filling = False
         self.emptying = False
+        self.remaining_time = None
 
-        self.max_vol = int(round(max(self.dim_df.gals_interp)),0)
+        self.max_vol = int(round(max(self.dim_df.gals_interp), 0))
+        self.history_df = self._load_recent_history()
+        self.dist_to_surf = None
+        self.depth = None
+        self.current_gallons = None
+        self.tank_rate = None
+        self.eta_full = None
+        self.eta_empty = None
+        self.time_to_full_min = None
+        self.time_to_empty_min = None
 
-        self.output_fn = os.path.join(data_store_directory,'{}.csv'.format(tank_name))
+    def _now(self):
+        return _clock_now(self.clock)
 
-        if os.path.isfile(self.output_fn):
-            self.history_df = pd.read_csv(self.output_fn)
-            self.history_df.set_index('Unnamed: 0',inplace=True,drop=True)
-            self.history_df['datetime'] = pd.to_datetime(self.history_df['timestamp'])
-            self.history_df = self.history_df[df_col_order]
-        else:
-            self.history_df = pd.DataFrame()
+    def _load_recent_history(self):
+        df = pd.DataFrame(columns=df_col_order)
+        if not self.history_db_path or not self.history_db_path.exists():
+            return df
+        since = self._now() - dt.timedelta(hours=self.history_hours)
+        try:
+            conn = sqlite3.connect(self.history_db_path)
+            conn.row_factory = sqlite3.Row
+        except sqlite3.Error:
+            return df
+        try:
+            cur = conn.execute(
+                """
+                SELECT source_timestamp, surf_dist, depth, volume_gal
+                FROM tank_readings
+                WHERE tank_id = ? AND source_timestamp >= ?
+                ORDER BY source_timestamp
+                """,
+                (self.name, ensure_utc(since).isoformat()),
+            )
+            rows = cur.fetchall()
+        except sqlite3.Error:
+            conn.close()
+            return df
+        conn.close()
 
-
-        self.current_day = dt.datetime.now().day
+        records = []
+        for row in rows:
+            ts_raw = row["source_timestamp"]
+            try:
+                ts = ensure_utc(dt.datetime.fromisoformat(ts_raw))
+            except ValueError:
+                continue
+            record = {
+                "datetime": ts,
+                "timestamp": ts.isoformat(),
+                "yr": ts.year,
+                "mo": ts.month,
+                "day": ts.day,
+                "hr": ts.hour,
+                "m": ts.minute,
+                "s": ts.second,
+                "surf_dist": row["surf_dist"],
+                "depth": row["depth"],
+                "gal": row["volume_gal"],
+            }
+            records.append(record)
+        if not records:
+            return df
+        history_df = pd.DataFrame(records)
+        return history_df[df_col_order]
 
     def read_distance(self):
+        if not self.uart:
+            return None
         self.uart.write(bytes([self.uart_trigger]))
         time.sleep(0.1)
-        Distance = None
+        distance = None
         if self.uart.in_waiting > 0:
             time.sleep(0.004)
-            if self.uart.read(1) == b'\xff':  # Judge packet header
+            if self.uart.read(1) == b"\xff":
                 buffer_RTT = self.uart.read(3)
                 if len(buffer_RTT) == 3:
-                    CS = calculate_checksum(b'\xff' + buffer_RTT)
-                    if buffer_RTT[2] == CS:
-                        Distance = (buffer_RTT[0] << 8) + buffer_RTT[1]  # Calculate distance
+                    cs = calculate_checksum(b"\xff" + buffer_RTT)
+                    if buffer_RTT[2] == cs:
+                        distance = (buffer_RTT[0] << 8) + buffer_RTT[1]
+        return distance
 
-        return Distance
-    
     def get_average_distance(self):
-        cur_readings = []
-        for i in range(self.num_to_average):
-            distance = self.read_distance()
-            if not isinstance(distance,type(None)):
-                distance /= 25.4
-                distance = np.round(distance,2)
-                cur_readings.append(distance)
-
-            time.sleep(self.delay)
-        
-        if len(cur_readings)>0:
-            self.dist_to_surf = np.mean(cur_readings)
-        else:
+        if not self.uart:
             self.dist_to_surf = None
+            return
+        cur_readings = []
+        for _ in range(self.num_to_average):
+            distance = self.read_distance()
+            if distance is not None:
+                distance /= 25.4
+                distance = np.round(distance, 2)
+                cur_readings.append(distance)
+            time.sleep(self.delay)
+        self.dist_to_surf = np.mean(cur_readings) if cur_readings else None
+
+    def _next_debug_distance(self):
+        if not self.debug_feed:
+            return None, None
+        sample = self.debug_feed.next_sample()
+        if not sample:
+            return None, None
+        return ensure_utc(sample.timestamp), _safe_float(sample.surf_dist)
 
     def update_status(self):
-        self.get_average_distance()
-
-        if self.current_day != dt.datetime.now().day:
-            cur_time = dt.datetime.now()
-            self.current_day = cur_time.day
-
-            old_data = self.history_df[self.history_df.datetime<(cur_time-dt.timedelta(days=1))]
-            if len(old_data)>0:
-                min_date = min(old_data.datetime)
-                fn = os.path.join(data_store_directory,'{}_{}_{}_{}.csv'.format(self.name,min_date.year,str(min_date.month).zfill(2),str(min_date.day).zfill(2)))
-                old_data[df_col_order[1:]].to_csv(fn)
-                self.history_df = self.history_df[self.history_df.datetime>=(cur_time-dt.timedelta(days=1))]  
-
-        if isinstance(self.dist_to_surf,type(None)):
-            print('ERROR ({} at {}): No distance measurement')
-            self.error_state = 'Invalid distance measurement'
-            self.status_message = 'ERR:no dist meas'
+        if self.debug_feed:
+            sample_time, dist = self._next_debug_distance()
+            if sample_time is None:
+                return None
+            self.dist_to_surf = dist
+            measurement_time = sample_time
         else:
-            self.get_gal_in_tank()
-            ts = dt.datetime.now()
-            ind = len(self.history_df)
-            row_data = [pd.to_datetime(ts),str(ts),ts.year,ts.month,ts.day,ts.hour,ts.minute,ts.second,self.dist_to_surf,self.depth,self.current_gallons]
-            self.history_df.loc[ind,df_col_order] = row_data
-            self.history_df[df_col_order[1:]].to_csv(self.output_fn)
+            self.get_average_distance()
+            measurement_time = self._now()
 
-    def update_mins_back(self,mins_back):
+        if self.dist_to_surf is None:
+            print(f"ERROR ({self.name} at {measurement_time}): No distance measurement")
+            return None
+
+        self.get_gal_in_tank()
+        self._append_history(measurement_time)
+        self._prune_history_if_needed(measurement_time)
+        self.get_tank_rate(measurement_time)
+        payload = self._build_payload(measurement_time)
+        self.status_writer.write(payload)
+        return payload
+
+    def _append_history(self, measurement_time):
+        ts = ensure_utc(measurement_time)
+        row = {
+            "datetime": ts,
+            "timestamp": ts.isoformat(),
+            "yr": ts.year,
+            "mo": ts.month,
+            "day": ts.day,
+            "hr": ts.hour,
+            "m": ts.minute,
+            "s": ts.second,
+            "surf_dist": self.dist_to_surf,
+            "depth": self.depth,
+            "gal": self.current_gallons,
+        }
+        self.history_df = pd.concat([self.history_df, pd.DataFrame([row])], ignore_index=True)
+
+    def _prune_history_if_needed(self, now):
+        if now < self.next_prune_time:
+            return
+        cutoff = now - dt.timedelta(hours=self.history_hours)
+        self.history_df = self.history_df[self.history_df["datetime"] >= cutoff]
+        self.history_df.reset_index(drop=True, inplace=True)
+        self.next_prune_time = now + HISTORY_PRUNE_INTERVAL
+
+    def update_mins_back(self, mins_back):
         self.mins_back += mins_back
-        self.mins_back = max([5,self.mins_back])
-        self.mins_back = min([240,self.mins_back])
+        self.mins_back = max([5, self.mins_back])
+        self.mins_back = min([240, self.mins_back])
 
-    def get_tank_rate(self):
-        now = dt.datetime.now()
+    def get_tank_rate(self, current_time=None):
+        now = ensure_utc(current_time or self._now())
         if now > self.next_rate_update:
             self.next_rate_update = now + self.rate_update_dt
-            hampel_unfiltered = int(self.window_size/2)+1
+            hampel_unfiltered = int(self.window_size / 2) + 1
 
-            if len(self.history_df)<hampel_unfiltered+10:
+            if len(self.history_df) < hampel_unfiltered + 10:
                 self.filling = False
                 self.emptying = False
-                self.remaining_time = 'not enough data'
-                self.tank_rate = 'ND'
+                self.remaining_time = None
+                self.tank_rate = None
             else:
-                result = hampel(self.history_df.gal,window_size = self.window_size,n_sigma=float(self.n_sigma))
-                self.history_df['gal_filter'] = result.filtered_data
+                result = hampel(
+                    self.history_df.gal,
+                    window_size=self.window_size,
+                    n_sigma=float(self.n_sigma),
+                )
+                self.history_df["gal_filter"] = result.filtered_data
                 temp_df = self.history_df[:-hampel_unfiltered].copy()
-                rate_window_lim = temp_df.loc[temp_df.index[-1],'datetime']-dt.timedelta(minutes=self.mins_back)
-                rate_window = temp_df.loc[temp_df.datetime>rate_window_lim]
+                rate_window_lim = temp_df.loc[temp_df.index[-1], "datetime"] - dt.timedelta(
+                    minutes=self.mins_back
+                )
+                rate_window = temp_df.loc[temp_df.datetime > rate_window_lim]
 
-                if len(rate_window)<5:
-                    self.tank_rate = "ND"
+                if len(rate_window) < 5:
+                    self.tank_rate = None
+                    self.filling = False
+                    self.emptying = False
+                    self.remaining_time = None
                 else:
-                    timedelta = rate_window.datetime.diff()
-                    d_hrs = [val.total_seconds()/3600 for val in timedelta[timedelta.index[1:]]]
-                    d_hrs.insert(0,0)
-                    poly = np.polyfit(np.cumsum(d_hrs),rate_window.gal_filter,1)
+                    timedelta_vals = rate_window.datetime.diff()
+                    d_hrs = [val.total_seconds() / 3600 for val in timedelta_vals[timedelta_vals.index[1:]]]
+                    d_hrs.insert(0, 0)
+                    poly = np.polyfit(np.cumsum(d_hrs), rate_window.gal_filter, 1)
 
                     self.filling = False
                     self.emptying = False
                     if np.isnan(poly[0]):
-                        self.tank_rate = 'nan'
-                        self.history_df.to_csv('./data/nan.csv')
+                        self.tank_rate = None
                         print(rate_window)
                         print(d_hrs)
                     else:
-                        self.tank_rate = np.round(poly[0],1)
+                        self.tank_rate = float(np.round(poly[0], 1))
                         if self.tank_rate > 5:
                             self.filling = True
                         elif self.tank_rate < -5:
                             self.emptying = True
 
-                    self.remaining_time = 'N/A'
-                    if self.filling:
-                        hours = (self.max_vol-poly[1])/poly[0]-sum(d_hrs)
-                        self.remaining_time = dt.timedelta(hours=hours)
-                        self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
-                    if self.emptying:
-                        hours = (0-poly[1])/poly[0]-sum(d_hrs)
-                        self.remaining_time = dt.timedelta(hours=hours)
-                        self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
+                    self.remaining_time = None
+                    self.eta_full = None
+                    self.eta_empty = None
+                    self.time_to_full_min = None
+                    self.time_to_empty_min = None
+                    if self.filling and self.tank_rate:
+                        gallons_remaining = max(self.max_vol - (self.current_gallons or 0), 0)
+                        if self.tank_rate > 0:
+                            hours = gallons_remaining / self.tank_rate
+                            self.remaining_time = dt.timedelta(hours=hours)
+                            eta = now + self.remaining_time
+                            self.eta_full = eta.isoformat()
+                            self.time_to_full_min = hours * 60
+                    if self.emptying and self.tank_rate:
+                        gallons_remaining = max(self.current_gallons or 0, 0)
+                        if self.tank_rate < 0:
+                            hours = gallons_remaining / abs(self.tank_rate)
+                            self.remaining_time = dt.timedelta(hours=hours)
+                            eta = now + self.remaining_time
+                            self.eta_empty = eta.isoformat()
+                            self.time_to_empty_min = hours * 60
 
     def return_screen_data(self):
         state = {}
-        state['name'] = self.name
-        state[0] = '{} | {}gph'.format(int(self.current_gallons),self.tank_rate,1)
+        state["name"] = self.name
+        rate_display = f"{self.tank_rate:.1f}" if isinstance(self.tank_rate, (int, float)) else "ND"
+        gallons_display = int(self.current_gallons or 0)
+        state[0] = "{} | {}gph".format(gallons_display, rate_display)
         state[1] = 'raw dst: {}"'.format(self.dist_to_surf)
         state[2] = 'depth: {}"'.format(self.depth)
         return state
 
     def return_current_state(self):
         state = {}
-        state['name'] = self.name
-        state['current_gallons'] = str(np.round(self.current_gallons,0))
-        state['rate']  = str(self.tank_rate)
-        state['filling'] = str(self.filling)
-        state['emptying'] = str(self.emptying)
-        state['rate_str'] = '---'
-        state['remaining_time'] = 'N/A'
+        state["name"] = self.name
+        state["current_gallons"] = str(np.round(self.current_gallons or 0, 0))
+        state["rate"] = str(self.tank_rate if self.tank_rate is not None else "ND")
+        state["filling"] = str(self.filling)
+        state["emptying"] = str(self.emptying)
+        state["rate_str"] = "---"
+        state["remaining_time"] = "N/A"
         try:
-            state['dist_to_surf'] = str(np.round(self.dist_to_surf,3))
-            state['depth'] = str(np.round(self.depth,3))
-        except:
-            state['dist_to_surf'] = '???'
-            state['depth'] =  '???'
+            state["dist_to_surf"] = str(np.round(self.dist_to_surf, 3))
+            state["depth"] = str(np.round(self.depth, 3))
+        except Exception:
+            state["dist_to_surf"] = "???"
+            state["depth"] = "???"
 
-        if self.filling:
-            remaining_hrs = np.round(self.remaining_time.seconds/3600,1)
-            # state['remaining_time'] = 'Full in {}(hh:mm:ss)'.format(self.remaining_time)
-            remaining_time_prefix = 'Full'
-            state['rate_str'] = '{}gals/hr over previous {}mins'.format(self.tank_rate,self.mins_back)
-        if self.emptying:
-            # state['remaining_time'] = 'Empty in {}(hh:mm:ss)'.format(self.remaining_time)
-            remaining_time_prefix = 'Empty'
-            state['rate_str'] = '{}gals/hr over previous {}mins'.format(self.tank_rate,self.mins_back)
+        if self.filling and self.remaining_time:
+            remaining_hrs = np.round(self.remaining_time.total_seconds() / 3600, 1)
+            remaining_time_prefix = "Full"
+            state["rate_str"] = "{}gals/hr over previous {}mins".format(
+                self.tank_rate, self.mins_back
+            )
+            state["remaining_time"] = "{} at {} ({}hrs)".format(
+                remaining_time_prefix,
+                (self._now() + self.remaining_time).strftime("%I:%M%p"),
+                remaining_hrs,
+            )
+        if self.emptying and self.remaining_time:
+            remaining_hrs = np.round(self.remaining_time.total_seconds() / 3600, 1)
+            remaining_time_prefix = "Empty"
+            state["rate_str"] = "{}gals/hr over previous {}mins".format(
+                self.tank_rate, self.mins_back
+            )
+            state["remaining_time"] = "{} at {} ({}hrs)".format(
+                remaining_time_prefix,
+                (self._now() + self.remaining_time).strftime("%I:%M%p"),
+                remaining_hrs,
+            )
 
-        if self.filling or self.emptying:
-            full_time = dt.datetime.now()+self.remaining_time
-            remaining_hrs = np.round(self.remaining_time.seconds/3600,1)
-            state['remaining_time'] = '{} at {} ({}hrs)'.format(remaining_time_prefix, full_time.strftime('%I:%M%p'),remaining_hrs)
-
-        state['mins_back'] = self.mins_back
-
+        state["mins_back"] = self.mins_back
         return state
 
-
+    def _build_payload(self, measurement_time: dt.datetime) -> Dict[str, Optional[float]]:
+        percent_full = None
+        if self.current_gallons is not None and self.max_vol:
+            percent_full = max(
+                0.0,
+                min(100.0, (float(self.current_gallons) / float(self.max_vol)) * 100.0),
+            )
+        return {
+            "generated_at": ensure_utc(self._now()).isoformat(),
+            "tank_id": self.name,
+            "source_timestamp": ensure_utc(measurement_time).isoformat(),
+            "surf_dist": self.dist_to_surf,
+            "depth": self.depth,
+            "volume_gal": self.current_gallons,
+            "flow_gph": self.tank_rate,
+            "eta_full": self.eta_full,
+            "eta_empty": self.eta_empty,
+            "time_to_full_min": self.time_to_full_min,
+            "time_to_empty_min": self.time_to_empty_min,
+            "level_percent": percent_full,
+            "max_volume_gal": self.max_vol,
+        }
 
     def get_gal_in_tank(self):
-        depth = self.bottom_dist-self.dist_to_surf
-        self.raw_depth = np.round(depth,2)
-        depth = max([0,depth])
-        depth = min([depth,self.dim_df['depths'].max()])
+        depth = self.bottom_dist - (self.dist_to_surf or 0)
+        self.raw_depth = np.round(depth, 2)
+        depth = max([0, depth])
+        depth = min([depth, self.dim_df["depths"].max()])
         self.depth = depth
 
-        print('{}:\nbottom_dist: {}\ndist_reading: {}\nraw_depth: {}\nadjusted_depth:{}\n'.format(self.name,self.bottom_dist,self.dist_to_surf,self.raw_depth,depth))
+        print(
+            "{}:\nbottom_dist: {}\ndist_reading: {}\nraw_depth: {}\nadjusted_depth:{}\n".format(
+                self.name, self.bottom_dist, self.dist_to_surf, self.raw_depth, depth
+            )
+        )
 
-        ind = self.dim_df.loc[self.dim_df['depths']<=depth].index[-1]
-        bottom_depth = self.dim_df.loc[ind,'depths']
-        gallons = self.dim_df.loc[ind,'gals_interp']
+        ind = self.dim_df.loc[self.dim_df["depths"] <= depth].index[-1]
+        bottom_depth = self.dim_df.loc[ind, "depths"]
+        gallons = self.dim_df.loc[ind, "gals_interp"]
 
         if depth > bottom_depth:
-            bottom_width = self.dim_df.loc[ind,'widths']
-            top_width = np.interp(depth,self.dim_df['depths'],self.dim_df['widths'])
-            vol = self.length*(depth-bottom_depth)*(bottom_width+top_width)/2
-            gallons += vol/231
+            bottom_width = self.dim_df.loc[ind, "widths"]
+            top_width = np.interp(depth, self.dim_df["depths"], self.dim_df["widths"])
+            vol = self.length * (depth - bottom_depth) * (bottom_width + top_width) / 2
+            gallons += vol / 231
 
-        self.current_gallons = np.round(gallons,2)
+        self.current_gallons = np.round(gallons, 2)

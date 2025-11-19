@@ -55,7 +55,7 @@ Time,Pump_Event,Pump_Run_Time,Pump_Interval,Gallons_Per_Hour
 
 ## C. Display Pi  
 - Pi Zero with a small screen.
-- Loads `status.json` from server and displays values visually.
+- Loads the per-component `status_*.json` files from the server and displays values visually.
 - Will likely be implemented in pygame.
 
 ---
@@ -77,7 +77,9 @@ Directory structure (under user home):
 /sugar_house_monitor/
   index.html
   js/app.js
-  data/status.json
+  data/status_brookside.json
+  data/status_roadside.json
+  data/status_pump.json
   api/ingest_tank.php
   api/ingest_pump.php
 ```

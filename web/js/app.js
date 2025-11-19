@@ -2,14 +2,20 @@
 
 // ---- CONFIG ----
 
-// Where to load status from.
-const WORDPRESS_STATUS_URL = "/sugar_house_monitor/data/status.json";
-const LOCAL_STATUS_URL = "/data/status.json";
-const STATUS_URL =
+// Where to load per-component status files from.
+const WORDPRESS_STATUS_BASE = "/sugar_house_monitor/data";
+const LOCAL_STATUS_BASE = "/data";
+const STATUS_BASE_URL =
   window.STATUS_URL_OVERRIDE ||
   (window.location.pathname.startsWith("/sugar_house_monitor")
-    ? WORDPRESS_STATUS_URL
-    : LOCAL_STATUS_URL);
+    ? WORDPRESS_STATUS_BASE
+    : LOCAL_STATUS_BASE);
+
+const TANK_STATUS_FILES = {
+  brookside: "status_brookside.json",
+  roadside: "status_roadside.json"
+};
+const PUMP_STATUS_FILE = "status_pump.json";
 
 // Staleness thresholds in seconds (server-time-based, but we approximate with browser time).
 // You can tune these as needed.
@@ -27,7 +33,10 @@ const STALENESS_UPDATE_MS = 5_000; // 5s
 
 // ---- STATE ----
 
-let lastStatus = null;
+let latestTanks = { brookside: null, roadside: null };
+let latestPump = null;
+let lastGeneratedAt = null;
+let lastFetchError = false;
 
 // ---- UTILITIES ----
 
@@ -91,6 +100,35 @@ function secondsSinceLast(receivedAt) {
   return (now - d.getTime()) / 1000;
 }
 
+function statusUrlFor(file) {
+  const base = STATUS_BASE_URL.endsWith("/")
+    ? STATUS_BASE_URL.slice(0, -1)
+    : STATUS_BASE_URL;
+  return `${base}/${file}`;
+}
+
+async function fetchStatusFile(file) {
+  const url = statusUrlFor(file);
+  const res = await fetch(url, { cache: "no-store" });
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${file}`);
+  return res.json();
+}
+
+function computeLatestGenerated(entries) {
+  const times = entries
+    .map((entry) => {
+      if (!entry || !entry.generated_at) return null;
+      const parsed = parseIso(entry.generated_at);
+      return parsed ? parsed.getTime() : null;
+    })
+    .filter((t) => t != null);
+  if (times.length === 0) return null;
+  return new Date(Math.max(...times)).toISOString();
+}
+
 // ---- RENDERING ----
 
 function updateTankCard(tankKey, tankData, staleSec, thresholdSec) {
@@ -114,8 +152,11 @@ function updateTankCard(tankKey, tankData, staleSec, thresholdSec) {
   }
 
   const vol = tankData.volume_gal;
-  const cap = tankData.capacity_gal;
-  const pct = tankData.level_percent;
+  const cap = tankData.max_volume_gal ?? tankData.capacity_gal;
+  let pct = tankData.level_percent;
+  if ((pct == null || !isFinite(pct)) && vol != null && cap != null && isFinite(cap)) {
+    pct = (vol / cap) * 100;
+  }
   const flow = tankData.flow_gph;
   const lastTs = tankData.last_sample_timestamp;
   const lastRecv = tankData.last_received_at;
@@ -191,7 +232,7 @@ function updateGlobalStatus(staleInfo) {
 
   if (anyError) {
     if (dot) dot.classList.add("stale");
-    if (text) text.textContent = "Error loading status.json";
+    if (text) text.textContent = "Error loading status files";
     return;
   }
 
@@ -203,22 +244,17 @@ function updateGlobalStatus(staleInfo) {
     if (text) text.textContent = "All streams fresh";
   }
 
-  if (gen && lastStatus && lastStatus.generated_at) {
-    gen.textContent = `Status generated at: ${formatDateTime(lastStatus.generated_at)}`;
-  } else if (gen) {
-    gen.textContent = "";
+  if (gen) {
+    gen.textContent = lastGeneratedAt
+      ? `Status generated at: ${formatDateTime(lastGeneratedAt)}`
+      : "";
   }
 }
 
 function recomputeStalenessAndRender() {
-  if (!lastStatus) return;
-
-  const tanks = lastStatus.tanks || {};
-  const pump  = lastStatus.pump || null;
-
-  // Compute per-stream seconds since last receipt
-  const brookside = tanks.brookside || null;
-  const roadside  = tanks.roadside || null;
+  const brookside = latestTanks.brookside;
+  const roadside  = latestTanks.roadside;
+  const pump      = latestPump;
 
   const brooksideSec = brookside ? secondsSinceLast(brookside.last_received_at || brookside.last_sample_timestamp) : null;
   const roadsideSec  = roadside  ? secondsSinceLast(roadside.last_received_at  || roadside.last_sample_timestamp)  : null;
@@ -232,17 +268,12 @@ function recomputeStalenessAndRender() {
   const roadsideStale  = roadsideSec  != null && roadsideSec  > roadsideThresh;
   const pumpStale      = pumpSec      != null && pumpSec      > pumpThresh;
 
-  // Update tank cards
   updateTankCard("brookside", brookside, brooksideSec, brooksideThresh);
   updateTankCard("roadside",  roadside,  roadsideSec,  roadsideThresh);
-
-  // Update pump card
   updatePumpCard(pump, pumpSec, pumpThresh);
 
-  // Show/hide warnings on cards
   const tanksWarning = document.getElementById("tanks-warning");
   const pumpWarning  = document.getElementById("pump-warning");
-
   if (tanksWarning) {
     tanksWarning.style.display = (brooksideStale || roadsideStale) ? "inline-flex" : "none";
   }
@@ -250,10 +281,8 @@ function recomputeStalenessAndRender() {
     pumpWarning.style.display = pumpStale ? "inline-flex" : "none";
   }
 
-  // Error banners only if we truly have no data
   const tanksError = document.getElementById("tanks-error");
   const pumpError  = document.getElementById("pump-error");
-
   if (tanksError) {
     const anyTankData = !!(brookside || roadside);
     tanksError.style.display = anyTankData ? "none" : "block";
@@ -262,9 +291,9 @@ function recomputeStalenessAndRender() {
     pumpError.style.display = pump ? "none" : "block";
   }
 
-  // Global status
+  const errorState = lastFetchError && !brookside && !roadside && !pump;
   updateGlobalStatus({
-    error: false,
+    error: errorState,
     tanksStale: brooksideStale || roadsideStale,
     pumpStale: pumpStale
   });
@@ -274,13 +303,19 @@ function recomputeStalenessAndRender() {
 
 async function fetchStatusOnce() {
   try {
-    const res = await fetch(STATUS_URL, { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    lastStatus = data;
+    lastFetchError = false;
+    const [brookside, roadside, pump] = await Promise.all([
+      fetchStatusFile(TANK_STATUS_FILES.brookside),
+      fetchStatusFile(TANK_STATUS_FILES.roadside),
+      fetchStatusFile(PUMP_STATUS_FILE)
+    ]);
+    latestTanks = { brookside, roadside };
+    latestPump = pump;
+    lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump]);
     recomputeStalenessAndRender();
   } catch (err) {
-    console.error("Failed to fetch status.json:", err);
+    lastFetchError = true;
+    console.error("Failed to fetch status files:", err);
     const tanksError = document.getElementById("tanks-error");
     const pumpError  = document.getElementById("pump-error");
     if (tanksError) tanksError.style.display = "block";

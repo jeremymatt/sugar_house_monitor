@@ -1,5 +1,5 @@
 """
-Generate web/data/status.json from the latest tank + pump readings.
+Generate per-component status JSON files from the latest tank + pump readings.
 
 This script is triggered automatically by the ingest PHP endpoints.
 """
@@ -96,26 +96,36 @@ def main() -> None:
     tank_conn = open_db(repo_path_from_config(env["TANK_DB_PATH"]))
     pump_conn = open_db(repo_path_from_config(env["PUMP_DB_PATH"]))
 
-    tanks = {}
+    status_base = repo_path_from_config(env["STATUS_JSON_PATH"]).parent
+
+    timestamp = iso_now()
     for tank_id, row in get_latest_tank_rows(tank_conn).items():
-        cap = tank_capacity.get(tank_id)
-        volume = row["volume_gal"]
-        tanks[tank_id] = {
+        max_volume = row["max_volume_gal"] or tank_capacity.get(tank_id)
+        if max_volume is None:
+            max_volume = tank_capacity.get(tank_id)
+        percent = row["level_percent"]
+        if percent is None:
+            percent = calc_percent(row["volume_gal"], max_volume)
+        payload = {
+            "generated_at": timestamp,
             "tank_id": tank_id,
-            "volume_gal": volume,
-            "capacity_gal": cap,
-            "level_percent": calc_percent(volume, cap),
+            "volume_gal": row["volume_gal"],
+            "max_volume_gal": max_volume,
+            "level_percent": percent,
             "flow_gph": row["flow_gph"],
             "eta_full": row["eta_full"],
             "eta_empty": row["eta_empty"],
+            "time_to_full_min": row["time_to_full_min"],
+            "time_to_empty_min": row["time_to_empty_min"],
             "last_sample_timestamp": row["source_timestamp"],
             "last_received_at": row["received_at"],
         }
+        atomic_write(status_base / f"status_{tank_id}.json", payload)
 
     pump_row = get_latest_pump_row(pump_conn)
-    pump_section = None
     if pump_row:
-        pump_section = {
+        pump_payload = {
+            "generated_at": timestamp,
             "event_type": pump_row["event_type"],
             "pump_run_time_s": pump_row["pump_run_time_s"],
             "pump_interval_s": pump_row["pump_interval_s"],
@@ -123,15 +133,7 @@ def main() -> None:
             "last_event_timestamp": pump_row["source_timestamp"],
             "last_received_at": pump_row["received_at"],
         }
-
-    payload = {
-        "generated_at": iso_now(),
-        "tanks": tanks,
-        "pump": pump_section,
-    }
-
-    status_path = repo_path_from_config(env["STATUS_JSON_PATH"])
-    atomic_write(status_path, payload)
+        atomic_write(status_base / "status_pump.json", pump_payload)
 
 
 if __name__ == "__main__":
