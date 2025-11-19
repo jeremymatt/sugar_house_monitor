@@ -207,6 +207,8 @@ class TANK:
         self.filling = False
         self.emptying = False
 
+        self.max_vol = int(round(max(self.dim_df.gals_interp)),0)
+
         self.output_fn = os.path.join(data_store_directory,'{}.csv'.format(tank_name))
 
         if os.path.isfile(self.output_fn):
@@ -324,7 +326,7 @@ class TANK:
 
                     self.remaining_time = 'N/A'
                     if self.filling:
-                        hours = (max(self.dim_df.gals_interp)-poly[1])/poly[0]-sum(d_hrs)
+                        hours = (self.max_vol-poly[1])/poly[0]-sum(d_hrs)
                         self.remaining_time = dt.timedelta(hours=hours)
                         self.remaining_time = dt.timedelta(seconds=self.remaining_time.seconds)
                     if self.emptying:
