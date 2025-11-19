@@ -213,6 +213,10 @@ class TANK:
         self.filling = False
         self.emptying = False
         self.dist_to_surf = None
+        
+        with open('/home/releaser/{}_vol.txt'.format(tank_name), 'w') as f:
+            f.write("Tank {} max gals: {}".format(tank_name,max(self.dim_df.gals_interp)))
+        print("Tank {} max gals: {}".format(tank_name,max(self.dim_df.gals_interp)))
 
         self.output_fn = os.path.join(data_store_directory,'{}.csv'.format(tank_name))
 
