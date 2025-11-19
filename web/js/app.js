@@ -25,7 +25,7 @@ const STALE_THRESHOLDS = {
   pump:           7200  // 2 hours
 };
 
-// How often to refetch status.json (in ms)
+// How often to refetch status files (in ms)
 const FETCH_INTERVAL_MS = 30_000; // 30s
 
 // How often to recompute "seconds since last" and update the UI (in ms)
@@ -67,19 +67,22 @@ function formatRelativeSeconds(sec) {
 }
 
 function formatFlowGph(val) {
-  if (val == null || !isFinite(val)) return "–";
-  return `${val.toFixed(1)} gph`;
+  const num = toNumber(val);
+  if (num == null) return "–";
+  return `${num.toFixed(1)} gph`;
 }
 
 function formatVolumeGal(val) {
-  if (val == null || !isFinite(val)) return "–";
-  if (val >= 1000) return `${(val / 1000).toFixed(2)} kgal`;
-  return `${val.toFixed(0)} gal`;
+  const num = toNumber(val);
+  if (num == null) return "–";
+  if (num >= 1000) return `${(num / 1000).toFixed(2)} kgal`;
+  return `${num.toFixed(0)} gal`;
 }
 
 function formatPercent(val) {
-  if (val == null || !isFinite(val)) return "–";
-  return `${val.toFixed(0)}%`;
+  const num = toNumber(val);
+  if (num == null) return "–";
+  return `${num.toFixed(0)}%`;
 }
 
 function formatEta(fullEta, emptyEta) {
@@ -98,6 +101,12 @@ function secondsSinceLast(receivedAt) {
   if (!d) return null;
   const now = Date.now();
   return (now - d.getTime()) / 1000;
+}
+
+function toNumber(value) {
+  if (value == null || value === "") return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
 }
 
 function statusUrlFor(file) {
@@ -151,13 +160,13 @@ function updateTankCard(tankKey, tankData, staleSec, thresholdSec) {
     return;
   }
 
-  const vol = tankData.volume_gal;
-  const cap = tankData.max_volume_gal ?? tankData.capacity_gal;
-  let pct = tankData.level_percent;
-  if ((pct == null || !isFinite(pct)) && vol != null && cap != null && isFinite(cap)) {
+  const vol = toNumber(tankData.volume_gal);
+  const cap = toNumber(tankData.max_volume_gal ?? tankData.capacity_gal);
+  let pct = toNumber(tankData.level_percent);
+  if ((pct == null) && vol != null && cap != null) {
     pct = (vol / cap) * 100;
   }
-  const flow = tankData.flow_gph;
+  const flow = toNumber(tankData.flow_gph);
   const lastTs = tankData.last_sample_timestamp;
   const lastRecv = tankData.last_received_at;
 
@@ -167,7 +176,7 @@ function updateTankCard(tankKey, tankData, staleSec, thresholdSec) {
   if (etaElem) etaElem.textContent = formatEta(tankData.eta_full, tankData.eta_empty);
 
   if (fillElem) {
-    const h = pct != null && isFinite(pct) ? Math.max(0, Math.min(100, pct)) : 0;
+    const h = pct != null ? Math.max(0, Math.min(100, pct)) : 0;
     fillElem.style.height = `${h}%`;
   }
 
@@ -198,9 +207,9 @@ function updatePumpCard(pumpData, staleSec, thresholdSec) {
 
   const evtType = pumpData.event_type || "–";
   const evtTime = pumpData.last_event_timestamp;
-  const runTime = pumpData.pump_run_time_s;
-  const interval = pumpData.pump_interval_s;
-  const gph = pumpData.gallons_per_hour;
+  const runTime = toNumber(pumpData.pump_run_time_s);
+  const interval = toNumber(pumpData.pump_interval_s);
+  const gph = toNumber(pumpData.gallons_per_hour);
   const recv = pumpData.last_received_at;
 
   if (typeElem) typeElem.textContent = evtType;
@@ -208,7 +217,7 @@ function updatePumpCard(pumpData, staleSec, thresholdSec) {
   if (flowElem) flowElem.textContent = formatFlowGph(gph);
 
   if (runElem) {
-    if (runTime != null && isFinite(runTime) && interval != null && isFinite(interval)) {
+    if (runTime != null && interval != null) {
       runElem.textContent = `Run: ${runTime.toFixed(0)} s / Interval: ${interval.toFixed(0)} s`;
     } else {
       runElem.textContent = "Run time / interval: n/a (non-stop event)";

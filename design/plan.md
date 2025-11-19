@@ -170,7 +170,7 @@ To avoid duplicate logic:
 - Server only:
   - Saves readings,
   - Records `received_at`,
-  - Publishes `status.json`.
+  - Publishes the per-component `status_*.json` files.
 
 ---
 
@@ -268,30 +268,29 @@ When triggered:
 
 1. Load **latest tank readings** per tank from tank_server.db.
 2. Load **latest pump event** from pump_server.db.
-3. Write `web/data/status.json`:
+3. Write per-component JSON payloads:
+   - `web/data/status_brookside.json`
+   - `web/data/status_roadside.json`
+   - `web/data/status_pump.json`
 
-```json
-{
-  "generated_at": "...",
-  "tanks": {...},
-  "pump": {...}
-}
-```
+Each tank file includes:
 
-status.json fields include:
-
+- generated_at  
 - tank_id  
 - volume_gal  
-- capacity_gal  
+- max_volume_gal (or inferred capacity)  
 - level_percent  
 - flow_gph  
 - eta_full  
 - eta_empty  
+- time_to_full_min  
+- time_to_empty_min  
 - last_sample_timestamp (from Pi)  
 - last_received_at (server)  
 
-Pump section includes:
+Pump file includes:
 
+- generated_at  
 - event_type  
 - pump_run_time_s  
 - pump_interval_s  
@@ -363,7 +362,7 @@ All work-items below assume **headless services** (no CLI flags) whose behavior 
   - Reads both ultrasonic sensors at the configured cadence.
   - Stores raw + derived measurements in `tank_pi.db`.
   - Runs a resend/ACK queue that posts JSON batches to `web/api/ingest_tank.php`. ACKs are based on latest `source_timestamp` per tank and stored locally.
-- Host a lightweight fallback UI on Tank Pi that simply serves the exact contents of `web/` (status page + JS bundle + `data/status.json`), so field operators get the same visuals even if the WAN link is down.
+- Host a lightweight fallback UI on Tank Pi that simply serves the exact contents of `web/` (status page + JS bundle + `data/status_*.json`), so field operators get the same visuals even if the WAN link is down.
 
 ## 13.3 Synthetic clock + debug replay
 - Implement `scripts/synthetic_clock.py`, which:
@@ -380,12 +379,12 @@ All work-items below assume **headless services** (no CLI flags) whose behavior 
 - Implement `web/api/ingest_tank.php` / `ingest_pump.php`:
   - Expect JSON arrays of processed readings/events.
   - Upsert into `data/tank_server.db` / `data/pump_server.db` with `UNIQUE(source_timestamp, tank_id)` guards so harmless resends are deduped.
-  - Immediately call `python3 scripts/process_status.py` (run in the repo root) so every accepted payload refreshes `web/data/status.json`.
+  - Immediately call `python3 scripts/process_status.py` (run in the repo root) so every accepted payload refreshes the `web/data/status_*.json` files.
   - Reply with `{status:"ok", accepted:n, last_timestamp:{...}}` as the ACK that the Pis look for.
 - `scripts/process_status.py`:
   - Loads latest record per tank + the latest pump event.
   - Computes the exact JSON schema expected by `web/js/app.js` (volume, percent, eta, flow, staleness metadata, etc.).
-  - Writes to `web/data/status.json` atomically (temp file + rename) and records `generated_at`.
+  - Writes `web/data/status_<component>.json` atomically (temp file + rename) and records `generated_at`.
 
 ## 13.6 Export + tooling
 - `scripts/export_db_to_csv.py` dumps both server DBs to `data/exports/*.csv` on demand, taking all parameters (paths, export dir, optional time window) from the server env file.

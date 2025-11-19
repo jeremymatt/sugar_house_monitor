@@ -203,19 +203,47 @@ class DebugSample:
 class DebugTankFeed:
     """Replay CSV readings in sync with a SyntheticClock."""
 
-    def __init__(self, records: Sequence[DebugSample], clock=None):
+    def __init__(
+        self,
+        records: Sequence[DebugSample],
+        clock=None,
+        loop: bool = False,
+        loop_gap_seconds: float = 10.0,
+    ):
         self.records = sorted(records, key=lambda rec: rec.timestamp)
         self.clock = clock
+        self.loop = loop
+        self.loop_gap = dt.timedelta(seconds=loop_gap_seconds)
         self.index = 0
+        if len(self.records) >= 2:
+            self.cycle_span = self.records[-1].timestamp - self.records[0].timestamp
+        else:
+            self.cycle_span = dt.timedelta(seconds=0)
+        self.offset = dt.timedelta(0)
 
     def next_sample(self) -> Optional[DebugSample]:
-        if self.index >= len(self.records):
+        if not self.records:
             return None
-        sample = self.records[self.index]
+        if self.index >= len(self.records):
+            if not self.loop:
+                return None
+            self.index = 0
+            span = self.cycle_span
+            if span <= dt.timedelta(0):
+                span = self.loop_gap
+            self.offset += span + self.loop_gap
+        base_sample = self.records[self.index]
+        scheduled = base_sample.timestamp + self.offset
         if self.clock:
-            self.clock.wait_until(sample.timestamp)
+            self.clock.wait_until(scheduled)
         self.index += 1
-        return sample
+        return DebugSample(
+            timestamp=scheduled,
+            surf_dist=base_sample.surf_dist,
+            depth=base_sample.depth,
+            volume_gal=base_sample.volume_gal,
+            flow_gph=base_sample.flow_gph,
+        )
 
 
 class TankStatusFileWriter:
@@ -321,6 +349,8 @@ def run_tank_controller(
     history_db_path: Optional[Path] = None,
     status_dir: Optional[Path] = None,
     history_hours: int = DEFAULT_HISTORY_HOURS,
+    loop_debug: bool = False,
+    loop_gap_seconds: float = 10.0,
 ):
     (
         num_to_average,
@@ -335,7 +365,16 @@ def run_tank_controller(
     response_queue = queue_dict[tank_name]["response"]
     screen_response_queue = queue_dict[tank_name]["screen_response"]
     status_queue = queue_dict[tank_name]["status_updates"]
-    debug_feed = DebugTankFeed(debug_records, clock) if debug_records else None
+    debug_feed = (
+        DebugTankFeed(
+            debug_records,
+            clock,
+            loop=loop_debug,
+            loop_gap_seconds=loop_gap_seconds,
+        )
+        if debug_records
+        else None
+    )
     uart = None if debug_feed else _open_uart(SERIAL_PORTS.get(tank_name))
 
     tank = TANK(

@@ -65,6 +65,7 @@ The helper will ask for the public server URL, create `config/` if it does not e
 | "" | `DEBUG_TANK`, `DEBUG_RELEASER` | Enable CSV replay using the synthetic clock |
 | "" | `SYNTHETIC_CLOCK_MULTIPLIER` | Speed multiplier for debug playback |
 | "" | `DEBUG_LOOP_DATA` | Loop through the sample CSVs continuously |
+| "" | `DEBUG_LOOP_GAP_SECONDS` | Pause between debug loop cycles (default 10s) |
 | "" | `RESET_ON_DEBUG_START` | When true, deletes both local/server DBs before replay |
 | "" | `UPLOAD_BATCH_SIZE` / `UPLOAD_INTERVAL_SECONDS` | Tank reading batching cadence |
 | "" | `PUMP_UPLOAD_BATCH_SIZE` / `PUMP_UPLOAD_INTERVAL_SECONDS` | Pump event upload cadence (keep batch size = 1) |

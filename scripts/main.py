@@ -4,7 +4,7 @@ Tank Pi orchestrator.
 
 In debug mode we replay CSV files with the SyntheticClock, enqueue readings
 exactly like live sensors would, persist them locally, upload through the
-server API, and refresh the local web/data/status.json so both the WordPress
+server API, and refresh the local web/data/status_*.json files so both the WordPress
 site and the Pi-hosted fallback UI can be exercised end-to-end.
 """
 from __future__ import annotations
@@ -19,12 +19,12 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from multiprocessing import Process
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
-from urllib import error, request
+from urllib import error, parse, request
 
 from config_loader import load_role, repo_path_from_config
 import tank_vol_fcns as TVF
@@ -57,10 +57,19 @@ def build_url(base: str, endpoint: str) -> str:
     return f"{base.rstrip('/')}/{endpoint.lstrip('/')}"
 
 
+def _append_api_key(url: str, api_key: str) -> str:
+    parsed = parse.urlparse(url)
+    query = parse.parse_qsl(parsed.query, keep_blank_values=True)
+    if not any(key.lower() == "api_key" for key, _ in query):
+        query.append(("api_key", api_key))
+    new_query = parse.urlencode(query)
+    return parse.urlunparse(parsed._replace(query=new_query))
+
+
 def post_json(url: str, payload: Dict | List, api_key: str, timeout: int = 10) -> Dict:
+    url = _append_api_key(url, api_key)
     if isinstance(payload, dict):
         payload = dict(payload)
-        payload.setdefault("api_key", api_key)
     data = json.dumps(payload).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
@@ -70,6 +79,17 @@ def post_json(url: str, payload: Dict | List, api_key: str, timeout: int = 10) -
     with request.urlopen(req, timeout=timeout) as resp:
         body = resp.read().decode("utf-8")
         return json.loads(body or "{}")
+
+
+def log_http_error(prefix: str, exc: error.URLError) -> None:
+    if isinstance(exc, error.HTTPError):
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = "<unavailable>"
+        LOGGER.warning("%s: %s (response=%s)", prefix, exc, body)
+    else:
+        LOGGER.warning("%s: %s", prefix, exc)
 
 
 class TankDatabase:
@@ -338,7 +358,7 @@ class UploadWorker:
             LOGGER.info("Uploaded %s tank readings (resp=%s)", len(rows), resp.get("status"))
             self.db.mark_tank_acked([row["id"] for row in rows])
         except error.URLError as exc:
-            LOGGER.warning("Tank upload failed: %s", exc)
+            log_http_error("Tank upload failed", exc)
 
     def _upload_pump(self) -> None:
         rows = self.db.fetch_unsent_pump(self.pump_batch)
@@ -360,7 +380,7 @@ class UploadWorker:
             LOGGER.info("Uploaded %s pump events (resp=%s)", len(rows), resp.get("status"))
             self.db.mark_pump_acked([row["id"] for row in rows])
         except error.URLError as exc:
-            LOGGER.warning("Pump upload failed: %s", exc)
+            log_http_error("Pump upload failed", exc)
 
 
 @dataclass
@@ -401,6 +421,7 @@ def load_tank_events(env: Dict[str, str]) -> List[Event]:
                         },
                     )
                 )
+    events.sort(key=lambda ev: ev.timestamp)
     return events
 
 
@@ -436,6 +457,7 @@ def load_pump_events(env: Dict[str, str]) -> List[Event]:
                     },
                 )
             )
+    events.sort(key=lambda ev: ev.timestamp)
     return events
 
 
@@ -467,6 +489,10 @@ class TankPiApp:
         self.upload_worker = UploadWorker(env, self.db)
         self.debug_enabled = str_to_bool(env.get("DEBUG_TANK"), False) or str_to_bool(
             env.get("DEBUG_RELEASER"), False
+        )
+        self.loop_debug_data = str_to_bool(env.get("DEBUG_LOOP_DATA"), True)
+        self.debug_loop_gap = timedelta(
+            seconds=float(self.env.get("DEBUG_LOOP_GAP_SECONDS", "10"))
         )
         status_path = repo_path_from_config(env["STATUS_JSON_PATH"])
         self.status_dir = status_path.parent
@@ -507,6 +533,10 @@ class TankPiApp:
         tank_events = load_tank_events(self.env) if debug_tank else []
         if debug_pump:
             pump_events = load_pump_events(self.env)
+        if debug_tank and not tank_events:
+            LOGGER.error("DEBUG_TANK enabled but no tank CSV rows were found.")
+        if debug_pump and not pump_events:
+            LOGGER.error("DEBUG_RELEASER enabled but no pump CSV rows were found.")
         if not tank_events and not pump_events:
             return None, tank_records, pump_events
         start_timestamp = min(
@@ -555,6 +585,7 @@ class TankPiApp:
         tank_records: Dict[str, List[TVF.DebugSample]],
     ) -> None:
         history_path = self.db.path
+        debug_tank = str_to_bool(self.env.get("DEBUG_TANK"), False)
         for tank_name in TVF.tank_names:
             records = tank_records.get(tank_name) if tank_records else None
             if records:
@@ -562,6 +593,11 @@ class TankPiApp:
             else:
                 process_clock = None
                 records = None
+                if debug_tank:
+                    LOGGER.warning(
+                        "No debug data found for tank %s; controller will wait for hardware.",
+                        tank_name,
+                    )
             proc = Process(
                 target=TVF.run_tank_controller,
                 args=(tank_name, TVF.queue_dict, measurement_params),
@@ -571,6 +607,8 @@ class TankPiApp:
                     "history_db_path": history_path,
                     "status_dir": self.status_dir,
                     "history_hours": getattr(TVF, "DEFAULT_HISTORY_HOURS", 6),
+                    "loop_debug": self.loop_debug_data,
+                    "loop_gap_seconds": self.debug_loop_gap.total_seconds(),
                 },
                 daemon=True,
             )
@@ -629,17 +667,32 @@ class TankPiApp:
     def _run_pump_debug(self, clock: SyntheticClock, events: List[Event]) -> None:
         if not events:
             return
+        events = sorted(events, key=lambda ev: ev.timestamp)
         LOGGER.info(
             "Starting pump debug replay at %s (x%s)",
             events[0].timestamp,
             clock.multiplier,
         )
-        for event in events:
-            if self.stop_event.is_set():
+        if len(events) > 1:
+            base_span = events[-1].timestamp - events[0].timestamp
+        else:
+            base_span = timedelta(seconds=0)
+        cycle_offset = timedelta(0)
+        while not self.stop_event.is_set():
+            for event in events:
+                if self.stop_event.is_set():
+                    break
+                scheduled = event.timestamp + cycle_offset
+                clock.wait_until(scheduled)
+                payload = dict(event.data)
+                payload["source_timestamp"] = scheduled.isoformat()
+                self.handle_pump_event(payload, clock.now().isoformat())
+            if not self.loop_debug_data:
                 break
-            clock.wait_until(event.timestamp)
-            now_iso = clock.now().isoformat()
-            self.handle_pump_event(event.data, now_iso)
+            pause = base_span
+            if pause <= timedelta(0):
+                pause = self.debug_loop_gap
+            cycle_offset += pause + self.debug_loop_gap
         LOGGER.info("Pump debug replay complete.")
 
     def _stop_tank_processes(self) -> None:
@@ -686,7 +739,7 @@ class TankPiApp:
             resp = post_json(url, payload, self.env["API_KEY"])
             LOGGER.info("Server reset response: %s", resp.get("status"))
         except error.URLError as exc:
-            LOGGER.warning("Unable to reset server state: %s", exc)
+            log_http_error("Unable to reset server state", exc)
 
     def handle_tank_measurement(
         self, payload: Dict[str, object], received_at: Optional[str] = None
@@ -706,13 +759,19 @@ class TankPiApp:
             return
         self.db.insert_pump_event(payload, received_at)
         if self.pump_status_path:
+            run_time = float_or_none(payload.get("pump_run_time_s"))
+            interval = float_or_none(payload.get("pump_interval_s"))
+            gph = float_or_none(payload.get("gallons_per_hour"))
+            generated = iso_now()
+            last_received = received_at or generated
             status_payload = {
                 "event_type": payload.get("event_type"),
-                "pump_run_time_s": payload.get("pump_run_time_s"),
-                "pump_interval_s": payload.get("pump_interval_s"),
-                "gallons_per_hour": payload.get("gallons_per_hour"),
+                "pump_run_time_s": run_time,
+                "pump_interval_s": interval,
+                "gallons_per_hour": gph,
                 "last_event_timestamp": payload.get("source_timestamp"),
-                "last_received_at": received_at or iso_now(),
+                "last_received_at": last_received,
+                "generated_at": generated,
             }
             self._write_status_file(self.pump_status_path, status_payload)
         LOGGER.info(
