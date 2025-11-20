@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import signal
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -276,6 +277,7 @@ def init_display():
 
 
 def run_lcd_screen(lcd, queue_dict):  # pragma: no cover - hardware specific
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     lcd.clear()
     lcd.message = "HELLO"
     time.sleep(2)
@@ -352,6 +354,7 @@ def run_tank_controller(
     loop_debug: bool = False,
     loop_gap_seconds: float = 10.0,
 ):
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     (
         num_to_average,
         delay,

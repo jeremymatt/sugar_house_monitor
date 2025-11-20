@@ -301,7 +301,7 @@ class TankDatabase:
 
 
 class UploadWorker:
-    def __init__(self, env: Dict[str, str], db: TankDatabase):
+    def __init__(self, env: Dict[str, str], db: TankDatabase, speed_factor: float = 1.0):
         self.db = db
         self.api_base = env["API_BASE_URL"]
         self.api_key = env["API_KEY"]
@@ -309,6 +309,11 @@ class UploadWorker:
         self.tank_interval = int(env.get("UPLOAD_INTERVAL_SECONDS", "60"))
         self.pump_batch = int(env.get("PUMP_UPLOAD_BATCH_SIZE", "1"))
         self.pump_interval = int(env.get("PUMP_UPLOAD_INTERVAL_SECONDS", "60"))
+        self.speed_factor = max(speed_factor, 1.0)
+        if self.speed_factor > 1.0:
+            # Speed up uploads when the synthetic clock is running faster than real time.
+            self.tank_interval = max(1, int(self.tank_interval / self.speed_factor))
+            self.pump_interval = max(1, int(self.pump_interval / self.speed_factor))
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.stop_event = threading.Event()
 
@@ -486,11 +491,16 @@ class TankPiApp:
     def __init__(self, env: Dict[str, str]):
         self.env = env
         self.db = TankDatabase(repo_path_from_config(env.get("DB_PATH", "data/tank_pi.db")))
-        self.upload_worker = UploadWorker(env, self.db)
         self.debug_enabled = str_to_bool(env.get("DEBUG_TANK"), False) or str_to_bool(
             env.get("DEBUG_RELEASER"), False
         )
-        self.loop_debug_data = str_to_bool(env.get("DEBUG_LOOP_DATA"), True)
+        try:
+            self.clock_multiplier = float(self.env.get("SYNTHETIC_CLOCK_MULTIPLIER", "1") or "1")
+        except ValueError:
+            self.clock_multiplier = 1.0
+        speed_factor = self.clock_multiplier if self.debug_enabled else 1.0
+        self.upload_worker = UploadWorker(env, self.db, speed_factor=speed_factor)
+        self.loop_debug_data = str_to_bool(env.get("DEBUG_LOOP_DATA"), False)
         self.debug_loop_gap = timedelta(
             seconds=float(self.env.get("DEBUG_LOOP_GAP_SECONDS", "10"))
         )
@@ -504,6 +514,7 @@ class TankPiApp:
         self.collector_thread: Optional[threading.Thread] = None
         self.pump_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
+        self._ensure_status_placeholders()
 
     def reset_if_needed(self) -> None:
         if not self.debug_enabled:
@@ -513,6 +524,7 @@ class TankPiApp:
         LOGGER.info("Resetting local DB/state for debug replay")
         self.db.reset()
         self._clear_status_files()
+        self._ensure_status_placeholders()
         self.reset_server_state()
 
     def _build_measurement_params(self):
@@ -572,11 +584,54 @@ class TankPiApp:
             except FileNotFoundError:
                 continue
 
+    def _ensure_status_placeholders(self) -> None:
+        """Create empty status files so local HTTP requests do not 404 before data arrives."""
+        timestamp = iso_now()
+        for tank_name in TVF.tank_names:
+            path = self.status_dir / f"status_{tank_name}.json"
+            if not path.exists():
+                placeholder = {
+                    "generated_at": timestamp,
+                    "tank_id": tank_name,
+                    "volume_gal": None,
+                    "max_volume_gal": None,
+                    "level_percent": None,
+                    "flow_gph": None,
+                    "eta_full": None,
+                    "eta_empty": None,
+                    "time_to_full_min": None,
+                    "time_to_empty_min": None,
+                    "last_sample_timestamp": None,
+                    "last_received_at": None,
+                }
+                self._write_status_file(path, placeholder)
+
+        if self.pump_status_path and not self.pump_status_path.exists():
+            placeholder = {
+                "generated_at": timestamp,
+                "event_type": None,
+                "pump_run_time_s": None,
+                "pump_interval_s": None,
+                "gallons_per_hour": None,
+                "last_event_timestamp": None,
+                "last_received_at": None,
+                "pump_status": "Unknown",
+            }
+            self._write_status_file(self.pump_status_path, placeholder)
+
     def _write_status_file(self, path: Path, payload: Dict) -> None:
         tmp = path.with_suffix(path.suffix + ".tmp")
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps(payload, indent=2))
         tmp.replace(path)
+
+    def _load_existing_json(self, path: Path) -> Dict:
+        if not path or not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
 
     def _start_tank_processes(
         self,
@@ -757,21 +812,29 @@ class TankPiApp:
     ) -> None:
         if not payload.get("event_type"):
             return
+        previous_status = self._load_existing_json(self.pump_status_path) if self.pump_status_path else {}
         self.db.insert_pump_event(payload, received_at)
         if self.pump_status_path:
             run_time = float_or_none(payload.get("pump_run_time_s"))
             interval = float_or_none(payload.get("pump_interval_s"))
             gph = float_or_none(payload.get("gallons_per_hour"))
+            if gph is None:
+                gph = float_or_none(previous_status.get("gallons_per_hour"))
             generated = iso_now()
             last_received = received_at or generated
+            pump_status = "Not pumping"
+            event_type = payload.get("event_type")
+            if isinstance(event_type, str) and event_type.lower() != "pump stop":
+                pump_status = "Pumping"
             status_payload = {
-                "event_type": payload.get("event_type"),
+                "event_type": event_type,
                 "pump_run_time_s": run_time,
                 "pump_interval_s": interval,
                 "gallons_per_hour": gph,
                 "last_event_timestamp": payload.get("source_timestamp"),
                 "last_received_at": last_received,
                 "generated_at": generated,
+                "pump_status": pump_status,
             }
             self._write_status_file(self.pump_status_path, status_payload)
         LOGGER.info(

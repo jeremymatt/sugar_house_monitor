@@ -37,6 +37,7 @@ let latestTanks = { brookside: null, roadside: null };
 let latestPump = null;
 let lastGeneratedAt = null;
 let lastFetchError = false;
+let lastPumpFlow = null;
 
 // ---- UTILITIES ----
 
@@ -75,8 +76,7 @@ function formatFlowGph(val) {
 function formatVolumeGal(val) {
   const num = toNumber(val);
   if (num == null) return "–";
-  if (num >= 1000) return `${(num / 1000).toFixed(2)} kgal`;
-  return `${num.toFixed(0)} gal`;
+  return `${Math.round(num)} gal`;
 }
 
 function formatPercent(val) {
@@ -107,6 +107,14 @@ function toNumber(value) {
   if (value == null || value === "") return null;
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
+}
+
+function derivePumpStatus(evtType) {
+  if (!evtType) return "Unknown";
+  if (typeof evtType === "string" && evtType.toLowerCase() === "pump stop") {
+    return "Not pumping";
+  }
+  return "Pumping";
 }
 
 function statusUrlFor(file) {
@@ -212,7 +220,9 @@ function updatePumpCard(pumpData, staleSec, thresholdSec) {
   const gph = toNumber(pumpData.gallons_per_hour);
   const recv = pumpData.last_received_at;
 
-  if (typeElem) typeElem.textContent = evtType;
+  const statusText = pumpData.pump_status || derivePumpStatus(evtType);
+
+  if (typeElem) typeElem.textContent = statusText;
   if (timeElem) timeElem.textContent = `Time: ${formatDateTime(evtTime)}`;
   if (flowElem) flowElem.textContent = formatFlowGph(gph);
 
@@ -220,7 +230,7 @@ function updatePumpCard(pumpData, staleSec, thresholdSec) {
     if (runTime != null && interval != null) {
       runElem.textContent = `Run: ${runTime.toFixed(0)} s / Interval: ${interval.toFixed(0)} s`;
     } else {
-      runElem.textContent = "Run time / interval: n/a (non-stop event)";
+      runElem.textContent = "Run --- / Interval ---";
     }
   }
 
@@ -313,11 +323,18 @@ function recomputeStalenessAndRender() {
 async function fetchStatusOnce() {
   try {
     lastFetchError = false;
-    const [brookside, roadside, pump] = await Promise.all([
+    const [brookside, roadside, pumpRaw] = await Promise.all([
       fetchStatusFile(TANK_STATUS_FILES.brookside),
       fetchStatusFile(TANK_STATUS_FILES.roadside),
       fetchStatusFile(PUMP_STATUS_FILE)
     ]);
+    let pump = pumpRaw;
+    if (pump && pump.gallons_per_hour == null && lastPumpFlow != null) {
+      pump = { ...pump, gallons_per_hour: lastPumpFlow };
+    }
+    if (pump && pump.gallons_per_hour != null) {
+      lastPumpFlow = pump.gallons_per_hour;
+    }
     latestTanks = { brookside, roadside };
     latestPump = pump;
     lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump]);

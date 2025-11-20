@@ -64,6 +64,21 @@ def get_latest_pump_row(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
     return cur.fetchone()
 
 
+def get_latest_pump_gph(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    if not table_exists(conn, "pump_events"):
+        return None
+    cur = conn.execute(
+        """
+        SELECT *
+        FROM pump_events
+        WHERE gallons_per_hour IS NOT NULL
+        ORDER BY received_at DESC
+        LIMIT 1
+        """
+    )
+    return cur.fetchone()
+
+
 def calc_percent(volume: Optional[float], capacity: Optional[float]) -> Optional[float]:
     if volume is None or capacity in (None, 0):
         return None
@@ -123,15 +138,24 @@ def main() -> None:
         atomic_write(status_base / f"status_{tank_id}.json", payload)
 
     pump_row = get_latest_pump_row(pump_conn)
+    pump_gph_row = get_latest_pump_gph(pump_conn)
     if pump_row:
+        gph = pump_row["gallons_per_hour"]
+        if gph is None and pump_gph_row is not None:
+            gph = pump_gph_row["gallons_per_hour"]
+        event_type = pump_row["event_type"]
+        pump_status = "Pumping"
+        if isinstance(event_type, str) and event_type.lower() == "pump stop":
+            pump_status = "Not pumping"
         pump_payload = {
             "generated_at": timestamp,
-            "event_type": pump_row["event_type"],
+            "event_type": event_type,
             "pump_run_time_s": pump_row["pump_run_time_s"],
             "pump_interval_s": pump_row["pump_interval_s"],
-            "gallons_per_hour": pump_row["gallons_per_hour"],
+            "gallons_per_hour": gph,
             "last_event_timestamp": pump_row["source_timestamp"],
             "last_received_at": pump_row["received_at"],
+            "pump_status": pump_status,
         }
         atomic_write(status_base / "status_pump.json", pump_payload)
 
