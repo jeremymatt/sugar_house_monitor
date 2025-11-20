@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from multiprocessing import Process
+from multiprocessing import Process, current_process
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 from urllib import error, parse, request
@@ -896,6 +896,8 @@ def main() -> None:
     app = TankPiApp(env)
 
     def handle_signal(sig, frame):
+        if current_process().name != "MainProcess":
+            return
         LOGGER.info("Received signal %s, shutting down.", sig)
         app.shutdown()
         sys.exit(0)
