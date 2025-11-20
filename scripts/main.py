@@ -757,6 +757,10 @@ class TankPiApp:
             LOGGER.info("Stopping %s tank controller (pid=%s)", tank_name, proc.pid)
             proc.terminate()
             proc.join(timeout=2)
+            if proc.is_alive():
+                LOGGER.warning("%s tank controller still alive, killing (pid=%s)", tank_name, proc.pid)
+                proc.kill()
+                proc.join(timeout=2)
         self.tank_processes.clear()
 
     def _stop_lcd_process(self) -> None:
@@ -764,6 +768,10 @@ class TankPiApp:
             LOGGER.info("Stopping LCD process (pid=%s)", self.lcd_process.pid)
             self.lcd_process.terminate()
             self.lcd_process.join(timeout=2)
+            if self.lcd_process.is_alive():
+                LOGGER.warning("LCD process still alive, killing (pid=%s)", self.lcd_process.pid)
+                self.lcd_process.kill()
+                self.lcd_process.join(timeout=2)
         self.lcd_process = None
 
     def _stop_measurement_collector(self) -> None:
@@ -777,10 +785,10 @@ class TankPiApp:
         self.pump_thread = None
 
     def shutdown(self) -> None:
-        if self.stop_event.is_set():
-            self.upload_worker.stop()
-            return
-        self.stop_event.set()
+        if not self.stop_event.is_set():
+            self.stop_event.set()
+        else:
+            LOGGER.info("Shutdown already in progress; forcing remaining processes to exit.")
         self.upload_worker.stop()
         self._stop_pump_thread()
         self._stop_measurement_collector()
