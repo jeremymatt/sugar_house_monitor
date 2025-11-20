@@ -26,7 +26,7 @@ const STALE_THRESHOLDS = {
 };
 
 // How often to refetch status files (in ms)
-const FETCH_INTERVAL_MS = 15_000; // 15s
+const FETCH_INTERVAL_MS = 1_000; // 15s
 
 // How often to recompute "seconds since last" and update the UI (in ms)
 const STALENESS_UPDATE_MS = 5_000; // 5s

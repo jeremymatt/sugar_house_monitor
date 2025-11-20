@@ -10,6 +10,7 @@ site and the Pi-hosted fallback UI can be exercised end-to-end.
 from __future__ import annotations
 
 import csv
+import math
 import json
 import logging
 import queue
@@ -305,15 +306,22 @@ class UploadWorker:
         self.db = db
         self.api_base = env["API_BASE_URL"]
         self.api_key = env["API_KEY"]
-        self.tank_batch = int(env.get("UPLOAD_BATCH_SIZE", "4"))
-        self.tank_interval = int(env.get("UPLOAD_INTERVAL_SECONDS", "60"))
-        self.pump_batch = int(env.get("PUMP_UPLOAD_BATCH_SIZE", "1"))
-        self.pump_interval = int(env.get("PUMP_UPLOAD_INTERVAL_SECONDS", "60"))
+        base_tank_batch = int(env.get("UPLOAD_BATCH_SIZE", "4"))
+        base_tank_interval = int(env.get("UPLOAD_INTERVAL_SECONDS", "60"))
+        base_pump_batch = int(env.get("PUMP_UPLOAD_BATCH_SIZE", "1"))
+        base_pump_interval = int(env.get("PUMP_UPLOAD_INTERVAL_SECONDS", "60"))
+        self.tank_batch = base_tank_batch
+        self.tank_interval = base_tank_interval
+        self.pump_batch = base_pump_batch
+        self.pump_interval = base_pump_interval
         self.speed_factor = max(speed_factor, 1.0)
         if self.speed_factor > 1.0:
             # Speed up uploads when the synthetic clock is running faster than real time.
-            self.tank_interval = max(1, int(self.tank_interval / self.speed_factor))
-            self.pump_interval = max(1, int(self.pump_interval / self.speed_factor))
+            self.tank_interval = max(1, int(base_tank_interval / self.speed_factor))
+            self.pump_interval = max(1, int(base_pump_interval / self.speed_factor))
+            # Increase batch sizes so accelerated debug runs can keep up with simulated data.
+            self.tank_batch = max(1, int(math.ceil(base_tank_batch * self.speed_factor)))
+            self.pump_batch = max(1, int(math.ceil(base_pump_batch * self.speed_factor)))
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.stop_event = threading.Event()
 
