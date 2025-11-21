@@ -16,6 +16,12 @@ const TANK_STATUS_FILES = {
   roadside: "status_roadside.json"
 };
 const PUMP_STATUS_FILE = "status_pump.json";
+const VACUUM_STATUS_FILE = "status_vacuum.json";
+
+// Flow thresholds (gph) and reserve volume (gal)
+const TANKS_FILLING_THRESHOLD = Number(window.TANKS_FILLING_THRESHOLD ?? 5);
+const TANKS_EMPTYING_THRESHOLD = Number(window.TANKS_EMPTYING_THRESHOLD ?? -10);
+const RESERVE_GALLONS = Number(window.RESERVE_GALLONS ?? 150);
 
 // Staleness thresholds in seconds (server-time-based, but we approximate with browser time).
 // You can tune these as needed.
@@ -35,6 +41,7 @@ const STALENESS_UPDATE_MS = 5_000; // 5s
 
 let latestTanks = { brookside: null, roadside: null };
 let latestPump = null;
+let latestVacuum = null;
 let lastGeneratedAt = null;
 let lastFetchError = false;
 let lastPumpFlow = null;
@@ -92,6 +99,25 @@ function formatEta(fullEta, emptyEta) {
   if (full) return full;
   if (empty) return empty;
   return "–";
+}
+
+function formatDurationHhMm(minutes) {
+  if (minutes == null || !isFinite(minutes) || minutes < 0) return "---";
+  const total = Math.max(0, minutes);
+  const hrs = Math.floor(total / 60);
+  const mins = Math.floor(total % 60);
+  return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
+}
+
+function formatProjectedTime(minutes, referenceIso) {
+  if (minutes == null || !isFinite(minutes) || minutes < 0) return "---";
+  const ref = parseIso(referenceIso) || new Date();
+  const ts = new Date(ref.getTime() + minutes * 60 * 1000);
+  const mm = String(ts.getMonth() + 1).padStart(2, "0");
+  const dd = String(ts.getDate()).padStart(2, "0");
+  const hh = String(ts.getHours()).padStart(2, "0");
+  const mi = String(ts.getMinutes()).padStart(2, "0");
+  return `${mm}-${dd} ${hh}:${mi}`;
 }
 
 // Compute seconds since last_received_at from browser perspective.
@@ -240,6 +266,92 @@ function updatePumpCard(pumpData, staleSec, thresholdSec) {
   }
 }
 
+function computeOverviewSummary() {
+  const brookside = latestTanks.brookside;
+  const roadside = latestTanks.roadside;
+  if (!brookside && !roadside) return null;
+
+  const bVol = toNumber(brookside?.volume_gal);
+  const rVol = toNumber(roadside?.volume_gal);
+  const bCap = toNumber(brookside?.max_volume_gal ?? brookside?.capacity_gal);
+  const rCap = toNumber(roadside?.max_volume_gal ?? roadside?.capacity_gal);
+  const bFlow = toNumber(brookside?.flow_gph);
+  const rFlow = toNumber(roadside?.flow_gph);
+
+  const totalGallons = (bVol ?? 0) + (rVol ?? 0);
+  const hasFlow = bFlow != null || rFlow != null;
+  const netFlow = hasFlow ? (bFlow || 0) + (rFlow || 0) : null;
+
+  const roadRemaining = rCap != null && rVol != null ? Math.max(rCap - rVol, 0) : null;
+  const brookRemaining = bCap != null && bVol != null ? Math.max(bCap - bVol, 0) : null;
+
+  let overflowMinutes = null;
+  if (rFlow != null && rFlow >= TANKS_FILLING_THRESHOLD && roadRemaining != null && rFlow > 0) {
+    overflowMinutes = (roadRemaining / rFlow) * 60;
+  } else if (bFlow != null && bFlow >= TANKS_FILLING_THRESHOLD) {
+    const combinedRemaining = (brookRemaining ?? 0) + (roadRemaining ?? 0);
+    if (netFlow != null && netFlow > 0 && combinedRemaining > 0) {
+      overflowMinutes = (combinedRemaining / netFlow) * 60;
+    }
+  }
+
+  let lastFireMinutes = null;
+  if (netFlow != null && netFlow <= TANKS_EMPTYING_THRESHOLD) {
+    const available = Math.max(totalGallons - RESERVE_GALLONS, 0);
+    if (Math.abs(netFlow) > 0) {
+      lastFireMinutes = (available / Math.abs(netFlow)) * 60;
+    }
+  }
+
+  return {
+    totalGallons,
+    netFlow,
+    overflowMinutes,
+    lastFireMinutes,
+  };
+}
+
+function updateOverviewCard(summary, vacuumData) {
+  const totalElem = document.getElementById("overview-total-gallons");
+  const netFlowElem = document.getElementById("overview-net-flow");
+  const overflowTimeElem = document.getElementById("overview-overflow-time");
+  const overflowEtaElem = document.getElementById("overview-overflow-eta");
+  const lastFireTimeElem = document.getElementById("overview-last-fire-time");
+  const lastFireEtaElem = document.getElementById("overview-last-fire-eta");
+  const vacReadingElem = document.getElementById("vacuum-reading");
+  const vacTimeElem = document.getElementById("vacuum-timestamp");
+  const reserveNoteElem = document.getElementById("overview-reserve-note");
+
+  if (reserveNoteElem) {
+    reserveNoteElem.textContent = `Reserve held: ${RESERVE_GALLONS} gal`;
+  }
+
+  if (!summary) {
+    if (totalElem) totalElem.textContent = "–";
+    if (netFlowElem) netFlowElem.textContent = "–";
+    if (overflowTimeElem) overflowTimeElem.textContent = "---";
+    if (overflowEtaElem) overflowEtaElem.textContent = "---";
+    if (lastFireTimeElem) lastFireTimeElem.textContent = "---";
+    if (lastFireEtaElem) lastFireEtaElem.textContent = "---";
+  } else {
+    if (totalElem) totalElem.textContent = formatVolumeGal(summary.totalGallons);
+    if (netFlowElem) netFlowElem.textContent = formatFlowGph(summary.netFlow);
+    if (overflowTimeElem) overflowTimeElem.textContent = formatDurationHhMm(summary.overflowMinutes);
+    if (overflowEtaElem) overflowEtaElem.textContent = formatProjectedTime(summary.overflowMinutes, lastGeneratedAt);
+    if (lastFireTimeElem) lastFireTimeElem.textContent = formatDurationHhMm(summary.lastFireMinutes);
+    if (lastFireEtaElem) lastFireEtaElem.textContent = formatProjectedTime(summary.lastFireMinutes, lastGeneratedAt);
+  }
+
+  const vacVal = toNumber(vacuumData?.reading_inhg);
+  const vacTime = vacuumData?.source_timestamp || vacuumData?.generated_at;
+  if (vacReadingElem) {
+    vacReadingElem.textContent = vacVal != null ? `${vacVal.toFixed(1)} inHg` : "–";
+  }
+  if (vacTimeElem) {
+    vacTimeElem.textContent = vacTime ? `Reading time: ${formatDateTime(vacTime)}` : "No vacuum data yet";
+  }
+}
+
 function updateGlobalStatus(staleInfo) {
   const pill = document.getElementById("global-status-pill");
   const dot  = document.getElementById("global-status-dot");
@@ -290,6 +402,7 @@ function recomputeStalenessAndRender() {
   updateTankCard("brookside", brookside, brooksideSec, brooksideThresh);
   updateTankCard("roadside",  roadside,  roadsideSec,  roadsideThresh);
   updatePumpCard(pump, pumpSec, pumpThresh);
+  updateOverviewCard(computeOverviewSummary(), latestVacuum);
 
   const tanksWarning = document.getElementById("tanks-warning");
   const pumpWarning  = document.getElementById("pump-warning");
@@ -323,10 +436,11 @@ function recomputeStalenessAndRender() {
 async function fetchStatusOnce() {
   try {
     lastFetchError = false;
-    const [brookside, roadside, pumpRaw] = await Promise.all([
+    const [brookside, roadside, pumpRaw, vacuum] = await Promise.all([
       fetchStatusFile(TANK_STATUS_FILES.brookside),
       fetchStatusFile(TANK_STATUS_FILES.roadside),
-      fetchStatusFile(PUMP_STATUS_FILE)
+      fetchStatusFile(PUMP_STATUS_FILE),
+      fetchStatusFile(VACUUM_STATUS_FILE),
     ]);
     let pump = pumpRaw;
     if (pump && pump.gallons_per_hour == null && lastPumpFlow != null) {
@@ -337,7 +451,8 @@ async function fetchStatusOnce() {
     }
     latestTanks = { brookside, roadside };
     latestPump = pump;
-    lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump]);
+    latestVacuum = vacuum;
+    lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump, vacuum]);
     recomputeStalenessAndRender();
   } catch (err) {
     lastFetchError = true;

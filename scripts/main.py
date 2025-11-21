@@ -14,6 +14,7 @@ import math
 import json
 import logging
 import queue
+import random
 import signal
 import sqlite3
 import sys
@@ -516,11 +517,13 @@ class TankPiApp:
         self.status_dir = status_path.parent
         self.status_dir.mkdir(parents=True, exist_ok=True)
         self.pump_status_path = self.status_dir / "status_pump.json"
+        self.vacuum_status_path = self.status_dir / "status_vacuum.json"
         self.measurement_params = self._build_measurement_params()
         self.tank_processes: Dict[str, Process] = {}
         self.lcd_process: Optional[Process] = None
         self.collector_thread: Optional[threading.Thread] = None
         self.pump_thread: Optional[threading.Thread] = None
+        self.vacuum_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
         self._ensure_status_placeholders()
 
@@ -627,6 +630,15 @@ class TankPiApp:
             }
             self._write_status_file(self.pump_status_path, placeholder)
 
+        if self.vacuum_status_path and not self.vacuum_status_path.exists():
+            vacuum_placeholder = {
+                "generated_at": timestamp,
+                "reading_inhg": None,
+                "source_timestamp": None,
+                "last_received_at": None,
+            }
+            self._write_status_file(self.vacuum_status_path, vacuum_placeholder)
+
     def _write_status_file(self, path: Path, payload: Dict) -> None:
         tmp = path.with_suffix(path.suffix + ".tmp")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -727,6 +739,29 @@ class TankPiApp:
         )
         self.pump_thread.start()
 
+    def _start_vacuum_debug_thread(self, clock: Optional[SyntheticClock]) -> None:
+        """Emit placeholder vacuum readings during debug runs."""
+        if self.vacuum_thread and self.vacuum_thread.is_alive():
+            return
+        interval = max(1.0, 10.0 / max(self.clock_multiplier, 1.0))
+
+        def _loop() -> None:
+            while not self.stop_event.is_set():
+                now = clock.now() if clock else datetime.now(timezone.utc)
+                reading = round(random.uniform(-28.0, -5.0), 1)
+                payload = {
+                    "generated_at": iso_now(),
+                    "reading_inhg": reading,
+                    "source_timestamp": now.isoformat(),
+                    "last_received_at": iso_now(),
+                }
+                if self.vacuum_status_path:
+                    self._write_status_file(self.vacuum_status_path, payload)
+                self.stop_event.wait(interval)
+
+        self.vacuum_thread = threading.Thread(target=_loop, daemon=True)
+        self.vacuum_thread.start()
+
     def _run_pump_debug(self, clock: SyntheticClock, events: List[Event]) -> None:
         if not events:
             return
@@ -792,6 +827,11 @@ class TankPiApp:
             self.pump_thread.join(timeout=2)
         self.pump_thread = None
 
+    def _stop_vacuum_thread(self) -> None:
+        if self.vacuum_thread:
+            self.vacuum_thread.join(timeout=2)
+        self.vacuum_thread = None
+
     def shutdown(self) -> None:
         if not self.stop_event.is_set():
             self.stop_event.set()
@@ -799,6 +839,7 @@ class TankPiApp:
             LOGGER.info("Shutdown already in progress; forcing remaining processes to exit.")
         self.upload_worker.stop()
         self._stop_pump_thread()
+        self._stop_vacuum_thread()
         self._stop_measurement_collector()
         self._stop_lcd_process()
         self._stop_tank_processes()
@@ -888,6 +929,8 @@ class TankPiApp:
             self._start_pump_debug_thread(clock, pump_events)
         elif str_to_bool(self.env.get("DEBUG_RELEASER"), False):
             LOGGER.error("Pump debug enabled but no pump events CSV rows were loaded.")
+        if self.debug_enabled:
+            self._start_vacuum_debug_thread(clock)
         if not self.debug_enabled:
             LOGGER.info("Tank hardware sampling active; pump automation integration pending.")
 

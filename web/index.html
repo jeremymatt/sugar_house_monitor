@@ -148,6 +148,13 @@
       margin-top: 0.75rem;
     }
 
+    .overview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+
     .metric {
       display: flex;
       flex-direction: column;
@@ -257,6 +264,46 @@
         <span id="generated-at" class="small"></span>
       </div>
     </header>
+
+    <section class="card" id="overview-card">
+      <div class="card-header">
+        <div>
+          <h2>System Overview</h2>
+          <div class="card-subtitle">Combined tanks (flows only) and vacuum</div>
+        </div>
+      </div>
+
+      <div class="overview-grid">
+        <div class="metric">
+          <span class="metric-label">Total sap</span>
+          <span class="metric-value" id="overview-total-gallons">–</span>
+          <span class="metric-note">Brookside + Roadside</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Net flow</span>
+          <span class="metric-value" id="overview-net-flow">–</span>
+          <span class="metric-note">Tank flows only (pump ignored)</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Overflow in</span>
+          <span class="metric-value" id="overview-overflow-time">---</span>
+          <span class="metric-note" id="overview-overflow-eta">---</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Last fire in</span>
+          <span class="metric-value" id="overview-last-fire-time">---</span>
+          <span class="metric-note" id="overview-last-fire-eta">---</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Vacuum</span>
+          <span class="metric-value" id="vacuum-reading">–</span>
+          <span class="metric-note" id="vacuum-timestamp">No vacuum data yet</span>
+        </div>
+      </div>
+      <div class="small" id="overview-reserve-note" style="margin-top:0.5rem; color:var(--text-muted);">
+        Reserve held: 150 gal
+      </div>
+    </section>
 
     <main>
       <!-- Tanks card -->
