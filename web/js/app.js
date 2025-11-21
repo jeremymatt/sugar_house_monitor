@@ -7,7 +7,8 @@ const WORDPRESS_STATUS_BASE = "/sugar_house_monitor/data";
 const LOCAL_STATUS_BASE = "/data";
 const STATUS_BASE_URL =
   window.STATUS_URL_OVERRIDE ||
-  (window.location.pathname.startsWith("/sugar_house_monitor")
+  (window.location.hostname.includes("mattsmaplesyrup.com") ||
+  window.location.pathname.includes("/sugar_house_monitor")
     ? WORDPRESS_STATUS_BASE
     : LOCAL_STATUS_BASE);
 
