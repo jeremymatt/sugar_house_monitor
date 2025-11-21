@@ -157,7 +157,15 @@ async function fetchStatusFile(file) {
     return null;
   }
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${file}`);
-  return res.json();
+  // Gracefully handle empty or malformed JSON by returning null.
+  const text = await res.text();
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    console.warn(`Failed to parse ${file}:`, err);
+    return null;
+  }
 }
 
 function computeLatestGenerated(entries) {
