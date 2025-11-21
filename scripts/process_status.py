@@ -79,6 +79,20 @@ def get_latest_pump_gph(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
     return cur.fetchone()
 
 
+def get_latest_vacuum_row(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    if not table_exists(conn, "vacuum_readings"):
+        return None
+    cur = conn.execute(
+        """
+        SELECT *
+        FROM vacuum_readings
+        ORDER BY received_at DESC
+        LIMIT 1
+        """
+    )
+    return cur.fetchone()
+
+
 def calc_percent(volume: Optional[float], capacity: Optional[float]) -> Optional[float]:
     if volume is None or capacity in (None, 0):
         return None
@@ -110,6 +124,8 @@ def main() -> None:
 
     tank_conn = open_db(repo_path_from_config(env["TANK_DB_PATH"]))
     pump_conn = open_db(repo_path_from_config(env["PUMP_DB_PATH"]))
+    vacuum_db_path = repo_path_from_config(env.get("VACUUM_DB_PATH", env["PUMP_DB_PATH"]))
+    vacuum_conn = open_db(vacuum_db_path)
 
     status_base = repo_path_from_config(env["STATUS_JSON_PATH"]).parent
 
@@ -158,6 +174,16 @@ def main() -> None:
             "pump_status": pump_status,
         }
         atomic_write(status_base / "status_pump.json", pump_payload)
+
+    vac_row = get_latest_vacuum_row(vacuum_conn)
+    if vac_row:
+        vacuum_payload = {
+            "generated_at": timestamp,
+            "reading_inhg": vac_row["reading_inhg"],
+            "source_timestamp": vac_row["source_timestamp"],
+            "last_received_at": vac_row["received_at"],
+        }
+        atomic_write(status_base / "status_vacuum.json", vacuum_payload)
 
 
 if __name__ == "__main__":

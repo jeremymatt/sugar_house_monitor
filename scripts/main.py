@@ -146,6 +146,19 @@ class TankDatabase:
                 )
                 """
             )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vacuum_readings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reading_inhg REAL,
+                    source_timestamp TEXT NOT NULL,
+                    received_at TEXT NOT NULL,
+                    sent_to_server INTEGER DEFAULT 0,
+                    acked_by_server INTEGER DEFAULT 0,
+                    UNIQUE(source_timestamp)
+                )
+                """
+            )
 
     def reset(self) -> None:
         with self.lock:
@@ -214,6 +227,26 @@ class TankDatabase:
                 ) VALUES (
                     :event_type, :source_timestamp, :pump_run_time_s,
                     :pump_interval_s, :gallons_per_hour, :received_at
+                )
+                """,
+                payload,
+            )
+
+    def insert_vacuum_reading(
+        self, record: Dict[str, object], received_at: Optional[str] = None
+    ) -> None:
+        payload = {
+            "reading_inhg": float_or_none(record.get("reading_inhg")),
+            "source_timestamp": record["source_timestamp"],
+            "received_at": received_at or iso_now(),
+        }
+        with self.lock, self.conn:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO vacuum_readings (
+                    reading_inhg, source_timestamp, received_at
+                ) VALUES (
+                    :reading_inhg, :source_timestamp, :received_at
                 )
                 """,
                 payload,
@@ -301,6 +334,33 @@ class TankDatabase:
                 [(row_id,) for row_id in ids],
             )
 
+    def fetch_unsent_vacuum(self, limit: int) -> List[sqlite3.Row]:
+        with self.lock:
+            cur = self.conn.execute(
+                """
+                SELECT *
+                FROM vacuum_readings
+                WHERE acked_by_server = 0
+                ORDER BY source_timestamp
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            return cur.fetchall()
+
+    def mark_vacuum_acked(self, ids: List[int]) -> None:
+        if not ids:
+            return
+        with self.lock, self.conn:
+            self.conn.executemany(
+                """
+                UPDATE vacuum_readings
+                SET sent_to_server = 1, acked_by_server = 1
+                WHERE id = ?
+                """,
+                [(row_id,) for row_id in ids],
+            )
+
 
 class UploadWorker:
     def __init__(self, env: Dict[str, str], db: TankDatabase, speed_factor: float = 1.0):
@@ -315,6 +375,8 @@ class UploadWorker:
         self.tank_interval = base_tank_interval
         self.pump_batch = base_pump_batch
         self.pump_interval = base_pump_interval
+        self.vacuum_batch = int(env.get("VACUUM_UPLOAD_BATCH_SIZE", "8"))
+        self.vacuum_interval = int(env.get("VACUUM_UPLOAD_INTERVAL_SECONDS", "30"))
         self.speed_factor = max(speed_factor, 1.0)
         if self.speed_factor > 1.0:
             # Speed up uploads when the synthetic clock is running faster than real time.
@@ -323,6 +385,8 @@ class UploadWorker:
             # Increase batch sizes so accelerated debug runs can keep up with simulated data.
             self.tank_batch = max(1, int(math.ceil(base_tank_batch * self.speed_factor)))
             self.pump_batch = max(1, int(math.ceil(base_pump_batch * self.speed_factor)))
+            self.vacuum_batch = max(1, int(math.ceil(self.vacuum_batch * self.speed_factor)))
+            self.vacuum_interval = max(1, int(self.vacuum_interval / self.speed_factor))
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.stop_event = threading.Event()
 
@@ -336,6 +400,7 @@ class UploadWorker:
     def _run(self) -> None:
         next_tank = time.monotonic()
         next_pump = time.monotonic()
+        next_vac = time.monotonic()
         while not self.stop_event.wait(1):
             now = time.monotonic()
             if now >= next_tank:
@@ -344,6 +409,9 @@ class UploadWorker:
             if now >= next_pump:
                 self._upload_pump()
                 next_pump = now + self.pump_interval
+            if now >= next_vac:
+                self._upload_vacuum()
+                next_vac = now + self.vacuum_interval
 
     def _upload_tank(self) -> None:
         rows = self.db.fetch_unsent_tank(self.tank_batch)
@@ -395,6 +463,25 @@ class UploadWorker:
             self.db.mark_pump_acked([row["id"] for row in rows])
         except error.URLError as exc:
             log_http_error("Pump upload failed", exc)
+
+    def _upload_vacuum(self) -> None:
+        rows = self.db.fetch_unsent_vacuum(self.vacuum_batch)
+        if not rows:
+            return
+        payload = [
+            {
+                "reading_inhg": row["reading_inhg"],
+                "source_timestamp": row["source_timestamp"],
+            }
+            for row in rows
+        ]
+        try:
+            url = build_url(self.api_base, "ingest_vacuum.php")
+            resp = post_json(url, {"readings": payload}, self.api_key)
+            LOGGER.info("Uploaded %s vacuum readings (resp=%s)", len(rows), resp.get("status"))
+            self.db.mark_vacuum_acked([row["id"] for row in rows])
+        except error.URLError as exc:
+            log_http_error("Vacuum upload failed", exc)
 
 
 @dataclass
@@ -749,12 +836,14 @@ class TankPiApp:
             while not self.stop_event.is_set():
                 now = clock.now() if clock else datetime.now(timezone.utc)
                 reading = round(random.uniform(-28.0, -5.0), 1)
+                generated = iso_now()
                 payload = {
-                    "generated_at": iso_now(),
+                    "generated_at": generated,
                     "reading_inhg": reading,
                     "source_timestamp": now.isoformat(),
-                    "last_received_at": iso_now(),
+                    "last_received_at": generated,
                 }
+                self.db.insert_vacuum_reading(payload, payload["last_received_at"])
                 if self.vacuum_status_path:
                     self._write_status_file(self.vacuum_status_path, payload)
                 self.stop_event.wait(interval)
