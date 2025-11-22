@@ -98,6 +98,28 @@ function connect_sqlite(string $path): PDO {
     return $pdo;
 }
 
+function ensure_monitor_table(PDO $db): void {
+    $db->exec(
+        'CREATE TABLE IF NOT EXISTS monitor_heartbeats (
+            stream TEXT PRIMARY KEY,
+            last_received_at TEXT NOT NULL
+        )'
+    );
+}
+
+function update_monitor(PDO $db, string $stream, string $timestamp): void {
+    ensure_monitor_table($db);
+    $stmt = $db->prepare(
+        'INSERT INTO monitor_heartbeats (stream, last_received_at)
+         VALUES (:stream, :ts)
+         ON CONFLICT(stream) DO UPDATE SET last_received_at=excluded.last_received_at'
+    );
+    $stmt->execute([
+        ':stream' => $stream,
+        ':ts' => $timestamp,
+    ]);
+}
+
 function trigger_status_refresh(): void {
     $cmd = escapeshellcmd('python3 ' . REPO_ROOT . '/scripts/process_status.py');
     exec($cmd, $output, $code);

@@ -12,6 +12,7 @@ if (!is_array($records)) {
 }
 
 $db = connect_sqlite(resolve_repo_path($env['PUMP_DB_PATH']));
+ensure_monitor_table($db);
 $db->exec(
     'CREATE TABLE IF NOT EXISTS pump_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,6 +71,8 @@ foreach ($records as $record) {
 $db->commit();
 
 trigger_status_refresh();
+
+update_monitor($db, 'pump', $now);
 
 $last = null;
 $stmt = $db->query('SELECT MAX(source_timestamp) AS last_timestamp FROM pump_events');

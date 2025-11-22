@@ -371,6 +371,7 @@ class UploadWorker:
         base_tank_interval = int(env.get("UPLOAD_INTERVAL_SECONDS", "60"))
         base_pump_batch = int(env.get("PUMP_UPLOAD_BATCH_SIZE", "1"))
         base_pump_interval = int(env.get("PUMP_UPLOAD_INTERVAL_SECONDS", "60"))
+        self.handshake_interval = float(env.get("HANDSHAKE_INTERVAL_SECONDS", "60"))
         self.tank_batch = base_tank_batch
         self.tank_interval = base_tank_interval
         self.pump_batch = base_pump_batch
@@ -389,6 +390,9 @@ class UploadWorker:
             self.vacuum_interval = max(1, int(self.vacuum_interval / self.speed_factor))
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.stop_event = threading.Event()
+        now = time.monotonic()
+        self._last_tank_handshake = now
+        self._last_pump_handshake = now
 
     def start(self) -> None:
         self.thread.start()
@@ -404,19 +408,29 @@ class UploadWorker:
         while not self.stop_event.wait(1):
             now = time.monotonic()
             if now >= next_tank:
-                self._upload_tank()
+                sent = self._upload_tank()
+                if sent:
+                    self._last_tank_handshake = now
+                elif now - self._last_tank_handshake >= self.handshake_interval:
+                    self._send_handshake("tank")
+                    self._last_tank_handshake = now
                 next_tank = now + self.tank_interval
             if now >= next_pump:
-                self._upload_pump()
+                sent = self._upload_pump()
+                if sent:
+                    self._last_pump_handshake = now
+                elif now - self._last_pump_handshake >= self.handshake_interval:
+                    self._send_handshake("pump")
+                    self._last_pump_handshake = now
                 next_pump = now + self.pump_interval
             if now >= next_vac:
                 self._upload_vacuum()
                 next_vac = now + self.vacuum_interval
 
-    def _upload_tank(self) -> None:
+    def _upload_tank(self) -> bool:
         rows = self.db.fetch_unsent_tank(self.tank_batch)
         if not rows:
-            return
+            return False
         readings = [
             {
                 "tank_id": row["tank_id"],
@@ -441,11 +455,13 @@ class UploadWorker:
             self.db.mark_tank_acked([row["id"] for row in rows])
         except error.URLError as exc:
             log_http_error("Tank upload failed", exc)
+            return False
+        return True
 
-    def _upload_pump(self) -> None:
+    def _upload_pump(self) -> bool:
         rows = self.db.fetch_unsent_pump(self.pump_batch)
         if not rows:
-            return
+            return False
         events = [
             {
                 "event_type": row["event_type"],
@@ -463,11 +479,22 @@ class UploadWorker:
             self.db.mark_pump_acked([row["id"] for row in rows])
         except error.URLError as exc:
             log_http_error("Pump upload failed", exc)
+            return False
+        return True
 
-    def _upload_vacuum(self) -> None:
+    def _send_handshake(self, stream: str) -> None:
+        try:
+            url = build_url(self.api_base, "ingest_nodata.php")
+            payload = {"stream": stream}
+            resp = post_json(url, payload, self.api_key)
+            LOGGER.info("Sent %s handshake (resp=%s)", stream, resp.get("status"))
+        except error.URLError as exc:
+            log_http_error(f"{stream.capitalize()} handshake failed", exc)
+
+    def _upload_vacuum(self) -> bool:
         rows = self.db.fetch_unsent_vacuum(self.vacuum_batch)
         if not rows:
-            return
+            return False
         payload = [
             {
                 "reading_inhg": row["reading_inhg"],
@@ -482,6 +509,8 @@ class UploadWorker:
             self.db.mark_vacuum_acked([row["id"] for row in rows])
         except error.URLError as exc:
             log_http_error("Vacuum upload failed", exc)
+            return False
+        return True
 
 
 @dataclass

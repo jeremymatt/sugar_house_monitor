@@ -18,6 +18,7 @@ const TANK_STATUS_FILES = {
 };
 const PUMP_STATUS_FILE = "status_pump.json";
 const VACUUM_STATUS_FILE = "status_vacuum.json";
+const MONITOR_STATUS_FILE = "status_monitor.json";
 
 // Flow thresholds (gph) and reserve volume (gal)
 const TANKS_FILLING_THRESHOLD = Number(window.TANKS_FILLING_THRESHOLD ?? 5);
@@ -32,6 +33,8 @@ const STALE_THRESHOLDS = {
   pump:           7200  // 2 hours
 };
 
+const MONITOR_STALE_SECONDS = 150; // 2.5 minutes
+
 // How often to refetch status files (in ms)
 const FETCH_INTERVAL_MS = 1_000; // 15s
 
@@ -43,6 +46,7 @@ const STALENESS_UPDATE_MS = 5_000; // 5s
 let latestTanks = { brookside: null, roadside: null };
 let latestPump = null;
 let latestVacuum = null;
+let latestMonitor = null;
 let lastGeneratedAt = null;
 let lastFetchError = false;
 let lastPumpFlow = null;
@@ -121,6 +125,11 @@ function formatProjectedTime(minutes, referenceIso) {
   return `${mm}-${dd} ${hh}:${mi}`;
 }
 
+function formatHoursAgo(seconds) {
+  if (seconds == null || !isFinite(seconds) || seconds < 0) return null;
+  return (seconds / 3600).toFixed(1);
+}
+
 // Compute seconds since last_received_at from browser perspective.
 // This assumes server and browser clocks are reasonably close.
 function secondsSinceLast(receivedAt) {
@@ -190,7 +199,6 @@ function updateTankCard(tankKey, tankData, staleSec, thresholdSec) {
   const capElem = document.getElementById(`${prefix}-capacity`);
   const flowElem = document.getElementById(`${prefix}-flow`);
   const etaElem = document.getElementById(`${prefix}-eta`);
-  const lastElem = document.getElementById(`${prefix}-last-updated`);
   const fillElem = document.getElementById(`${prefix}-fill`);
 
   if (!tankData) {
@@ -198,7 +206,6 @@ function updateTankCard(tankKey, tankData, staleSec, thresholdSec) {
     if (capElem) capElem.textContent = "Capacity: –";
     if (flowElem) flowElem.textContent = "–";
     if (etaElem) etaElem.textContent = "ETA full/empty: –";
-    if (lastElem) lastElem.textContent = "Last update: no data";
     if (fillElem) fillElem.style.height = "0%";
     return;
   }
@@ -210,8 +217,6 @@ function updateTankCard(tankKey, tankData, staleSec, thresholdSec) {
     pct = (vol / cap) * 100;
   }
   const flow = toNumber(tankData.flow_gph);
-  const lastTs = tankData.last_sample_timestamp;
-  const lastRecv = tankData.last_received_at;
 
   if (volElem) volElem.textContent = formatVolumeGal(vol);
   if (capElem) capElem.textContent = cap != null ? `Capacity: ${formatVolumeGal(cap)}` : "Capacity: –";
@@ -223,12 +228,6 @@ function updateTankCard(tankKey, tankData, staleSec, thresholdSec) {
     fillElem.style.height = `${h}%`;
   }
 
-  if (lastElem) {
-    const sec = staleSec;
-    const rel = formatRelativeSeconds(sec);
-    lastElem.textContent = `Last update: ${rel} (server receipt: ${formatDateTime(lastRecv || lastTs)})`;
-  }
-
   // Update card-level warning for a single tank? We instead handle combined info in header.
 }
 
@@ -237,14 +236,12 @@ function updatePumpCard(pumpData, staleSec, thresholdSec) {
   const timeElem = document.getElementById("pump-last-time");
   const flowElem = document.getElementById("pump-flow");
   const runElem  = document.getElementById("pump-run-summary");
-  const lastElem = document.getElementById("pump-last-updated");
 
   if (!pumpData) {
     if (typeElem) typeElem.textContent = "–";
     if (timeElem) timeElem.textContent = "Time: –";
     if (flowElem) flowElem.textContent = "–";
     if (runElem) runElem.textContent = "Run time / interval: –";
-    if (lastElem) lastElem.textContent = "Last update: no data";
     return;
   }
 
@@ -253,7 +250,6 @@ function updatePumpCard(pumpData, staleSec, thresholdSec) {
   const runTime = toNumber(pumpData.pump_run_time_s);
   const interval = toNumber(pumpData.pump_interval_s);
   const gph = toNumber(pumpData.gallons_per_hour);
-  const recv = pumpData.last_received_at;
 
   const statusText = pumpData.pump_status || derivePumpStatus(evtType);
 
@@ -267,11 +263,6 @@ function updatePumpCard(pumpData, staleSec, thresholdSec) {
     } else {
       runElem.textContent = "Run --- / Interval ---";
     }
-  }
-
-  if (lastElem) {
-    const rel = formatRelativeSeconds(staleSec);
-    lastElem.textContent = `Last update: ${rel} (server receipt: ${formatDateTime(recv || evtTime)})`;
   }
 }
 
@@ -327,13 +318,9 @@ function updateOverviewCard(summary, vacuumData) {
   const overflowEtaElem = document.getElementById("overview-overflow-eta");
   const lastFireTimeElem = document.getElementById("overview-last-fire-time");
   const lastFireEtaElem = document.getElementById("overview-last-fire-eta");
+  const reserveElem = document.getElementById("overview-reserve");
   const vacReadingElem = document.getElementById("vacuum-reading");
-  const vacTimeElem = document.getElementById("vacuum-timestamp");
-  const reserveNoteElem = document.getElementById("overview-reserve-note");
-
-  if (reserveNoteElem) {
-    reserveNoteElem.textContent = `Reserve held: ${RESERVE_GALLONS} gal`;
-  }
+  if (reserveElem) reserveElem.textContent = `${RESERVE_GALLONS} gal`;
 
   if (!summary) {
     if (totalElem) totalElem.textContent = "–";
@@ -352,13 +339,39 @@ function updateOverviewCard(summary, vacuumData) {
   }
 
   const vacVal = toNumber(vacuumData?.reading_inhg);
-  const vacTime = vacuumData?.source_timestamp || vacuumData?.generated_at;
   if (vacReadingElem) {
     vacReadingElem.textContent = vacVal != null ? `${vacVal.toFixed(1)} inHg` : "–";
   }
-  if (vacTimeElem) {
-    vacTimeElem.textContent = vacTime ? `Reading time: ${formatDateTime(vacTime)}` : "No vacuum data yet";
+}
+
+function updateMonitorCard(data) {
+  const tankStatusElem = document.getElementById("monitor-tank-status");
+  const tankNoteElem = document.getElementById("monitor-tank-note");
+  const pumpStatusElem = document.getElementById("monitor-pump-status");
+  const pumpNoteElem = document.getElementById("monitor-pump-note");
+
+  function apply(elem, noteElem, seconds) {
+    if (!elem || !noteElem) return;
+    elem.classList.remove("status-good", "status-bad");
+    if (seconds == null) {
+      elem.textContent = "Unknown";
+      noteElem.textContent = "Awaiting heartbeat";
+      return;
+    }
+    const hours = formatHoursAgo(seconds);
+    if (seconds <= MONITOR_STALE_SECONDS) {
+      elem.textContent = "Online";
+      elem.classList.add("status-good");
+      noteElem.textContent = "Heartbeat received";
+    } else {
+      elem.textContent = "Offline";
+      elem.classList.add("status-bad");
+      noteElem.textContent = hours ? `Last update: ${hours} h ago` : "No recent heartbeat";
+    }
   }
+
+  apply(tankStatusElem, tankNoteElem, data?.tankSec);
+  apply(pumpStatusElem, pumpNoteElem, data?.pumpSec);
 }
 
 function updateGlobalStatus(staleInfo) {
@@ -395,10 +408,13 @@ function recomputeStalenessAndRender() {
   const brookside = latestTanks.brookside;
   const roadside  = latestTanks.roadside;
   const pump      = latestPump;
+  const monitor   = latestMonitor;
 
   const brooksideSec = brookside ? secondsSinceLast(brookside.last_received_at || brookside.last_sample_timestamp) : null;
   const roadsideSec  = roadside  ? secondsSinceLast(roadside.last_received_at  || roadside.last_sample_timestamp)  : null;
   const pumpSec      = pump      ? secondsSinceLast(pump.last_received_at      || pump.last_event_timestamp)      : null;
+  const tankMonitorSec = monitor?.tank_monitor_last_received_at ? secondsSinceLast(monitor.tank_monitor_last_received_at) : null;
+  const pumpMonitorSec = monitor?.pump_monitor_last_received_at ? secondsSinceLast(monitor.pump_monitor_last_received_at) : null;
 
   const brooksideThresh = STALE_THRESHOLDS.tank_brookside;
   const roadsideThresh  = STALE_THRESHOLDS.tank_roadside;
@@ -412,6 +428,10 @@ function recomputeStalenessAndRender() {
   updateTankCard("roadside",  roadside,  roadsideSec,  roadsideThresh);
   updatePumpCard(pump, pumpSec, pumpThresh);
   updateOverviewCard(computeOverviewSummary(), latestVacuum);
+  updateMonitorCard({
+    tankSec: tankMonitorSec,
+    pumpSec: pumpMonitorSec,
+  });
 
   const tanksWarning = document.getElementById("tanks-warning");
   const pumpWarning  = document.getElementById("pump-warning");
@@ -445,11 +465,12 @@ function recomputeStalenessAndRender() {
 async function fetchStatusOnce() {
   try {
     lastFetchError = false;
-    const [brookside, roadside, pumpRaw, vacuum] = await Promise.all([
+    const [brookside, roadside, pumpRaw, vacuum, monitor] = await Promise.all([
       fetchStatusFile(TANK_STATUS_FILES.brookside),
       fetchStatusFile(TANK_STATUS_FILES.roadside),
       fetchStatusFile(PUMP_STATUS_FILE),
       fetchStatusFile(VACUUM_STATUS_FILE),
+      fetchStatusFile(MONITOR_STATUS_FILE),
     ]);
     let pump = pumpRaw;
     if (pump && pump.gallons_per_hour == null && lastPumpFlow != null) {
@@ -461,7 +482,8 @@ async function fetchStatusOnce() {
     latestTanks = { brookside, roadside };
     latestPump = pump;
     latestVacuum = vacuum;
-    lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump, vacuum]);
+    latestMonitor = monitor;
+    lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump, vacuum, monitor]);
     recomputeStalenessAndRender();
   } catch (err) {
     lastFetchError = true;

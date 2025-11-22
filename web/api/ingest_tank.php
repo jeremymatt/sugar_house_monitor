@@ -12,6 +12,7 @@ if (!is_array($records)) {
 }
 
 $db = connect_sqlite(resolve_repo_path($env['TANK_DB_PATH']));
+ensure_monitor_table($db);
 
 function ensure_column(PDO $db, string $table, string $column, string $definition): void {
     $stmt = $db->query("PRAGMA table_info($table)");
@@ -112,6 +113,8 @@ $stmt = $db->query('SELECT tank_id, MAX(source_timestamp) AS last_timestamp FROM
 foreach ($stmt as $row) {
     $latest[$row['tank_id']] = $row['last_timestamp'];
 }
+
+update_monitor($db, 'tank', $now);
 
 respond_json([
     'status' => 'ok',

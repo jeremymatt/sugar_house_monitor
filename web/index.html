@@ -175,6 +175,25 @@
       color: var(--text-muted);
     }
 
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.35rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      border: 1px solid var(--card-border);
+      background: rgba(0,0,0,0.25);
+    }
+    .status-good {
+      color: var(--ok);
+    }
+    .status-bad {
+      color: var(--danger);
+      border-color: var(--danger);
+      background: var(--danger-soft);
+    }
+
     .tank-level-bar {
       position: relative;
       height: 140px;
@@ -295,13 +314,36 @@
           <span class="metric-note" id="overview-last-fire-eta">---</span>
         </div>
         <div class="metric">
+          <span class="metric-label">Reserve</span>
+          <span class="metric-value" id="overview-reserve">150 gal</span>
+          <span class="metric-note">Held back for boil</span>
+        </div>
+        <div class="metric">
           <span class="metric-label">Vacuum</span>
           <span class="metric-value" id="vacuum-reading">–</span>
-          <span class="metric-note" id="vacuum-timestamp">No vacuum data yet</span>
+          <span class="metric-note">Debug values until sensor online</span>
         </div>
       </div>
-      <div class="small" id="overview-reserve-note" style="margin-top:0.5rem; color:var(--text-muted);">
-        Reserve held: 150 gal
+    </section>
+
+    <section class="card" id="monitor-card">
+      <div class="card-header">
+        <div>
+          <h2>Monitor Status</h2>
+          <div class="card-subtitle">Heartbeats from tank and pump services</div>
+        </div>
+      </div>
+      <div class="overview-grid">
+        <div class="metric">
+          <span class="metric-label">Tank Monitor</span>
+          <span class="metric-value" id="monitor-tank-status">–</span>
+          <span class="metric-note" id="monitor-tank-note">Awaiting heartbeat</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Pump Monitor</span>
+          <span class="metric-value" id="monitor-pump-status">–</span>
+          <span class="metric-note" id="monitor-pump-note">Awaiting heartbeat</span>
+        </div>
       </div>
     </section>
 
@@ -344,7 +386,6 @@
                 <span class="metric-note" id="brookside-eta">ETA full/empty: –</span>
               </div>
             </div>
-            <div class="last-updated" id="brookside-last-updated">Last update: –</div>
           </div>
 
           <div>
@@ -372,7 +413,6 @@
                 <span class="metric-note" id="roadside-eta">ETA full/empty: –</span>
               </div>
             </div>
-            <div class="last-updated" id="roadside-last-updated">Last update: –</div>
           </div>
         </div>
 
@@ -405,8 +445,6 @@
             <span class="metric-note" id="pump-run-summary">Run time / interval: –</span>
           </div>
         </div>
-
-        <div class="last-updated" id="pump-last-updated">Last update: –</div>
 
         <div id="pump-error" class="error-banner" style="display:none;">
           Pump event data unavailable. This is expected if the pump only runs occasionally,
