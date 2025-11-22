@@ -434,9 +434,24 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
 
   const latestTs = Math.max(
     pumpHistory.length ? pumpHistory[pumpHistory.length - 1].t : 0,
-    netFlowHistory.length ? netFlowHistory[netFlowHistory.length - 1].t : 0,
-    Date.now()
+    netFlowHistory.length ? netFlowHistory[netFlowHistory.length - 1].t : 0
   );
+
+  if (!latestTs) {
+    const canvas = document.getElementById("pump-history-canvas");
+    const note = document.getElementById("pump-history-note");
+    if (canvas) {
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#1a1f28";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#888";
+      ctx.font = "12px sans-serif";
+      ctx.fillText("No flow data yet", 10, 20);
+    }
+    if (note) note.textContent = "Showing last 6 hours";
+    return;
+  }
 
   pruneHistory(pumpHistory, latestTs);
   pruneHistory(netFlowHistory, latestTs);
