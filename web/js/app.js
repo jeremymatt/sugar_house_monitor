@@ -37,6 +37,7 @@ const MONITOR_STALE_SECONDS = 150; // 2.5 minutes
 
 // How often to refetch status files (in ms)
 const FETCH_INTERVAL_MS = 1_000; // 15s
+const FLOW_HISTORY_WINDOW_SEC = 6 * 60 * 60; // 6h
 
 // How often to recompute "seconds since last" and update the UI (in ms)
 const STALENESS_UPDATE_MS = 5_000; // 5s
@@ -624,12 +625,13 @@ function recomputeStalenessAndRender() {
 async function fetchStatusOnce() {
   try {
     lastFetchError = false;
-    const [brookside, roadside, pumpRaw, vacuum, monitor] = await Promise.all([
+    const [brookside, roadside, pumpRaw, vacuum, monitor, history] = await Promise.all([
       fetchStatusFile(TANK_STATUS_FILES.brookside),
       fetchStatusFile(TANK_STATUS_FILES.roadside),
       fetchStatusFile(PUMP_STATUS_FILE),
       fetchStatusFile(VACUUM_STATUS_FILE),
       fetchStatusFile(MONITOR_STATUS_FILE),
+      fetchStatusFile(`flow_history.php?window_sec=${FLOW_HISTORY_WINDOW_SEC}`),
     ]);
     let pump = pumpRaw;
     if (pump && pump.gallons_per_hour == null && lastPumpFlow != null) {
@@ -642,6 +644,22 @@ async function fetchStatusOnce() {
     latestPump = pump;
     latestVacuum = vacuum;
     latestMonitor = monitor;
+    pumpHistory.splice(0, pumpHistory.length);
+    netFlowHistory.splice(0, netFlowHistory.length);
+    if (history && history.pump) {
+      history.pump.forEach((p) => {
+        const t = msFromIso(p.ts);
+        const v = toNumber(p.flow_gph);
+        if (t != null && v != null) pumpHistory.push({ t, v });
+      });
+    }
+    if (history && history.net) {
+      history.net.forEach((p) => {
+        const t = msFromIso(p.ts);
+        const v = toNumber(p.flow_gph);
+        if (t != null && v != null) netFlowHistory.push({ t, v });
+      });
+    }
     lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump, vacuum, monitor]);
     recomputeStalenessAndRender();
   } catch (err) {
