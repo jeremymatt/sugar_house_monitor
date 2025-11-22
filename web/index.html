@@ -175,6 +175,35 @@
       color: var(--text-muted);
     }
 
+    .chart-container {
+      margin: 0.5rem 0 1rem;
+      padding: 0.5rem;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      background: rgba(0,0,0,0.15);
+    }
+
+    .chart-legend {
+      display: flex;
+      gap: 1rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-bottom: 0.35rem;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .legend-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+
     .status-badge {
       display: inline-flex;
       align-items: center;
@@ -314,26 +343,10 @@
           <span class="metric-note" id="overview-last-fire-eta">---</span>
         </div>
         <div class="metric">
-          <span class="metric-label">Reserve</span>
-          <span class="metric-value" id="overview-reserve">150 gal</span>
-          <span class="metric-note">Held back for boil</span>
-        </div>
-        <div class="metric">
           <span class="metric-label">Vacuum</span>
           <span class="metric-value" id="vacuum-reading">–</span>
           <span class="metric-note">Debug values until sensor online</span>
         </div>
-      </div>
-    </section>
-
-    <section class="card" id="monitor-card">
-      <div class="card-header">
-        <div>
-          <h2>Monitor Status</h2>
-          <div class="card-subtitle">Heartbeats from tank and pump services</div>
-        </div>
-      </div>
-      <div class="overview-grid">
         <div class="metric">
           <span class="metric-label">Tank Monitor</span>
           <span class="metric-value" id="monitor-tank-status">–</span>
@@ -431,6 +444,15 @@
           <div id="pump-warning" class="warning-tag" style="display:none;">
             ⚠ Pump data stale
           </div>
+        </div>
+
+        <div class="chart-container">
+          <div class="chart-legend">
+            <span class="legend-item"><span class="legend-swatch" style="background:#f2a93b;"></span>Pump</span>
+            <span class="legend-item"><span class="legend-swatch" style="background:#4caf50;"></span>Tank</span>
+          </div>
+          <canvas id="pump-history-canvas" width="600" height="220" aria-label="Pump flow history"></canvas>
+          <div class="metric-note" id="pump-history-note">Showing last 6 hours</div>
         </div>
 
         <div class="grid">

@@ -50,6 +50,10 @@ let latestMonitor = null;
 let lastGeneratedAt = null;
 let lastFetchError = false;
 let lastPumpFlow = null;
+const pumpHistory = [];
+const netFlowHistory = [];
+const HISTORY_WINDOW_MS = 6 * 60 * 60 * 1000; // 6 hours
+const HISTORY_MIN_SPACING_MS = 30 * 1000; // throttle points every 30s unless value changes
 
 // ---- UTILITIES ----
 
@@ -328,14 +332,17 @@ function updateOverviewCard(summary, vacuumData) {
     if (overflowTimeElem) overflowTimeElem.textContent = "---";
     if (overflowEtaElem) overflowEtaElem.textContent = "---";
     if (lastFireTimeElem) lastFireTimeElem.textContent = "---";
-    if (lastFireEtaElem) lastFireEtaElem.textContent = "---";
+    if (lastFireEtaElem) lastFireEtaElem.textContent = `--- (${RESERVE_GALLONS} gal reserve)`;
   } else {
     if (totalElem) totalElem.textContent = formatVolumeGal(summary.totalGallons);
     if (netFlowElem) netFlowElem.textContent = formatFlowGph(summary.netFlow);
     if (overflowTimeElem) overflowTimeElem.textContent = formatDurationHhMm(summary.overflowMinutes);
     if (overflowEtaElem) overflowEtaElem.textContent = formatProjectedTime(summary.overflowMinutes, lastGeneratedAt);
     if (lastFireTimeElem) lastFireTimeElem.textContent = formatDurationHhMm(summary.lastFireMinutes);
-    if (lastFireEtaElem) lastFireEtaElem.textContent = formatProjectedTime(summary.lastFireMinutes, lastGeneratedAt);
+    if (lastFireEtaElem) {
+      const eta = formatProjectedTime(summary.lastFireMinutes, lastGeneratedAt);
+      lastFireEtaElem.textContent = `${eta} (${RESERVE_GALLONS} gal reserve)`;
+    }
   }
 
   const vacVal = toNumber(vacuumData?.reading_inhg);
@@ -372,6 +379,90 @@ function updateMonitorCard(data) {
 
   apply(tankStatusElem, tankNoteElem, data?.tankSec);
   apply(pumpStatusElem, pumpNoteElem, data?.pumpSec);
+}
+
+function addHistoryPoint(arr, value) {
+  if (value == null || !isFinite(value)) return;
+  const now = Date.now();
+  const last = arr[arr.length - 1];
+  if (last && now - last.t < HISTORY_MIN_SPACING_MS && last.v === value) {
+    return;
+  }
+  arr.push({ t: now, v: value });
+}
+
+function pruneHistory(arr) {
+  const cutoff = Date.now() - HISTORY_WINDOW_MS;
+  while (arr.length && arr[0].t < cutoff) {
+    arr.shift();
+  }
+}
+
+function drawLine(ctx, points, color, x0, x1, yMin, yMax) {
+  if (!points.length) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  points.forEach((pt, idx) => {
+    const xFrac = (pt.t - x0) / (x1 - x0 || 1);
+    const yFrac = (pt.v - yMin) / (yMax - yMin || 1);
+    const x = xFrac * ctx.canvas.width;
+    const y = ctx.canvas.height - yFrac * ctx.canvas.height;
+    if (idx === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
+
+function updatePumpHistoryChart(pumpGph, netFlow) {
+  addHistoryPoint(pumpHistory, pumpGph);
+  addHistoryPoint(netFlowHistory, netFlow);
+  pruneHistory(pumpHistory);
+  pruneHistory(netFlowHistory);
+
+  const canvas = document.getElementById("pump-history-canvas");
+  const note = document.getElementById("pump-history-note");
+  if (!canvas) return;
+  // Fit to container width on each draw for responsiveness.
+  const desiredWidth = canvas.clientWidth || canvas.width || 600;
+  if (canvas.width !== desiredWidth) {
+    canvas.width = desiredWidth;
+  }
+  const ctx = canvas.getContext("2d");
+  const now = Date.now();
+  const start = now - HISTORY_WINDOW_MS;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#1a1f28";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Axes
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i <= 6; i++) {
+    const x = (i / 6) * canvas.width;
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, canvas.height);
+  }
+  for (let j = 0; j <= 6; j++) {
+    const y = (j / 6) * canvas.height;
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvas.width, y);
+  }
+  ctx.stroke();
+
+  drawLine(ctx, pumpHistory, "#f2a93b", start, now, 0, 300);
+  drawLine(ctx, netFlowHistory, "#4caf50", start, now, 0, 300);
+
+  if ((!pumpHistory.length) && (!netFlowHistory.length)) {
+    ctx.fillStyle = "#888";
+    ctx.font = "12px sans-serif";
+    ctx.fillText("No flow data yet", 10, 20);
+    if (note) note.textContent = "Showing last 6 hours";
+    return;
+  }
+
+  if (note) note.textContent = "Showing last 6 hours (fixed 0–300 gph)";
 }
 
 function updateGlobalStatus(staleInfo) {
@@ -424,14 +515,18 @@ function recomputeStalenessAndRender() {
   const roadsideStale  = roadsideSec  != null && roadsideSec  > roadsideThresh;
   const pumpStale      = pumpSec      != null && pumpSec      > pumpThresh;
 
+  const overview = computeOverviewSummary();
+  const pumpFlowVal = toNumber(pump?.gallons_per_hour ?? pump?.flow_gph);
+
   updateTankCard("brookside", brookside, brooksideSec, brooksideThresh);
   updateTankCard("roadside",  roadside,  roadsideSec,  roadsideThresh);
   updatePumpCard(pump, pumpSec, pumpThresh);
-  updateOverviewCard(computeOverviewSummary(), latestVacuum);
+  updateOverviewCard(overview, latestVacuum);
   updateMonitorCard({
     tankSec: tankMonitorSec,
     pumpSec: pumpMonitorSec,
   });
+  updatePumpHistoryChart(pumpFlowVal, overview?.netFlow);
 
   const tanksWarning = document.getElementById("tanks-warning");
   const pumpWarning  = document.getElementById("pump-warning");
