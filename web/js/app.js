@@ -134,6 +134,16 @@ function formatHoursAgo(seconds) {
   return (seconds / 3600).toFixed(1);
 }
 
+function msFromIso(ts) {
+  const d = parseIso(ts);
+  return d ? d.getTime() : null;
+}
+
+function averageMs(a, b) {
+  if (a != null && b != null) return (a + b) / 2;
+  return a != null ? a : b;
+}
+
 // Compute seconds since last_received_at from browser perspective.
 // This assumes server and browser clocks are reasonably close.
 function secondsSinceLast(receivedAt) {
@@ -381,18 +391,22 @@ function updateMonitorCard(data) {
   apply(pumpStatusElem, pumpNoteElem, data?.pumpSec);
 }
 
-function addHistoryPoint(arr, value) {
+function addHistoryPoint(arr, value, tsMs) {
   if (value == null || !isFinite(value)) return;
-  const now = Date.now();
+  if (tsMs == null || !isFinite(tsMs)) return;
   const last = arr[arr.length - 1];
-  if (last && now - last.t < HISTORY_MIN_SPACING_MS && last.v === value) {
+  if (last && tsMs - last.t < HISTORY_MIN_SPACING_MS && last.v === value) {
     return;
   }
-  arr.push({ t: now, v: value });
+  if (last && tsMs < last.t) {
+    // Keep history monotonic; drop out-of-order samples.
+    return;
+  }
+  arr.push({ t: tsMs, v: value });
 }
 
-function pruneHistory(arr) {
-  const cutoff = Date.now() - HISTORY_WINDOW_MS;
+function pruneHistory(arr, windowEndMs) {
+  const cutoff = windowEndMs - HISTORY_WINDOW_MS;
   while (arr.length && arr[0].t < cutoff) {
     arr.shift();
   }
@@ -414,11 +428,18 @@ function drawLine(ctx, points, color, x0, x1, yMin, yMax) {
   ctx.stroke();
 }
 
-function updatePumpHistoryChart(pumpGph, netFlow) {
-  addHistoryPoint(pumpHistory, pumpGph);
-  addHistoryPoint(netFlowHistory, netFlow);
-  pruneHistory(pumpHistory);
-  pruneHistory(netFlowHistory);
+function updatePumpHistoryChart(pumpPoint, netPoint) {
+  if (pumpPoint) addHistoryPoint(pumpHistory, pumpPoint.v, pumpPoint.t);
+  if (netPoint) addHistoryPoint(netFlowHistory, netPoint.v, netPoint.t);
+
+  const latestTs = Math.max(
+    pumpHistory.length ? pumpHistory[pumpHistory.length - 1].t : 0,
+    netFlowHistory.length ? netFlowHistory[netFlowHistory.length - 1].t : 0,
+    Date.now()
+  );
+
+  pruneHistory(pumpHistory, latestTs);
+  pruneHistory(netFlowHistory, latestTs);
 
   const canvas = document.getElementById("pump-history-canvas");
   const note = document.getElementById("pump-history-note");
@@ -429,7 +450,7 @@ function updatePumpHistoryChart(pumpGph, netFlow) {
     canvas.width = desiredWidth;
   }
   const ctx = canvas.getContext("2d");
-  const now = Date.now();
+  const now = latestTs;
   const start = now - HISTORY_WINDOW_MS;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = "#1a1f28";
@@ -538,6 +559,10 @@ function recomputeStalenessAndRender() {
 
   const overview = computeOverviewSummary();
   const pumpFlowVal = toNumber(pump?.gallons_per_hour ?? pump?.flow_gph);
+  const pumpTs = msFromIso(pump?.last_event_timestamp || pump?.last_received_at);
+  const bTs = msFromIso(brookside?.last_sample_timestamp || brookside?.last_received_at);
+  const rTs = msFromIso(roadside?.last_sample_timestamp || roadside?.last_received_at);
+  const netTs = averageMs(bTs, rTs);
 
   updateTankCard("brookside", brookside, brooksideSec, brooksideThresh);
   updateTankCard("roadside",  roadside,  roadsideSec,  roadsideThresh);
@@ -547,7 +572,10 @@ function recomputeStalenessAndRender() {
     tankSec: tankMonitorSec,
     pumpSec: pumpMonitorSec,
   });
-  updatePumpHistoryChart(pumpFlowVal, overview?.netFlow);
+  updatePumpHistoryChart(
+    pumpFlowVal != null && pumpTs != null ? { v: pumpFlowVal, t: pumpTs } : null,
+    overview?.netFlow != null && netTs != null ? { v: overview.netFlow, t: netTs } : null
+  );
 
   const tanksWarning = document.getElementById("tanks-warning");
   const pumpWarning  = document.getElementById("pump-warning");
