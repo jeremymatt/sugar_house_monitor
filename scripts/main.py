@@ -789,23 +789,32 @@ class TankPiApp:
                         "No debug data found for tank %s; controller will wait for hardware.",
                         tank_name,
                     )
-            proc = Process(
-                target=TVF.run_tank_controller,
-                args=(tank_name, TVF.queue_dict, measurement_params),
-                kwargs={
-                    "clock": process_clock,
-                    "debug_records": records,
-                    "history_db_path": history_path,
-                    "status_dir": self.status_dir,
-                    "history_hours": getattr(TVF, "DEFAULT_HISTORY_HOURS", 6),
-                    "loop_debug": self.loop_debug_data,
-                    "loop_gap_seconds": self.debug_loop_gap.total_seconds(),
-                },
-                daemon=True,
-            )
-            proc.start()
+            proc = None
+            for attempt in (1, 2):
+                proc = Process(
+                    target=TVF.run_tank_controller,
+                    args=(tank_name, TVF.queue_dict, measurement_params),
+                    kwargs={
+                        "clock": process_clock,
+                        "debug_records": records,
+                        "history_db_path": history_path,
+                        "status_dir": self.status_dir,
+                        "history_hours": getattr(TVF, "DEFAULT_HISTORY_HOURS", 6),
+                        "loop_debug": self.loop_debug_data,
+                        "loop_gap_seconds": self.debug_loop_gap.total_seconds(),
+                    },
+                    daemon=True,
+                )
+                proc.start()
+                time.sleep(0.2)
+                if proc.is_alive():
+                    break
+                LOGGER.warning("Tank %s controller failed to stay up (attempt %s)", tank_name, attempt)
             self.tank_processes[tank_name] = proc
-            LOGGER.info("Started %s tank controller (pid=%s)", tank_name, proc.pid)
+            if proc.is_alive():
+                LOGGER.info("Started %s tank controller (pid=%s)", tank_name, proc.pid)
+            else:
+                LOGGER.error("Failed to start tank controller %s after retries", tank_name)
 
     def _start_lcd_process(self) -> None:
         if self.lcd_process:

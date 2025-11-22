@@ -435,21 +435,42 @@ function updatePumpHistoryChart(pumpGph, netFlow) {
   ctx.fillStyle = "#1a1f28";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Axes
+  // Axes/grid
   ctx.strokeStyle = "rgba(255,255,255,0.08)";
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let i = 0; i <= 6; i++) {
     const x = (i / 6) * canvas.width;
     ctx.moveTo(x, 0);
-    ctx.lineTo(x, canvas.height);
+    ctx.lineTo(x, canvas.height - 24); // leave room for x-label
   }
   for (let j = 0; j <= 6; j++) {
-    const y = (j / 6) * canvas.height;
+    const y = (j / 6) * (canvas.height - 24);
     ctx.moveTo(0, y);
     ctx.lineTo(canvas.width, y);
   }
   ctx.stroke();
+
+  // Axis labels
+  ctx.fillStyle = "#a7afbf";
+  ctx.font = "11px system-ui";
+  ctx.textBaseline = "middle";
+  ctx.fillText("gph (0-300)", 6, 10);
+  ctx.textBaseline = "top";
+  ctx.textAlign = "center";
+  const endLabel = new Date(now);
+  const startLabel = new Date(start);
+  const fmt = (d) =>
+    `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  ctx.fillText(fmt(startLabel), 10, canvas.height - 18);
+  ctx.fillText(fmt(endLabel), canvas.width - 30, canvas.height - 18);
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText("300", canvas.width - 6, 10);
+  ctx.fillText("0", canvas.width - 6, canvas.height - 40);
+  ctx.textAlign = "start";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("time (last 6h)", canvas.width / 2 - 30, canvas.height - 4);
 
   drawLine(ctx, pumpHistory, "#f2a93b", start, now, 0, 300);
   drawLine(ctx, netFlowHistory, "#4caf50", start, now, 0, 300);
