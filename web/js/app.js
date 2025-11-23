@@ -19,6 +19,11 @@ const TANK_STATUS_FILES = {
 const PUMP_STATUS_FILE = "status_pump.json";
 const VACUUM_STATUS_FILE = "status_vacuum.json";
 const MONITOR_STATUS_FILE = "status_monitor.json";
+const FLOW_HISTORY_ENDPOINT =
+  window.location.hostname.includes("mattsmaplesyrup.com") ||
+  window.location.pathname.includes("/sugar_house_monitor")
+    ? "/sugar_house_monitor/api/flow_history.php"
+    : "/api/flow_history.php";
 
 // Flow thresholds (gph) and reserve volume (gal)
 const TANKS_FILLING_THRESHOLD = Number(window.TANKS_FILLING_THRESHOLD ?? 5);
@@ -189,6 +194,21 @@ async function fetchStatusFile(file) {
     return JSON.parse(text);
   } catch (err) {
     console.warn(`Failed to parse ${file}:`, err);
+    return null;
+  }
+}
+
+async function fetchHistory() {
+  const url = `${FLOW_HISTORY_ENDPOINT}?window_sec=${FLOW_HISTORY_WINDOW_SEC}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`HTTP ${res.status} for flow_history`);
+  const text = await res.text();
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    console.warn("Failed to parse flow_history:", err);
     return null;
   }
 }
@@ -631,7 +651,7 @@ async function fetchStatusOnce() {
       fetchStatusFile(PUMP_STATUS_FILE),
       fetchStatusFile(VACUUM_STATUS_FILE),
       fetchStatusFile(MONITOR_STATUS_FILE),
-      fetchStatusFile(`flow_history.php?window_sec=${FLOW_HISTORY_WINDOW_SEC}`),
+      fetchHistory(),
     ]);
     let pump = pumpRaw;
     if (pump && pump.gallons_per_hour == null && lastPumpFlow != null) {
