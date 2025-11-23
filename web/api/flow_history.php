@@ -10,12 +10,44 @@ $windowSec = isset($_GET['window_sec']) ? intval($_GET['window_sec']) : 21600;
 if ($windowSec <= 0) {
     $windowSec = 21600;
 }
-$cutoffIso = gmdate('c', time() - $windowSec);
-
 $pumpDbPath = resolve_repo_path($env['PUMP_DB_PATH'] ?? '');
 $tankDbPath = resolve_repo_path($env['TANK_DB_PATH'] ?? '');
 
+// Determine the latest timestamp across pump + tank streams, use that as the anchor.
+$latestTs = null;
+function iso_to_ts(?string $iso): ?int {
+    if (!$iso) return null;
+    $ts = strtotime($iso);
+    return $ts === false ? null : $ts;
+}
+
 $pumpRows = [];
+if ($pumpDbPath && file_exists($pumpDbPath)) {
+    $pumpDb = connect_sqlite($pumpDbPath);
+    $stmt = $pumpDb->query(
+        'SELECT MAX(source_timestamp) AS max_ts FROM pump_events WHERE gallons_per_hour IS NOT NULL'
+    );
+    if ($row = $stmt->fetch()) {
+        $t = iso_to_ts($row['max_ts'] ?? null);
+        if ($t && ($latestTs === null || $t > $latestTs)) $latestTs = $t;
+    }
+}
+
+$netRows = [];
+if ($tankDbPath && file_exists($tankDbPath)) {
+    $tankDb = connect_sqlite($tankDbPath);
+    $stmt = $tankDb->query(
+        "SELECT MAX(source_timestamp) AS max_ts FROM tank_readings WHERE flow_gph IS NOT NULL"
+    );
+    if ($row = $stmt->fetch()) {
+        $t = iso_to_ts($row['max_ts'] ?? null);
+        if ($t && ($latestTs === null || $t > $latestTs)) $latestTs = $t;
+    }
+}
+
+$cutoffTs = $latestTs ? $latestTs - $windowSec : (time() - $windowSec);
+$cutoffIso = gmdate('c', $cutoffTs);
+
 if ($pumpDbPath && file_exists($pumpDbPath)) {
     $pumpDb = connect_sqlite($pumpDbPath);
     $stmt = $pumpDb->prepare(
@@ -33,10 +65,8 @@ if ($pumpDbPath && file_exists($pumpDbPath)) {
     }
 }
 
-$netRows = [];
 if ($tankDbPath && file_exists($tankDbPath)) {
     $tankDb = connect_sqlite($tankDbPath);
-    // Pull latest readings per tank within window, then pair by closest timestamps.
     $stmt = $tankDb->prepare(
         'SELECT tank_id, source_timestamp, flow_gph
          FROM tank_readings
@@ -53,37 +83,29 @@ if ($tankDbPath && file_exists($tankDbPath)) {
             'flow_gph' => $row['flow_gph'],
         ];
     }
-    // Merge by timestamp proximity: assume both streams are roughly aligned; step through in order.
-    $i = $j = 0;
-    $bs = $byTank['brookside'];
-    $rs = $byTank['roadside'];
-    while ($i < count($bs) || $j < count($rs)) {
-        $b = $i < count($bs) ? $bs[$i] : null;
-        $r = $j < count($rs) ? $rs[$j] : null;
-        if ($b && $r) {
-            // Choose the earlier timestamp as anchor; advance the one that's earlier.
-            $bTs = strtotime($b['ts']);
-            $rTs = strtotime($r['ts']);
-            if ($bTs <= $rTs) {
-                $netRows[] = [
-                    'ts' => date('c', ($bTs + $rTs) / 2),
-                    'flow_gph' => ($b['flow_gph'] ?? 0) + ($r['flow_gph'] ?? 0),
-                ];
-                $i++; $j++;
-            } else {
-                $netRows[] = [
-                    'ts' => date('c', ($bTs + $rTs) / 2),
-                    'flow_gph' => ($b['flow_gph'] ?? 0) + ($r['flow_gph'] ?? 0),
-                ];
-                $i++; $j++;
-            }
-        } elseif ($b) {
-            $netRows[] = ['ts' => $b['ts'], 'flow_gph' => $b['flow_gph'] ?? 0];
-            $i++;
-        } elseif ($r) {
-            $netRows[] = ['ts' => $r['ts'], 'flow_gph' => $r['flow_gph'] ?? 0];
-            $j++;
-        }
+    // Build net flow using last-known flows at each event timestamp.
+    $events = [];
+    foreach ($byTank['brookside'] as $row) {
+        $events[] = ['ts' => $row['ts'], 'tank' => 'brookside', 'flow' => $row['flow_gph']];
+    }
+    foreach ($byTank['roadside'] as $row) {
+        $events[] = ['ts' => $row['ts'], 'tank' => 'roadside', 'flow' => $row['flow_gph']];
+    }
+    usort($events, function ($a, $b) {
+        $ta = strtotime($a['ts']);
+        $tb = strtotime($b['ts']);
+        if ($ta === $tb) return 0;
+        return $ta < $tb ? -1 : 1;
+    });
+    $bFlow = 0.0;
+    $rFlow = 0.0;
+    foreach ($events as $ev) {
+        if ($ev['tank'] === 'brookside') $bFlow = $ev['flow'] ?? 0.0;
+        if ($ev['tank'] === 'roadside') $rFlow = $ev['flow'] ?? 0.0;
+        $netRows[] = [
+            'ts' => $ev['ts'],
+            'flow_gph' => $bFlow + $rFlow,
+        ];
     }
 }
 
