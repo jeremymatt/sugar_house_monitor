@@ -635,6 +635,8 @@ class TankPiApp:
         self.pump_status_path = self.status_dir / "status_pump.json"
         self.vacuum_status_path = self.status_dir / "status_vacuum.json"
         self.measurement_params = self._build_measurement_params()
+        self.debug_clock: Optional[SyntheticClock] = None
+        self.debug_records: Dict[str, List[TVF.DebugSample]] = {}
         self.tank_processes: Dict[str, Process] = {}
         self.lcd_process: Optional[Process] = None
         self.collector_thread: Optional[threading.Thread] = None
@@ -769,52 +771,65 @@ class TankPiApp:
         except Exception:
             return {}
 
+    def _start_tank_controller(
+        self,
+        tank_name: str,
+        measurement_params,
+        clock: Optional[SyntheticClock],
+        tank_records: Optional[List[TVF.DebugSample]],
+    ) -> Process:
+        history_path = self.db.path
+        debug_tank = str_to_bool(self.env.get("DEBUG_TANK"), False)
+        records = tank_records if tank_records else None
+        process_clock = clock if records else None
+        if debug_tank and not records:
+            LOGGER.warning(
+                "No debug data found for tank %s; controller will wait for hardware.",
+                tank_name,
+            )
+        proc = None
+        for attempt in (1, 2):
+            proc = Process(
+                target=TVF.run_tank_controller,
+                args=(tank_name, TVF.queue_dict, measurement_params),
+                kwargs={
+                    "clock": process_clock,
+                    "debug_records": records,
+                    "history_db_path": history_path,
+                    "status_dir": self.status_dir,
+                    "history_hours": getattr(TVF, "DEFAULT_HISTORY_HOURS", 6),
+                    "loop_debug": self.loop_debug_data,
+                    "loop_gap_seconds": self.debug_loop_gap.total_seconds(),
+                },
+                daemon=True,
+            )
+            proc.start()
+            time.sleep(0.2)
+            if proc.is_alive():
+                break
+            LOGGER.warning(
+                "Tank %s controller failed to stay up (attempt %s)", tank_name, attempt
+            )
+        self.tank_processes[tank_name] = proc
+        if proc.is_alive():
+            LOGGER.info("Started %s tank controller (pid=%s)", tank_name, proc.pid)
+        else:
+            LOGGER.error("Failed to start tank controller %s after retries", tank_name)
+        return proc
+
     def _start_tank_processes(
         self,
         measurement_params,
         clock: Optional[SyntheticClock],
         tank_records: Dict[str, List[TVF.DebugSample]],
     ) -> None:
-        history_path = self.db.path
-        debug_tank = str_to_bool(self.env.get("DEBUG_TANK"), False)
         for tank_name in TVF.tank_names:
-            records = tank_records.get(tank_name) if tank_records else None
-            if records:
-                process_clock = clock
-            else:
-                process_clock = None
-                records = None
-                if debug_tank:
-                    LOGGER.warning(
-                        "No debug data found for tank %s; controller will wait for hardware.",
-                        tank_name,
-                    )
-            proc = None
-            for attempt in (1, 2):
-                proc = Process(
-                    target=TVF.run_tank_controller,
-                    args=(tank_name, TVF.queue_dict, measurement_params),
-                    kwargs={
-                        "clock": process_clock,
-                        "debug_records": records,
-                        "history_db_path": history_path,
-                        "status_dir": self.status_dir,
-                        "history_hours": getattr(TVF, "DEFAULT_HISTORY_HOURS", 6),
-                        "loop_debug": self.loop_debug_data,
-                        "loop_gap_seconds": self.debug_loop_gap.total_seconds(),
-                    },
-                    daemon=True,
-                )
-                proc.start()
-                time.sleep(0.2)
-                if proc.is_alive():
-                    break
-                LOGGER.warning("Tank %s controller failed to stay up (attempt %s)", tank_name, attempt)
-            self.tank_processes[tank_name] = proc
-            if proc.is_alive():
-                LOGGER.info("Started %s tank controller (pid=%s)", tank_name, proc.pid)
-            else:
-                LOGGER.error("Failed to start tank controller %s after retries", tank_name)
+            self._start_tank_controller(
+                tank_name,
+                measurement_params,
+                clock,
+                tank_records.get(tank_name) if tank_records else None,
+            )
 
     def _start_lcd_process(self) -> None:
         if self.lcd_process:
@@ -959,6 +974,24 @@ class TankPiApp:
             self.vacuum_thread.join(timeout=2)
         self.vacuum_thread = None
 
+    def _ensure_tank_processes_alive(self) -> None:
+        for tank_name in TVF.tank_names:
+            proc = self.tank_processes.get(tank_name)
+            if proc and proc.is_alive():
+                continue
+            if proc:
+                LOGGER.warning(
+                    "Tank controller %s died (exitcode=%s); restarting.",
+                    tank_name,
+                    proc.exitcode,
+                )
+            self._start_tank_controller(
+                tank_name,
+                self.measurement_params,
+                self.debug_clock,
+                (self.debug_records or {}).get(tank_name),
+            )
+
     def shutdown(self) -> None:
         if not self.stop_event.is_set():
             self.stop_event.set()
@@ -1050,6 +1083,8 @@ class TankPiApp:
                 LOGGER.error("Debug mode enabled but no CSV data was loaded.")
 
         self._start_tank_processes(self.measurement_params, clock, tank_records)
+        self.debug_clock = clock
+        self.debug_records = tank_records
         self._start_lcd_process()
         self._start_measurement_collector()
         if pump_events:
@@ -1063,6 +1098,7 @@ class TankPiApp:
 
         try:
             while not self.stop_event.wait(1):
+                self._ensure_tank_processes_alive()
                 pass
         finally:
             self.shutdown()
