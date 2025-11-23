@@ -363,13 +363,25 @@
 
     <!-- Stack sections full width -->
     <section class="card" id="pump-card">
-      <div class="card-header">
+      <div class="card-header" style="align-items:flex-start; gap:0.5rem;">
         <div>
           <h2>Transfer Pump</h2>
           <div class="card-subtitle">Last pump cycle and estimated flow into sugar house</div>
         </div>
-        <div id="pump-warning" class="warning-tag" style="display:none;">
-          ⚠ Pump data stale
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+          <label for="pump-history-window" class="metric-note" style="white-space:nowrap;">Window</label>
+          <select id="pump-history-window" class="metric-note" style="background:rgba(0,0,0,0.25); color:var(--text-main); border:1px solid var(--card-border); border-radius:8px; padding:0.2rem 0.35rem;">
+            <option value="10800">3h</option>
+            <option value="21600" selected>6h</option>
+            <option value="43200">12h</option>
+            <option value="86400">24h</option>
+            <option value="259200">3d</option>
+            <option value="604800">7d</option>
+            <option value="1209600">14d</option>
+          </select>
+          <div id="pump-warning" class="warning-tag" style="display:none;">
+            ⚠ Pump data stale
+          </div>
         </div>
       </div>
 

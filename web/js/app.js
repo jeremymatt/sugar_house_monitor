@@ -24,6 +24,15 @@ const FLOW_HISTORY_ENDPOINT =
   window.location.pathname.includes("/sugar_house_monitor")
     ? "/sugar_house_monitor/api/flow_history.php"
     : "/api/flow_history.php";
+const FLOW_WINDOWS = {
+  "10800": "3h",
+  "21600": "6h",
+  "43200": "12h",
+  "86400": "24h",
+  "259200": "3d",
+  "604800": "7d",
+  "1209600": "14d",
+};
 
 // Flow thresholds (gph) and reserve volume (gal)
 const TANKS_FILLING_THRESHOLD = Number(window.TANKS_FILLING_THRESHOLD ?? 5);
@@ -42,7 +51,8 @@ const MONITOR_STALE_SECONDS = 150; // 2.5 minutes
 
 // How often to refetch status files (in ms)
 const FETCH_INTERVAL_MS = 1_000; // 15s
-const FLOW_HISTORY_WINDOW_SEC = 6 * 60 * 60; // 6h
+const FLOW_HISTORY_DEFAULT_SEC = 6 * 60 * 60; // 6h
+let flowHistoryWindowSec = FLOW_HISTORY_DEFAULT_SEC;
 
 // How often to recompute "seconds since last" and update the UI (in ms)
 const STALENESS_UPDATE_MS = 5_000; // 5s
@@ -199,7 +209,7 @@ async function fetchStatusFile(file) {
 }
 
 async function fetchHistory() {
-  const url = `${FLOW_HISTORY_ENDPOINT}?window_sec=${FLOW_HISTORY_WINDOW_SEC}`;
+  const url = `${FLOW_HISTORY_ENDPOINT}?window_sec=${flowHistoryWindowSec}`;
   const res = await fetch(url, { cache: "no-store" });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`HTTP ${res.status} for flow_history`);
@@ -433,7 +443,7 @@ function pruneHistory(arr, windowEndMs) {
   }
 }
 
-function drawLine(ctx, points, color, x0, x1, yMin, yMax) {
+function drawLine(ctx, points, color, x0, x1, yMin, yMax, dims) {
   if (!points.length) return;
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
@@ -441,8 +451,8 @@ function drawLine(ctx, points, color, x0, x1, yMin, yMax) {
   points.forEach((pt, idx) => {
     const xFrac = (pt.t - x0) / (x1 - x0 || 1);
     const yFrac = (pt.v - yMin) / (yMax - yMin || 1);
-    const x = xFrac * ctx.canvas.width;
-    const y = ctx.canvas.height - yFrac * ctx.canvas.height;
+    const x = dims.padLeft + xFrac * dims.plotW;
+    const y = dims.padTop + (1 - yFrac) * dims.plotH;
     if (idx === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
@@ -487,24 +497,38 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
   }
   const ctx = canvas.getContext("2d");
   const now = latestTs;
-  const start = now - HISTORY_WINDOW_MS;
+  const windowMs = flowHistoryWindowSec * 1000;
+  const start = now - windowMs;
+
+  // Layout padding for axes/labels
+  const padLeft = 52;
+  const padRight = 10;
+  const padTop = 10;
+  const padBottom = 30;
+  const plotW = canvas.width - padLeft - padRight;
+  const plotH = canvas.height - padTop - padBottom;
+
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = "#1a1f28";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Axes/grid
-  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  // Grid + labels
+  const yMin = 0;
+  const yMax = 200;
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
   ctx.lineWidth = 1;
   ctx.beginPath();
+  const yTicks = [0, 50, 100, 150, 200];
+  yTicks.forEach((val) => {
+    const frac = (val - yMin) / (yMax - yMin || 1);
+    const y = padTop + plotH - frac * plotH;
+    ctx.moveTo(padLeft, y);
+    ctx.lineTo(canvas.width - padRight, y);
+  });
   for (let i = 0; i <= 6; i++) {
-    const x = (i / 6) * canvas.width;
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, canvas.height - 24); // leave room for x-label
-  }
-  for (let j = 0; j <= 6; j++) {
-    const y = (j / 6) * (canvas.height - 24);
-    ctx.moveTo(0, y);
-    ctx.lineTo(canvas.width, y);
+    const x = padLeft + (i / 6) * plotW;
+    ctx.moveTo(x, padTop);
+    ctx.lineTo(x, padTop + plotH);
   }
   ctx.stroke();
 
@@ -512,25 +536,34 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
   ctx.fillStyle = "#a7afbf";
   ctx.font = "11px system-ui";
   ctx.textBaseline = "middle";
-  ctx.fillText("gph (0-300)", 6, 10);
+  ctx.textAlign = "right";
+  yTicks.forEach((val) => {
+    const frac = (val - yMin) / (yMax - yMin || 1);
+    const y = padTop + plotH - frac * plotH;
+    ctx.fillText(val.toString(), padLeft - 6, y);
+  });
+  ctx.save();
+  ctx.translate(12, padTop + plotH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("gph (0–200)", 0, 0);
+  ctx.restore();
+
   ctx.textBaseline = "top";
   ctx.textAlign = "center";
   const endLabel = new Date(now);
   const startLabel = new Date(start);
   const fmt = (d) =>
-    `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  ctx.fillText(fmt(startLabel), 10, canvas.height - 18);
-  ctx.fillText(fmt(endLabel), canvas.width - 30, canvas.height - 18);
-  ctx.textAlign = "right";
-  ctx.textBaseline = "middle";
-  ctx.fillText("300", canvas.width - 6, 10);
-  ctx.fillText("0", canvas.width - 6, canvas.height - 40);
-  ctx.textAlign = "start";
-  ctx.textBaseline = "bottom";
-  ctx.fillText("time (last 6h)", canvas.width / 2 - 30, canvas.height - 4);
+    `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  ctx.fillText(fmt(startLabel), padLeft + 40, canvas.height - padBottom + 6);
+  ctx.fillText(fmt(endLabel), canvas.width - padRight - 40, canvas.height - padBottom + 6);
+  ctx.textAlign = "center";
+  ctx.fillText(`time (last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"})`, padLeft + plotW / 2, canvas.height - padBottom + 6);
 
-  drawLine(ctx, pumpHistory, "#f2a93b", start, now, 0, 300);
-  drawLine(ctx, netFlowHistory, "#4caf50", start, now, 0, 300);
+  // Lines
+  drawLine(ctx, pumpHistory, "#f2a93b", start, now, yMin, yMax, { padLeft, padTop, plotW, plotH });
+  drawLine(ctx, netFlowHistory, "#4caf50", start, now, yMin, yMax, { padLeft, padTop, plotW, plotH });
 
   if ((!pumpHistory.length) && (!netFlowHistory.length)) {
     ctx.fillStyle = "#888";
@@ -540,7 +573,9 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
     return;
   }
 
-  if (note) note.textContent = "Showing last 6 hours (fixed 0–300 gph)";
+  if (note) {
+    note.textContent = `Showing last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"} (fixed 0–200 gph)`;
+  }
 }
 
 function updateGlobalStatus(staleInfo) {
@@ -706,6 +741,17 @@ function startLoops() {
 
   // Staleness recompute even if we don't refetch
   setInterval(recomputeStalenessAndRender, STALENESS_UPDATE_MS);
+
+  const windowSelect = document.getElementById("pump-history-window");
+  if (windowSelect) {
+    windowSelect.addEventListener("change", () => {
+      const val = parseInt(windowSelect.value, 10);
+      if (Number.isFinite(val)) {
+        flowHistoryWindowSec = val;
+        fetchStatusOnce();
+      }
+    });
+  }
 }
 
 document.addEventListener("DOMContentLoaded", startLoops);
