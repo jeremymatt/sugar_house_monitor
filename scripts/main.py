@@ -716,7 +716,7 @@ class TankPiApp:
                 continue
 
     def _clear_evaporator_db(self) -> None:
-        paths = {self.evaporator_db_path}
+        paths = {self.evaporator_db_path, repo_path_from_config("data/evaporator.db")}
         try:
             server_env = load_role("server")
             server_path = repo_path_from_config(server_env.get("EVAPORATOR_DB_PATH", "data/evaporator.db"))

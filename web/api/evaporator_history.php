@@ -2,7 +2,10 @@
 require_once __DIR__ . '/common.php';
 
 $env = require_server_env();
-$dbPath = resolve_repo_path($env['EVAPORATOR_DB_PATH'] ?? 'data/evaporator.db');
+if (!isset($env['EVAPORATOR_DB_PATH']) || $env['EVAPORATOR_DB_PATH'] === '') {
+    respond_error('EVAPORATOR_DB_PATH not configured on server', 500);
+}
+$dbPath = resolve_repo_path($env['EVAPORATOR_DB_PATH']);
 $db = connect_sqlite($dbPath);
 
 $minOptions = [0, 100, 200, 300, 400, 500];

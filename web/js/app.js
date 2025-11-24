@@ -205,19 +205,34 @@ function toNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
-function ensureBounds(minVal, maxVal, minOptions, maxOptions) {
+function ensureBounds(minVal, maxVal, minOptions, maxOptions, preferAdjustMin = false) {
   let min = minVal;
   let max = maxVal;
-  if (min >= max) {
-    const nextMax = maxOptions.find((opt) => opt > min);
-    if (nextMax != null) {
-      max = nextMax;
+  if (preferAdjustMin) {
+    if (max <= min) {
+      const nextMin = [...minOptions].reverse().find((opt) => opt < max);
+      if (nextMin != null) {
+        min = nextMin;
+      }
     }
-  }
-  if (max <= min) {
-    const nextMin = [...minOptions].reverse().find((opt) => opt < max);
-    if (nextMin != null) {
-      min = nextMin;
+    if (min >= max) {
+      const nextMax = maxOptions.find((opt) => opt > min);
+      if (nextMax != null) {
+        max = nextMax;
+      }
+    }
+  } else {
+    if (min >= max) {
+      const nextMax = maxOptions.find((opt) => opt > min);
+      if (nextMax != null) {
+        max = nextMax;
+      }
+    }
+    if (max <= min) {
+      const nextMin = [...minOptions].reverse().find((opt) => opt < max);
+      if (nextMin != null) {
+        min = nextMin;
+      }
     }
   }
   return { min, max };
@@ -1110,7 +1125,7 @@ function startLoops() {
       const maxRaw = Number(document.getElementById("pump-y-max")?.value);
       const min = Number.isFinite(minRaw) ? minRaw : pumpYAxisMin;
       const max = Number.isFinite(maxRaw) ? maxRaw : pumpYAxisMax;
-      const bounds = ensureBounds(min, max, PUMP_Y_MIN_OPTIONS, PUMP_Y_MAX_OPTIONS);
+      const bounds = ensureBounds(min, max, PUMP_Y_MIN_OPTIONS, PUMP_Y_MAX_OPTIONS, false);
       pumpYAxisMin = bounds.min;
       pumpYAxisMax = bounds.max;
       syncPumpControls();
@@ -1123,7 +1138,7 @@ function startLoops() {
       const maxRaw = Number(pumpMaxSel.value);
       const min = Number.isFinite(minRaw) ? minRaw : pumpYAxisMin;
       const max = Number.isFinite(maxRaw) ? maxRaw : pumpYAxisMax;
-      const bounds = ensureBounds(min, max, PUMP_Y_MIN_OPTIONS, PUMP_Y_MAX_OPTIONS);
+      const bounds = ensureBounds(min, max, PUMP_Y_MIN_OPTIONS, PUMP_Y_MAX_OPTIONS, true);
       pumpYAxisMin = bounds.min;
       pumpYAxisMax = bounds.max;
       syncPumpControls();
@@ -1141,7 +1156,7 @@ function startLoops() {
       const maxRaw = Number(document.getElementById("boiling-y-max")?.value);
       const min = Number.isFinite(minRaw) ? minRaw : evapPlotSettings.y_axis_min;
       const max = Number.isFinite(maxRaw) ? maxRaw : evapPlotSettings.y_axis_max;
-      const bounds = ensureBounds(min, max, EVAP_Y_MIN_OPTIONS, EVAP_Y_MAX_OPTIONS);
+      const bounds = ensureBounds(min, max, EVAP_Y_MIN_OPTIONS, EVAP_Y_MAX_OPTIONS, false);
       evapPlotSettings = {
         ...evapPlotSettings,
         y_axis_min: bounds.min,
@@ -1169,7 +1184,7 @@ function startLoops() {
       const maxRaw = Number(evapMaxSel.value);
       const min = Number.isFinite(minRaw) ? minRaw : evapPlotSettings.y_axis_min;
       const max = Number.isFinite(maxRaw) ? maxRaw : evapPlotSettings.y_axis_max;
-      const bounds = ensureBounds(min, max, EVAP_Y_MIN_OPTIONS, EVAP_Y_MAX_OPTIONS);
+      const bounds = ensureBounds(min, max, EVAP_Y_MIN_OPTIONS, EVAP_Y_MAX_OPTIONS, true);
       evapPlotSettings = {
         ...evapPlotSettings,
         y_axis_min: bounds.min,

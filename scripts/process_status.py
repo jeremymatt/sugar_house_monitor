@@ -405,6 +405,7 @@ def main() -> None:
             "STATUS_JSON_PATH",
             "TANK_CAPACITY_BROOKSIDE",
             "TANK_CAPACITY_ROADSIDE",
+            "EVAPORATOR_DB_PATH",
         ],
     )
     tank_capacity = {
@@ -414,7 +415,7 @@ def main() -> None:
 
     tank_conn = open_db(repo_path_from_config(env["TANK_DB_PATH"]))
     pump_conn = open_db(repo_path_from_config(env["PUMP_DB_PATH"]))
-    evap_conn = open_db(repo_path_from_config(env.get("EVAPORATOR_DB_PATH", "data/evaporator.db")))
+    evap_conn = open_db(repo_path_from_config(env["EVAPORATOR_DB_PATH"]))
     vacuum_db_path = repo_path_from_config(env.get("VACUUM_DB_PATH", env["PUMP_DB_PATH"]))
     vacuum_conn = open_db(vacuum_db_path)
     ensure_evap_tables(evap_conn)
