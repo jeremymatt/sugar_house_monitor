@@ -296,6 +296,16 @@
     a:hover {
       text-decoration: underline;
     }
+
+    .boiling-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    @media (max-width: 900px) {
+      .boiling-grid {
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      }
+    }
   </style>
 </head>
 <body>
@@ -402,7 +412,7 @@
         <div class="metric-note" id="boiling-history-note">Showing last 2 hours</div>
       </div>
 
-      <div class="grid">
+      <div class="grid boiling-grid">
         <div class="metric">
           <span class="metric-label">Evaporator Flow</span>
           <span class="metric-value" id="boiling-evap-flow">–</span>

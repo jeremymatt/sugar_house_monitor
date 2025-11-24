@@ -765,6 +765,15 @@ class TankPiApp:
             }
             self._write_status_file(self.vacuum_status_path, vacuum_placeholder)
 
+        monitor_path = self.status_dir / "status_monitor.json"
+        if not monitor_path.exists():
+            monitor_placeholder = {
+                "generated_at": timestamp,
+                "tank_monitor_last_received_at": None,
+                "pump_monitor_last_received_at": None,
+            }
+            self._write_status_file(monitor_path, monitor_placeholder)
+
     def _write_status_file(self, path: Path, payload: Dict) -> None:
         tmp = path.with_suffix(path.suffix + ".tmp")
         path.parent.mkdir(parents=True, exist_ok=True)

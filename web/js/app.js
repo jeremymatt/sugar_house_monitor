@@ -99,6 +99,7 @@ let evapPlotSettings = {
 };
 let pumpYAxisMin = PUMP_Y_MIN_OPTIONS[0];
 let pumpYAxisMax = PUMP_Y_MAX_OPTIONS[3]; // default 200
+let evapSettingsPending = null;
 
 // ---- UTILITIES ----
 
@@ -237,6 +238,15 @@ function formatTankName(name) {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+function settingsEqual(a, b) {
+  if (!a || !b) return false;
+  return (
+    Number(a.y_axis_min) === Number(b.y_axis_min) &&
+    Number(a.y_axis_max) === Number(b.y_axis_max) &&
+    Number(a.window_sec) === Number(b.window_sec)
+  );
+}
+
 function syncEvapControls() {
   const bounds = ensureBounds(
     evapPlotSettings.y_axis_min,
@@ -371,11 +381,17 @@ function applyEvapHistoryResponse(resp) {
     return;
   }
   if (resp.settings) {
-    evapPlotSettings = coerceEvapSettings(resp.settings);
+    const incoming = coerceEvapSettings(resp.settings);
+    if (!evapSettingsPending || settingsEqual(incoming, evapSettingsPending)) {
+      evapPlotSettings = incoming;
+      evapSettingsPending = null;
+    }
   }
   if (resp.window_sec_used && Number.isFinite(resp.window_sec_used)) {
-    evapHistoryWindowSec = resp.window_sec_used;
-  } else if (evapPlotSettings.window_sec) {
+    if (!evapSettingsPending || resp.window_sec_used === evapSettingsPending.window_sec) {
+      evapHistoryWindowSec = resp.window_sec_used;
+    }
+  } else if (evapPlotSettings.window_sec && (!evapSettingsPending || evapPlotSettings.window_sec === evapSettingsPending.window_sec)) {
     evapHistoryWindowSec = evapPlotSettings.window_sec;
   }
 
@@ -1015,9 +1031,13 @@ async function fetchStatusOnce() {
     latestMonitor = monitor;
     latestEvaporator = evapStatus || latestEvaporator;
     if (evapStatus?.plot_settings) {
-      evapPlotSettings = coerceEvapSettings(evapStatus.plot_settings);
-      if (evapPlotSettings.window_sec) {
-        evapHistoryWindowSec = evapPlotSettings.window_sec;
+      const incoming = coerceEvapSettings(evapStatus.plot_settings);
+      if (!evapSettingsPending || settingsEqual(incoming, evapSettingsPending)) {
+        evapPlotSettings = incoming;
+        if (evapPlotSettings.window_sec) {
+          evapHistoryWindowSec = evapPlotSettings.window_sec;
+        }
+        evapSettingsPending = null;
       }
     }
     applyEvapHistoryResponse(evapHistoryResp);
@@ -1127,6 +1147,7 @@ function startLoops() {
         y_axis_min: bounds.min,
         y_axis_max: bounds.max,
       };
+      evapSettingsPending = { ...evapPlotSettings, window_sec: evapHistoryWindowSec };
       syncEvapControls();
       updateEvapHistoryChart();
       const saved = await persistEvapSettings({
@@ -1136,6 +1157,9 @@ function startLoops() {
       if (saved?.settings) {
         evapPlotSettings = coerceEvapSettings(saved.settings);
         syncEvapControls();
+        if (settingsEqual(evapPlotSettings, saved.settings)) {
+          evapSettingsPending = null;
+        }
       }
     });
   }
@@ -1151,6 +1175,7 @@ function startLoops() {
         y_axis_min: bounds.min,
         y_axis_max: bounds.max,
       };
+      evapSettingsPending = { ...evapPlotSettings, window_sec: evapHistoryWindowSec };
       syncEvapControls();
       updateEvapHistoryChart();
       const saved = await persistEvapSettings({
@@ -1160,6 +1185,9 @@ function startLoops() {
       if (saved?.settings) {
         evapPlotSettings = coerceEvapSettings(saved.settings);
         syncEvapControls();
+        if (settingsEqual(evapPlotSettings, saved.settings)) {
+          evapSettingsPending = null;
+        }
       }
     });
   }
@@ -1169,6 +1197,7 @@ function startLoops() {
       if (!Number.isFinite(val)) return;
       evapHistoryWindowSec = val;
       evapPlotSettings = { ...evapPlotSettings, window_sec: val };
+      evapSettingsPending = { ...evapPlotSettings };
       syncEvapControls();
       updateEvapHistoryChart();
       const saved = await persistEvapSettings({
@@ -1178,6 +1207,9 @@ function startLoops() {
       if (saved?.settings) {
         evapPlotSettings = coerceEvapSettings(saved.settings);
         syncEvapControls();
+        if (settingsEqual(evapPlotSettings, saved.settings)) {
+          evapSettingsPending = null;
+        }
       }
       const resp = await fetchEvaporatorHistory(val);
       applyEvapHistoryResponse(resp);
