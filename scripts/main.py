@@ -650,25 +650,33 @@ class TankPiApp:
         if not self.debug_enabled:
             return
         LOGGER.info("Resetting local DB/state for debug replay")
+        self._reset_server_datastore()
         self.db.reset()
         self._clear_evaporator_db()
         self._clear_status_files()
         self._ensure_status_placeholders()
         self.reset_server_state()
-        self._reset_server_datastore()
 
     def _reset_server_datastore(self) -> None:
+        """
+        Tell the WordPress/server side to clear its DBs when debug starts.
+        Uses the API_BASE_URL/API_KEY already present in the tank_pi env.
+        """
         api_base = self.env.get("API_BASE_URL")
         api_key = self.env.get("API_KEY")
         if not api_base or not api_key:
-            LOGGER.warning("Skipping server reset: API_BASE_URL or API_KEY missing")
+            LOGGER.warning("Skipping remote reset: API_BASE_URL or API_KEY missing")
             return
-        try:
-            url = build_url(api_base, "reset.php")
-            post_json(url, {}, api_key)
-            LOGGER.info("Reset remote server datastore via API")
-        except Exception as exc:  # pylint: disable=broad-except
-            LOGGER.warning("Failed to reset server datastore: %s", exc)
+        url = build_url(api_base, "reset.php")
+        for attempt in range(1, 4):
+            try:
+                post_json(url, {}, api_key)
+                LOGGER.info("Remote server datastore reset via %s (attempt %s)", url, attempt)
+                return
+            except Exception as exc:  # pylint: disable=broad-except
+                LOGGER.warning("Remote reset failed (attempt %s): %s", attempt, exc)
+                time.sleep(0.5)
+        LOGGER.error("Remote reset failed after retries; continuing with local reset")
 
     def _build_measurement_params(self):
         return (
@@ -729,16 +737,6 @@ class TankPiApp:
 
     def _clear_evaporator_db(self) -> None:
         paths = {self.evaporator_db_path, repo_path_from_config("data/evaporator.db")}
-        # Try to include server path if available so debug reset mirrors other DB resets.
-        try:
-            server_env = load_role("server")
-            server_path = repo_path_from_config(
-                server_env.get("EVAPORATOR_DB_PATH", "data/evaporator.db")
-            )
-            paths.add(server_path)
-        except Exception:
-            pass
-
         for path in paths:
             # Remove main DB plus WAL/SHM if present, mirroring TankDatabase.reset behavior.
             for candidate in [path, path.with_suffix(path.suffix + "-wal"), path.with_suffix(path.suffix + "-shm")]:
@@ -831,7 +829,7 @@ class TankPiApp:
                 tank_name,
             )
         proc = None
-        for attempt in (1, 2):
+        for attempt in range(1, 6):
             proc = Process(
                 target=TVF.run_tank_controller,
                 args=(tank_name, TVF.queue_dict, measurement_params),
@@ -847,7 +845,7 @@ class TankPiApp:
                 daemon=True,
             )
             proc.start()
-            time.sleep(0.2)
+            time.sleep(0.5)
             if proc.is_alive():
                 break
             LOGGER.warning(
