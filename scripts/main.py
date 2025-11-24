@@ -717,19 +717,23 @@ class TankPiApp:
 
     def _clear_evaporator_db(self) -> None:
         paths = {self.evaporator_db_path, repo_path_from_config("data/evaporator.db")}
+        # Try to include server path if available so debug reset mirrors other DB resets.
         try:
             server_env = load_role("server")
-            server_path = repo_path_from_config(server_env.get("EVAPORATOR_DB_PATH", "data/evaporator.db"))
+            server_path = repo_path_from_config(
+                server_env.get("EVAPORATOR_DB_PATH", "data/evaporator.db")
+            )
             paths.add(server_path)
         except Exception:
-            # It's okay if server env isn't available on this host.
             pass
 
         for path in paths:
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                continue
+            # Remove main DB plus WAL/SHM if present, mirroring TankDatabase.reset behavior.
+            for candidate in [path, path.with_suffix(path.suffix + "-wal"), path.with_suffix(path.suffix + "-shm")]:
+                try:
+                    candidate.unlink()
+                except FileNotFoundError:
+                    continue
 
     def _ensure_status_placeholders(self) -> None:
         """Create empty status files so local HTTP requests do not 404 before data arrives."""
