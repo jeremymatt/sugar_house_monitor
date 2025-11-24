@@ -7,6 +7,7 @@ ensure_api_key($env);
 
 $tankPath = resolve_repo_path($env['TANK_DB_PATH']);
 $pumpPath = resolve_repo_path($env['PUMP_DB_PATH']);
+$evapPath = resolve_repo_path($env['EVAPORATOR_DB_PATH'] ?? 'data/evaporator.db');
 $statusPath = resolve_repo_path($env['STATUS_JSON_PATH']);
 
 function safe_unlink(string $path): void {
@@ -15,8 +16,15 @@ function safe_unlink(string $path): void {
     }
 }
 
-safe_unlink($tankPath);
-safe_unlink($pumpPath);
+function safe_unlink_sqlite(string $basePath): void {
+    safe_unlink($basePath);
+    safe_unlink($basePath . '-wal');
+    safe_unlink($basePath . '-shm');
+}
+
+safe_unlink_sqlite($tankPath);
+safe_unlink_sqlite($pumpPath);
+safe_unlink_sqlite($evapPath);
 
 if (file_exists($statusPath)) {
     file_put_contents($statusPath, json_encode([
@@ -24,6 +32,11 @@ if (file_exists($statusPath)) {
         'tanks' => new stdClass(),
         'pump' => null,
     ], JSON_PRETTY_PRINT));
+}
+
+// Clear derived status JSON files to avoid stale displays.
+foreach (glob(dirname($statusPath) . '/status_*.json') as $file) {
+    safe_unlink($file);
 }
 
 respond_json(['status' => 'ok', 'message' => 'Server state reset']);

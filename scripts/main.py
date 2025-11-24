@@ -655,6 +655,20 @@ class TankPiApp:
         self._clear_status_files()
         self._ensure_status_placeholders()
         self.reset_server_state()
+        self._reset_server_datastore()
+
+    def _reset_server_datastore(self) -> None:
+        api_base = self.env.get("API_BASE_URL")
+        api_key = self.env.get("API_KEY")
+        if not api_base or not api_key:
+            LOGGER.warning("Skipping server reset: API_BASE_URL or API_KEY missing")
+            return
+        try:
+            url = build_url(api_base, "reset.php")
+            post_json(url, {}, api_key)
+            LOGGER.info("Reset remote server datastore via API")
+        except Exception as exc:  # pylint: disable=broad-except
+            LOGGER.warning("Failed to reset server datastore: %s", exc)
 
     def _build_measurement_params(self):
         return (
