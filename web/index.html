@@ -324,6 +324,11 @@
 
       <div class="overview-grid">
         <div class="metric">
+          <span class="metric-label">Vacuum</span>
+          <span class="metric-value" id="vacuum-reading">–</span>
+          <span class="metric-note">Debug values until sensor online</span>
+        </div>
+        <div class="metric">
           <span class="metric-label">Total sap</span>
           <span class="metric-value" id="overview-total-gallons">–</span>
           <span class="metric-note">Brookside + Roadside</span>
@@ -339,16 +344,6 @@
           <span class="metric-note" id="overview-overflow-eta">---</span>
         </div>
         <div class="metric">
-          <span class="metric-label">Last fire in</span>
-          <span class="metric-value" id="overview-last-fire-time">---</span>
-          <span class="metric-note" id="overview-last-fire-eta">---</span>
-        </div>
-        <div class="metric">
-          <span class="metric-label">Vacuum</span>
-          <span class="metric-value" id="vacuum-reading">–</span>
-          <span class="metric-note">Debug values until sensor online</span>
-        </div>
-        <div class="metric">
           <span class="metric-label">Tank Monitor</span>
           <span class="metric-value" id="monitor-tank-status">–</span>
           <span class="metric-note" id="monitor-tank-note">Awaiting heartbeat</span>
@@ -361,6 +356,76 @@
       </div>
     </section>
 
+    <!-- Boiling status -->
+    <section class="card" id="boiling-card">
+      <div class="card-header" style="align-items:flex-start; gap:0.5rem; flex-wrap:wrap;">
+        <div>
+          <h2>Boiling Status</h2>
+          <div class="card-subtitle">Evaporator flow and draw/pump sources</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+          <label for="boiling-history-window" class="metric-note" style="white-space:nowrap;">Window</label>
+          <select id="boiling-history-window" class="metric-note" style="background:rgba(0,0,0,0.25); color:var(--text-main); border:1px solid var(--card-border); border-radius:8px; padding:0.2rem 0.35rem;">
+            <option value="3600">1h</option>
+            <option value="7200" selected>2h</option>
+            <option value="14400">4h</option>
+            <option value="21600">6h</option>
+            <option value="28800">8h</option>
+            <option value="43200">12h</option>
+          </select>
+          <label for="boiling-y-min" class="metric-note" style="white-space:nowrap;">Y-min</label>
+          <select id="boiling-y-min" class="metric-note" style="background:rgba(0,0,0,0.25); color:var(--text-main); border:1px solid var(--card-border); border-radius:8px; padding:0.2rem 0.35rem;">
+            <option value="0">0</option>
+            <option value="100">100</option>
+            <option value="200" selected>200</option>
+            <option value="300">300</option>
+            <option value="400">400</option>
+            <option value="500">500</option>
+          </select>
+          <label for="boiling-y-max" class="metric-note" style="white-space:nowrap;">Y-max</label>
+          <select id="boiling-y-max" class="metric-note" style="background:rgba(0,0,0,0.25); color:var(--text-main); border:1px solid var(--card-border); border-radius:8px; padding:0.2rem 0.35rem;">
+            <option value="100">100</option>
+            <option value="200">200</option>
+            <option value="300">300</option>
+            <option value="400">400</option>
+            <option value="500">500</option>
+            <option value="600" selected>600</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="chart-container">
+        <div class="chart-legend">
+          <span class="legend-item"><span class="legend-swatch" style="background:#f2a93b;"></span>Evaporator</span>
+        </div>
+        <canvas id="boiling-history-canvas" width="600" height="220" aria-label="Evaporator flow history" style="width:100%; height:240px;"></canvas>
+        <div class="metric-note" id="boiling-history-note">Showing last 2 hours</div>
+      </div>
+
+      <div class="grid">
+        <div class="metric">
+          <span class="metric-label">Evaporator Flow</span>
+          <span class="metric-value" id="boiling-evap-flow">–</span>
+          <span class="metric-note" id="boiling-evap-ts">Time: –</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Last fire in</span>
+          <span class="metric-value" id="boiling-last-fire-time">---</span>
+          <span class="metric-note" id="boiling-last-fire-eta">---</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Draw Off</span>
+          <span class="metric-value" id="boiling-draw-off">---</span>
+          <span class="metric-note" id="boiling-draw-off-flow">Flow: –</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Pump In</span>
+          <span class="metric-value" id="boiling-pump-in">---</span>
+          <span class="metric-note" id="boiling-pump-in-flow">Flow: –</span>
+        </div>
+      </div>
+    </section>
+
     <!-- Stack sections full width -->
     <section class="card" id="pump-card">
       <div class="card-header" style="align-items:flex-start; gap:0.5rem;">
@@ -368,7 +433,7 @@
           <h2>Transfer Pump</h2>
           <div class="card-subtitle">Last pump cycle and estimated flow into sugar house</div>
         </div>
-        <div style="display:flex; align-items:center; gap:0.5rem;">
+        <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
           <label for="pump-history-window" class="metric-note" style="white-space:nowrap;">Window</label>
           <select id="pump-history-window" class="metric-note" style="background:rgba(0,0,0,0.25); color:var(--text-main); border:1px solid var(--card-border); border-radius:8px; padding:0.2rem 0.35rem;">
             <option value="10800">3h</option>
@@ -378,6 +443,24 @@
             <option value="259200">3d</option>
             <option value="604800">7d</option>
             <option value="1209600">14d</option>
+          </select>
+          <label for="pump-y-min" class="metric-note" style="white-space:nowrap;">Y-min</label>
+          <select id="pump-y-min" class="metric-note" style="background:rgba(0,0,0,0.25); color:var(--text-main); border:1px solid var(--card-border); border-radius:8px; padding:0.2rem 0.35rem;">
+            <option value="0" selected>0</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="150">150</option>
+            <option value="200">200</option>
+            <option value="250">250</option>
+          </select>
+          <label for="pump-y-max" class="metric-note" style="white-space:nowrap;">Y-max</label>
+          <select id="pump-y-max" class="metric-note" style="background:rgba(0,0,0,0.25); color:var(--text-main); border:1px solid var(--card-border); border-radius:8px; padding:0.2rem 0.35rem;">
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="150">150</option>
+            <option value="200" selected>200</option>
+            <option value="300">300</option>
+            <option value="500">500</option>
           </select>
           <div id="pump-warning" class="warning-tag" style="display:none;">
             ⚠ Pump data stale

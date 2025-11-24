@@ -17,6 +17,7 @@ const TANK_STATUS_FILES = {
   roadside: "status_roadside.json"
 };
 const PUMP_STATUS_FILE = "status_pump.json";
+const EVAP_STATUS_FILE = "status_evaporator.json";
 const VACUUM_STATUS_FILE = "status_vacuum.json";
 const MONITOR_STATUS_FILE = "status_monitor.json";
 const FLOW_HISTORY_ENDPOINT =
@@ -24,6 +25,11 @@ const FLOW_HISTORY_ENDPOINT =
   window.location.pathname.includes("/sugar_house_monitor")
     ? "/sugar_house_monitor/api/flow_history.php"
     : "/api/flow_history.php";
+const EVAP_HISTORY_ENDPOINT =
+  window.location.hostname.includes("mattsmaplesyrup.com") ||
+  window.location.pathname.includes("/sugar_house_monitor")
+    ? "/sugar_house_monitor/api/evaporator_history.php"
+    : "/api/evaporator_history.php";
 const FLOW_WINDOWS = {
   "10800": "3h",
   "21600": "6h",
@@ -33,6 +39,18 @@ const FLOW_WINDOWS = {
   "604800": "7d",
   "1209600": "14d",
 };
+const EVAP_WINDOWS = {
+  "3600": "1h",
+  "7200": "2h",
+  "14400": "4h",
+  "21600": "6h",
+  "28800": "8h",
+  "43200": "12h",
+};
+const EVAP_Y_MIN_OPTIONS = [0, 100, 200, 300, 400, 500];
+const EVAP_Y_MAX_OPTIONS = [100, 200, 300, 400, 500, 600];
+const PUMP_Y_MIN_OPTIONS = [0, 50, 100, 150, 200, 250];
+const PUMP_Y_MAX_OPTIONS = [50, 100, 150, 200, 300, 500];
 
 // Flow thresholds (gph) and reserve volume (gal)
 const TANKS_FILLING_THRESHOLD = Number(window.TANKS_FILLING_THRESHOLD ?? 5);
@@ -53,6 +71,8 @@ const MONITOR_STALE_SECONDS = 150; // 2.5 minutes
 const FETCH_INTERVAL_MS = 1_000; // 15s
 const FLOW_HISTORY_DEFAULT_SEC = 6 * 60 * 60; // 6h
 let flowHistoryWindowSec = FLOW_HISTORY_DEFAULT_SEC;
+const EVAP_HISTORY_DEFAULT_SEC = 2 * 60 * 60; // 2h
+let evapHistoryWindowSec = EVAP_HISTORY_DEFAULT_SEC;
 
 // How often to recompute "seconds since last" and update the UI (in ms)
 const STALENESS_UPDATE_MS = 5_000; // 5s
@@ -61,6 +81,7 @@ const STALENESS_UPDATE_MS = 5_000; // 5s
 
 let latestTanks = { brookside: null, roadside: null };
 let latestPump = null;
+let latestEvaporator = null;
 let latestVacuum = null;
 let latestMonitor = null;
 let lastGeneratedAt = null;
@@ -68,8 +89,16 @@ let lastFetchError = false;
 let lastPumpFlow = null;
 const pumpHistory = [];
 const netFlowHistory = [];
+let evapHistory = [];
 const HISTORY_WINDOW_MS = 6 * 60 * 60 * 1000; // 6 hours
 const HISTORY_MIN_SPACING_MS = 30 * 1000; // throttle points every 30s unless value changes
+let evapPlotSettings = {
+  y_axis_min: 200,
+  y_axis_max: 600,
+  window_sec: EVAP_HISTORY_DEFAULT_SEC,
+};
+let pumpYAxisMin = PUMP_Y_MIN_OPTIONS[0];
+let pumpYAxisMax = PUMP_Y_MAX_OPTIONS[3]; // default 200
 
 // ---- UTILITIES ----
 
@@ -175,6 +204,69 @@ function toNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function ensureBounds(minVal, maxVal, minOptions, maxOptions) {
+  let min = minVal;
+  let max = maxVal;
+  if (min >= max) {
+    const nextMax = maxOptions.find((opt) => opt > min);
+    if (nextMax != null) {
+      max = nextMax;
+    }
+  }
+  if (max <= min) {
+    const nextMin = [...minOptions].reverse().find((opt) => opt < max);
+    if (nextMin != null) {
+      min = nextMin;
+    }
+  }
+  return { min, max };
+}
+
+function buildTicks(min, max, segments = 4) {
+  const step = (max - min) / segments;
+  const ticks = [];
+  for (let i = 0; i <= segments; i += 1) {
+    const val = min + step * i;
+    ticks.push(Math.round(val));
+  }
+  return ticks;
+}
+
+function formatTankName(name) {
+  if (!name || name === "---") return "---";
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+function syncEvapControls() {
+  const bounds = ensureBounds(
+    evapPlotSettings.y_axis_min,
+    evapPlotSettings.y_axis_max,
+    EVAP_Y_MIN_OPTIONS,
+    EVAP_Y_MAX_OPTIONS
+  );
+  evapPlotSettings = {
+    ...evapPlotSettings,
+    y_axis_min: bounds.min,
+    y_axis_max: bounds.max,
+  };
+  const minSel = document.getElementById("boiling-y-min");
+  const maxSel = document.getElementById("boiling-y-max");
+  const windowSel = document.getElementById("boiling-history-window");
+  if (minSel) minSel.value = String(evapPlotSettings.y_axis_min);
+  if (maxSel) maxSel.value = String(evapPlotSettings.y_axis_max);
+  if (windowSel) windowSel.value = String(evapHistoryWindowSec);
+}
+
+function syncPumpControls() {
+  const bounds = ensureBounds(pumpYAxisMin, pumpYAxisMax, PUMP_Y_MIN_OPTIONS, PUMP_Y_MAX_OPTIONS);
+  pumpYAxisMin = bounds.min;
+  pumpYAxisMax = bounds.max;
+  const minSel = document.getElementById("pump-y-min");
+  const maxSel = document.getElementById("pump-y-max");
+  if (minSel) minSel.value = String(pumpYAxisMin);
+  if (maxSel) maxSel.value = String(pumpYAxisMax);
+}
+
 function derivePumpStatus(evtType) {
   if (!evtType) return "Unknown";
   if (typeof evtType === "string" && evtType.toLowerCase() === "pump stop") {
@@ -220,6 +312,86 @@ async function fetchHistory() {
   } catch (err) {
     console.warn("Failed to parse flow_history:", err);
     return null;
+  }
+}
+
+async function fetchEvaporatorHistory(windowOverrideSec) {
+  const windowParam = windowOverrideSec ?? evapHistoryWindowSec;
+  const url = `${EVAP_HISTORY_ENDPOINT}?window_sec=${windowParam}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`HTTP ${res.status} for evaporator_history`);
+  const text = await res.text();
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    console.warn("Failed to parse evaporator_history:", err);
+    return null;
+  }
+}
+
+async function persistEvapSettings(settings) {
+  try {
+    const res = await fetch(EVAP_HISTORY_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        y_axis_min: settings.y_axis_min,
+        y_axis_max: settings.y_axis_max,
+        window_sec: settings.window_sec,
+      }),
+    });
+    if (!res.ok) {
+      console.warn("Failed to persist evaporator settings:", res.status);
+      return null;
+    }
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    console.warn("Persist evaporator settings error:", err);
+    return null;
+  }
+}
+
+function coerceEvapSettings(raw) {
+  if (!raw) return { ...evapPlotSettings };
+  const yMin = toNumber(raw.y_axis_min);
+  const yMax = toNumber(raw.y_axis_max);
+  const windowSec = parseInt(raw.window_sec, 10);
+  return {
+    y_axis_min: yMin ?? evapPlotSettings.y_axis_min,
+    y_axis_max: yMax ?? evapPlotSettings.y_axis_max,
+    window_sec: Number.isFinite(windowSec) ? windowSec : evapPlotSettings.window_sec,
+  };
+}
+
+function applyEvapHistoryResponse(resp) {
+  if (!resp) {
+    return;
+  }
+  if (resp.settings) {
+    evapPlotSettings = coerceEvapSettings(resp.settings);
+  }
+  if (resp.window_sec_used && Number.isFinite(resp.window_sec_used)) {
+    evapHistoryWindowSec = resp.window_sec_used;
+  } else if (evapPlotSettings.window_sec) {
+    evapHistoryWindowSec = evapPlotSettings.window_sec;
+  }
+
+  if (Array.isArray(resp.history)) {
+    evapHistory = resp.history
+      .map((p) => {
+        const t = msFromIso(p.ts);
+        const v = toNumber(p.evaporator_flow_gph);
+        if (t == null || v == null) return null;
+        return { t, v };
+      })
+      .filter((p) => p != null);
+  }
+
+  if (resp.latest && !latestEvaporator) {
+    latestEvaporator = resp.latest;
   }
 }
 
@@ -311,6 +483,38 @@ function updatePumpCard(pumpData, staleSec, thresholdSec) {
   }
 }
 
+function updateBoilingCard(evapData, overview) {
+  const flowElem = document.getElementById("boiling-evap-flow");
+  const tsElem = document.getElementById("boiling-evap-ts");
+  const drawOffElem = document.getElementById("boiling-draw-off");
+  const drawOffFlowElem = document.getElementById("boiling-draw-off-flow");
+  const pumpInElem = document.getElementById("boiling-pump-in");
+  const pumpInFlowElem = document.getElementById("boiling-pump-in-flow");
+  const lastFireElem = document.getElementById("boiling-last-fire-time");
+  const lastFireEtaElem = document.getElementById("boiling-last-fire-eta");
+
+  const evapFlow = toNumber(evapData?.evaporator_flow_gph);
+  if (flowElem) flowElem.textContent = formatFlowGph(evapFlow);
+  if (tsElem) tsElem.textContent = evapData?.sample_timestamp ? `Time: ${formatDateTime(evapData.sample_timestamp)}` : "Time: –";
+
+  if (drawOffElem) drawOffElem.textContent = formatTankName(evapData?.draw_off_tank);
+  if (drawOffFlowElem) drawOffFlowElem.textContent = `Flow: ${formatFlowGph(toNumber(evapData?.draw_off_flow_gph))}`;
+
+  if (pumpInElem) pumpInElem.textContent = formatTankName(evapData?.pump_in_tank);
+  if (pumpInFlowElem) pumpInFlowElem.textContent = `Flow: ${formatFlowGph(toNumber(evapData?.pump_in_flow_gph))}`;
+
+  if (overview) {
+    if (lastFireElem) lastFireElem.textContent = formatDurationHhMm(overview.lastFireMinutes);
+    if (lastFireEtaElem) {
+      const eta = formatProjectedTime(overview.lastFireMinutes, lastGeneratedAt);
+      lastFireEtaElem.textContent = eta !== "---" ? `${eta} (${RESERVE_GALLONS} gal reserve)` : "---";
+    }
+  } else {
+    if (lastFireElem) lastFireElem.textContent = "---";
+    if (lastFireEtaElem) lastFireEtaElem.textContent = "---";
+  }
+}
+
 function computeOverviewSummary() {
   const brookside = latestTanks.brookside;
   const roadside = latestTanks.roadside;
@@ -361,8 +565,6 @@ function updateOverviewCard(summary, vacuumData) {
   const netFlowElem = document.getElementById("overview-net-flow");
   const overflowTimeElem = document.getElementById("overview-overflow-time");
   const overflowEtaElem = document.getElementById("overview-overflow-eta");
-  const lastFireTimeElem = document.getElementById("overview-last-fire-time");
-  const lastFireEtaElem = document.getElementById("overview-last-fire-eta");
   const reserveElem = document.getElementById("overview-reserve");
   const vacReadingElem = document.getElementById("vacuum-reading");
   if (reserveElem) reserveElem.textContent = `${RESERVE_GALLONS} gal`;
@@ -372,18 +574,11 @@ function updateOverviewCard(summary, vacuumData) {
     if (netFlowElem) netFlowElem.textContent = "–";
     if (overflowTimeElem) overflowTimeElem.textContent = "---";
     if (overflowEtaElem) overflowEtaElem.textContent = "---";
-    if (lastFireTimeElem) lastFireTimeElem.textContent = "---";
-    if (lastFireEtaElem) lastFireEtaElem.textContent = `--- (${RESERVE_GALLONS} gal reserve)`;
   } else {
     if (totalElem) totalElem.textContent = formatVolumeGal(summary.totalGallons);
     if (netFlowElem) netFlowElem.textContent = formatFlowGph(summary.netFlow);
     if (overflowTimeElem) overflowTimeElem.textContent = formatDurationHhMm(summary.overflowMinutes);
     if (overflowEtaElem) overflowEtaElem.textContent = formatProjectedTime(summary.overflowMinutes, lastGeneratedAt);
-    if (lastFireTimeElem) lastFireTimeElem.textContent = formatDurationHhMm(summary.lastFireMinutes);
-    if (lastFireEtaElem) {
-      const eta = formatProjectedTime(summary.lastFireMinutes, lastGeneratedAt);
-      lastFireEtaElem.textContent = `${eta} (${RESERVE_GALLONS} gal reserve)`;
-    }
   }
 
   const vacVal = toNumber(vacuumData?.reading_inhg);
@@ -499,6 +694,9 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
   const now = latestTs;
   const windowMs = flowHistoryWindowSec * 1000;
   const start = now - windowMs;
+  const bounds = ensureBounds(pumpYAxisMin, pumpYAxisMax, PUMP_Y_MIN_OPTIONS, PUMP_Y_MAX_OPTIONS);
+  pumpYAxisMin = bounds.min;
+  pumpYAxisMax = bounds.max;
 
   // Layout padding for axes/labels
   const padLeft = 52;
@@ -513,12 +711,12 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   // Grid + labels
-  const yMin = 0;
-  const yMax = 200;
+  const yMin = pumpYAxisMin;
+  const yMax = pumpYAxisMax;
   ctx.strokeStyle = "rgba(255,255,255,0.12)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  const yTicks = [0, 50, 100, 150, 200];
+  const yTicks = buildTicks(yMin, yMax);
   yTicks.forEach((val) => {
     const frac = (val - yMin) / (yMax - yMin || 1);
     const y = padTop + plotH - frac * plotH;
@@ -547,7 +745,7 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
   ctx.rotate(-Math.PI / 2);
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.fillText("gph (0–200)", 0, 0);
+  ctx.fillText("gph", 0, 0);
   ctx.restore();
 
   ctx.textBaseline = "top";
@@ -569,15 +767,127 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
     ctx.fillStyle = "#888";
     ctx.font = "12px sans-serif";
     ctx.fillText("No flow data yet", 10, 20);
-    if (note) note.textContent = "Showing last 6 hours";
+    if (note) note.textContent = `Showing last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"}`;
     return;
   }
 
   if (note) {
-    note.textContent = `Showing last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"} (fixed 0–200 gph)`;
+    note.textContent = `Showing last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"}`;
   }
 }
 
+function updateEvapHistoryChart() {
+  const canvas = document.getElementById("boiling-history-canvas");
+  const note = document.getElementById("boiling-history-note");
+  if (!canvas) return;
+
+  if (!evapHistory.length) {
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#1a1f28";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#888";
+    ctx.font = "12px sans-serif";
+    ctx.fillText("No evaporator data yet", 10, 20);
+    if (note) note.textContent = `Showing last ${EVAP_WINDOWS[evapHistoryWindowSec.toString()] || "window"}`;
+    return;
+  }
+
+  const latestTs = evapHistory[evapHistory.length - 1].t;
+  const windowMs = evapHistoryWindowSec * 1000;
+  const start = latestTs - windowMs;
+  const filtered = evapHistory.filter((pt) => pt.t >= start);
+  const bounds = ensureBounds(
+    evapPlotSettings.y_axis_min,
+    evapPlotSettings.y_axis_max,
+    EVAP_Y_MIN_OPTIONS,
+    EVAP_Y_MAX_OPTIONS
+  );
+  evapPlotSettings = {
+    ...evapPlotSettings,
+    y_axis_min: bounds.min,
+    y_axis_max: bounds.max,
+  };
+
+  const desiredWidth = canvas.clientWidth || canvas.width || 600;
+  if (canvas.width !== desiredWidth) {
+    canvas.width = desiredWidth;
+  }
+  const ctx = canvas.getContext("2d");
+  const padLeft = 52;
+  const padRight = 10;
+  const padTop = 10;
+  const padBottom = 30;
+  const plotW = canvas.width - padLeft - padRight;
+  const plotH = canvas.height - padTop - padBottom;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#1a1f28";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const yMin = evapPlotSettings.y_axis_min;
+  const yMax = evapPlotSettings.y_axis_max;
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  const yTicks = buildTicks(yMin, yMax);
+  yTicks.forEach((val) => {
+    const frac = (val - yMin) / (yMax - yMin || 1);
+    const y = padTop + plotH - frac * plotH;
+    ctx.moveTo(padLeft, y);
+    ctx.lineTo(canvas.width - padRight, y);
+  });
+  for (let i = 0; i <= 6; i++) {
+    const x = padLeft + (i / 6) * plotW;
+    ctx.moveTo(x, padTop);
+    ctx.lineTo(x, padTop + plotH);
+  }
+  ctx.stroke();
+
+  ctx.fillStyle = "#a7afbf";
+  ctx.font = "11px system-ui";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "right";
+  yTicks.forEach((val) => {
+    const frac = (val - yMin) / (yMax - yMin || 1);
+    const y = padTop + plotH - frac * plotH;
+    ctx.fillText(val.toString(), padLeft - 6, y);
+  });
+  ctx.save();
+  ctx.translate(12, padTop + plotH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("gph", 0, 0);
+  ctx.restore();
+
+  ctx.textBaseline = "top";
+  ctx.textAlign = "center";
+  const endLabel = new Date(latestTs);
+  const startLabel = new Date(start);
+  const fmt = (d) =>
+    `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  ctx.fillText(fmt(startLabel), padLeft + 40, canvas.height - padBottom + 6);
+  ctx.fillText(fmt(endLabel), canvas.width - padRight - 40, canvas.height - padBottom + 6);
+  ctx.fillText(
+    `time (last ${EVAP_WINDOWS[evapHistoryWindowSec.toString()] || "window"})`,
+    padLeft + plotW / 2,
+    canvas.height - padBottom + 6
+  );
+
+  drawLine(
+    ctx,
+    filtered,
+    "#f2a93b",
+    start,
+    latestTs,
+    yMin,
+    yMax,
+    { padLeft, padTop, plotW, plotH }
+  );
+
+  if (note) note.textContent = `Showing last ${EVAP_WINDOWS[evapHistoryWindowSec.toString()] || "window"}`;
+}
 function updateGlobalStatus(staleInfo) {
   const pill = document.getElementById("global-status-pill");
   const dot  = document.getElementById("global-status-dot");
@@ -639,6 +949,7 @@ function recomputeStalenessAndRender() {
   updateTankCard("roadside",  roadside,  roadsideSec,  roadsideThresh);
   updatePumpCard(pump, pumpSec, pumpThresh);
   updateOverviewCard(overview, latestVacuum);
+  updateBoilingCard(latestEvaporator, overview);
   updateMonitorCard({
     tankSec: tankMonitorSec,
     pumpSec: pumpMonitorSec,
@@ -647,6 +958,7 @@ function recomputeStalenessAndRender() {
     pumpFlowVal != null && pumpTs != null ? { v: pumpFlowVal, t: pumpTs } : null,
     overview?.netFlow != null && netTs != null ? { v: overview.netFlow, t: netTs } : null
   );
+  updateEvapHistoryChart();
 
   const tanksWarning = document.getElementById("tanks-warning");
   const pumpWarning  = document.getElementById("pump-warning");
@@ -680,13 +992,15 @@ function recomputeStalenessAndRender() {
 async function fetchStatusOnce() {
   try {
     lastFetchError = false;
-    const [brookside, roadside, pumpRaw, vacuum, monitor, history] = await Promise.all([
+    const [brookside, roadside, pumpRaw, vacuum, monitor, history, evapStatus, evapHistoryResp] = await Promise.all([
       fetchStatusFile(TANK_STATUS_FILES.brookside),
       fetchStatusFile(TANK_STATUS_FILES.roadside),
       fetchStatusFile(PUMP_STATUS_FILE),
       fetchStatusFile(VACUUM_STATUS_FILE),
       fetchStatusFile(MONITOR_STATUS_FILE),
       fetchHistory(),
+      fetchStatusFile(EVAP_STATUS_FILE),
+      fetchEvaporatorHistory(),
     ]);
     let pump = pumpRaw;
     if (pump && pump.gallons_per_hour == null && lastPumpFlow != null) {
@@ -699,6 +1013,17 @@ async function fetchStatusOnce() {
     latestPump = pump;
     latestVacuum = vacuum;
     latestMonitor = monitor;
+    latestEvaporator = evapStatus || latestEvaporator;
+    if (evapStatus?.plot_settings) {
+      evapPlotSettings = coerceEvapSettings(evapStatus.plot_settings);
+      if (evapPlotSettings.window_sec) {
+        evapHistoryWindowSec = evapPlotSettings.window_sec;
+      }
+    }
+    applyEvapHistoryResponse(evapHistoryResp);
+    if (!latestEvaporator && evapHistoryResp?.latest) {
+      latestEvaporator = evapHistoryResp.latest;
+    }
     pumpHistory.splice(0, pumpHistory.length);
     netFlowHistory.splice(0, netFlowHistory.length);
     if (history && history.pump) {
@@ -715,7 +1040,9 @@ async function fetchStatusOnce() {
         if (t != null && v != null) netFlowHistory.push({ t, v });
       });
     }
-    lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump, vacuum, monitor]);
+    syncEvapControls();
+    syncPumpControls();
+    lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump, vacuum, monitor, latestEvaporator]);
     recomputeStalenessAndRender();
   } catch (err) {
     lastFetchError = true;
@@ -733,6 +1060,8 @@ async function fetchStatusOnce() {
 }
 
 function startLoops() {
+  syncPumpControls();
+  syncEvapControls();
   // Initial fetch
   fetchStatusOnce();
 
@@ -750,6 +1079,111 @@ function startLoops() {
         flowHistoryWindowSec = val;
         fetchStatusOnce();
       }
+    });
+  }
+
+  const pumpMinSel = document.getElementById("pump-y-min");
+  const pumpMaxSel = document.getElementById("pump-y-max");
+  if (pumpMinSel) {
+    pumpMinSel.addEventListener("change", () => {
+      const minRaw = Number(pumpMinSel.value);
+      const maxRaw = Number(document.getElementById("pump-y-max")?.value);
+      const min = Number.isFinite(minRaw) ? minRaw : pumpYAxisMin;
+      const max = Number.isFinite(maxRaw) ? maxRaw : pumpYAxisMax;
+      const bounds = ensureBounds(min, max, PUMP_Y_MIN_OPTIONS, PUMP_Y_MAX_OPTIONS);
+      pumpYAxisMin = bounds.min;
+      pumpYAxisMax = bounds.max;
+      syncPumpControls();
+      updatePumpHistoryChart();
+    });
+  }
+  if (pumpMaxSel) {
+    pumpMaxSel.addEventListener("change", () => {
+      const minRaw = Number(document.getElementById("pump-y-min")?.value);
+      const maxRaw = Number(pumpMaxSel.value);
+      const min = Number.isFinite(minRaw) ? minRaw : pumpYAxisMin;
+      const max = Number.isFinite(maxRaw) ? maxRaw : pumpYAxisMax;
+      const bounds = ensureBounds(min, max, PUMP_Y_MIN_OPTIONS, PUMP_Y_MAX_OPTIONS);
+      pumpYAxisMin = bounds.min;
+      pumpYAxisMax = bounds.max;
+      syncPumpControls();
+      updatePumpHistoryChart();
+    });
+  }
+
+  const evapMinSel = document.getElementById("boiling-y-min");
+  const evapMaxSel = document.getElementById("boiling-y-max");
+  const evapWindowSel = document.getElementById("boiling-history-window");
+
+  if (evapMinSel) {
+    evapMinSel.addEventListener("change", async () => {
+      const minRaw = Number(evapMinSel.value);
+      const maxRaw = Number(document.getElementById("boiling-y-max")?.value);
+      const min = Number.isFinite(minRaw) ? minRaw : evapPlotSettings.y_axis_min;
+      const max = Number.isFinite(maxRaw) ? maxRaw : evapPlotSettings.y_axis_max;
+      const bounds = ensureBounds(min, max, EVAP_Y_MIN_OPTIONS, EVAP_Y_MAX_OPTIONS);
+      evapPlotSettings = {
+        ...evapPlotSettings,
+        y_axis_min: bounds.min,
+        y_axis_max: bounds.max,
+      };
+      syncEvapControls();
+      updateEvapHistoryChart();
+      const saved = await persistEvapSettings({
+        ...evapPlotSettings,
+        window_sec: evapHistoryWindowSec,
+      });
+      if (saved?.settings) {
+        evapPlotSettings = coerceEvapSettings(saved.settings);
+        syncEvapControls();
+      }
+    });
+  }
+  if (evapMaxSel) {
+    evapMaxSel.addEventListener("change", async () => {
+      const minRaw = Number(document.getElementById("boiling-y-min")?.value);
+      const maxRaw = Number(evapMaxSel.value);
+      const min = Number.isFinite(minRaw) ? minRaw : evapPlotSettings.y_axis_min;
+      const max = Number.isFinite(maxRaw) ? maxRaw : evapPlotSettings.y_axis_max;
+      const bounds = ensureBounds(min, max, EVAP_Y_MIN_OPTIONS, EVAP_Y_MAX_OPTIONS);
+      evapPlotSettings = {
+        ...evapPlotSettings,
+        y_axis_min: bounds.min,
+        y_axis_max: bounds.max,
+      };
+      syncEvapControls();
+      updateEvapHistoryChart();
+      const saved = await persistEvapSettings({
+        ...evapPlotSettings,
+        window_sec: evapHistoryWindowSec,
+      });
+      if (saved?.settings) {
+        evapPlotSettings = coerceEvapSettings(saved.settings);
+        syncEvapControls();
+      }
+    });
+  }
+  if (evapWindowSel) {
+    evapWindowSel.addEventListener("change", async () => {
+      const val = parseInt(evapWindowSel.value, 10);
+      if (!Number.isFinite(val)) return;
+      evapHistoryWindowSec = val;
+      evapPlotSettings = { ...evapPlotSettings, window_sec: val };
+      syncEvapControls();
+      updateEvapHistoryChart();
+      const saved = await persistEvapSettings({
+        ...evapPlotSettings,
+        window_sec: evapHistoryWindowSec,
+      });
+      if (saved?.settings) {
+        evapPlotSettings = coerceEvapSettings(saved.settings);
+        syncEvapControls();
+      }
+      const resp = await fetchEvaporatorHistory(val);
+      applyEvapHistoryResponse(resp);
+      syncEvapControls();
+      updateEvapHistoryChart();
+      recomputeStalenessAndRender();
     });
   }
 }

@@ -616,6 +616,7 @@ class TankPiApp:
     def __init__(self, env: Dict[str, str]):
         self.env = env
         self.db = TankDatabase(repo_path_from_config(env.get("DB_PATH", "data/tank_pi.db")))
+        self.evaporator_db_path = repo_path_from_config(env.get("EVAPORATOR_DB_PATH", "data/evaporator.db"))
         self.debug_enabled = str_to_bool(env.get("DEBUG_TANK"), False) or str_to_bool(
             env.get("DEBUG_RELEASER"), False
         )
@@ -652,6 +653,7 @@ class TankPiApp:
             return
         LOGGER.info("Resetting local DB/state for debug replay")
         self.db.reset()
+        self._clear_evaporator_db()
         self._clear_status_files()
         self._ensure_status_placeholders()
         self.reset_server_state()
@@ -712,6 +714,12 @@ class TankPiApp:
                 path.unlink()
             except FileNotFoundError:
                 continue
+
+    def _clear_evaporator_db(self) -> None:
+        try:
+            self.evaporator_db_path.unlink()
+        except FileNotFoundError:
+            return
 
     def _ensure_status_placeholders(self) -> None:
         """Create empty status files so local HTTP requests do not 404 before data arrives."""
