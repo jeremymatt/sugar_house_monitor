@@ -649,8 +649,6 @@ class TankPiApp:
     def reset_if_needed(self) -> None:
         if not self.debug_enabled:
             return
-        if not str_to_bool(self.env.get("RESET_ON_DEBUG_START"), True):
-            return
         LOGGER.info("Resetting local DB/state for debug replay")
         self.db.reset()
         self._clear_evaporator_db()
