@@ -60,6 +60,12 @@ COLORS = {
     "roadside": (242, 169, 59),  # amber
 }
 
+try:
+    import pygame.freetype as pg_ft
+    HAS_FREETYPE = True
+except Exception:
+    HAS_FREETYPE = False
+
 
 @dataclass
 class PlotSettings:
@@ -167,6 +173,11 @@ def fetch_state() -> Tuple[PlotSettings, List[EvapPoint], EvapStatus]:
 
 
 def draw_text(surface, text, pos, size=20, color=TEXT_MAIN, bold=False):
+    if HAS_FREETYPE:
+        font_obj = pg_ft.SysFont("arial", size, bold=bold)
+        font_obj.render_to(surface, pos, text, color)
+        return
+    # Fallback to font module if available.
     try:
         font_obj = pygame.font.SysFont("arial", size, bold=bold)
     except Exception:
@@ -267,7 +278,6 @@ def main():
     if not os.environ.get("DISPLAY"):
         os.environ["DISPLAY"] = ":0"
     pygame.init()
-    pygame.font.init()
     disable_screen_blanking()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN)
     pygame.mouse.set_visible(False)
