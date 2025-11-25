@@ -57,9 +57,9 @@ TEXT_MUTED = (167, 175, 191)
 AXIS_GRID = (60, 65, 75)
 AXIS_LABEL = (167, 175, 191)
 COLORS = {
-    "---": (122, 127, 138),      # gray
-    "brookside": (76, 175, 80),  # green
-    "roadside": (242, 169, 59),  # amber
+    "---": (120, 120, 120),      # gray
+    "brookside": (0, 114, 178),  # blue (colorblind-friendly)
+    "roadside": (213, 94, 0),    # orange (colorblind-friendly)
 }
 
 try:
@@ -252,24 +252,33 @@ def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
     plot_w = rect.width - pad_left - pad_right
     plot_h = rect.height - pad_top - pad_bottom
 
-    # Grid
-    for i in range(6):
-        x = rect.x + pad_left + (i / 5) * plot_w
+    # Grid + ticks
+    x_ticks = 5
+    for i in range(x_ticks + 1):
+        x = rect.x + pad_left + (i / x_ticks) * plot_w
         pygame.draw.line(surface, AXIS_GRID, (x, rect.y + pad_top), (x, rect.y + pad_top + plot_h), 1)
+        t_tick = start_t + (i / x_ticks) * (latest_t - start_t)
+        tick_dt = datetime.fromtimestamp(t_tick / 1000, tz=timezone.utc)
+        tick_label = tick_dt.strftime("%H:%M")
+        draw_text(surface, tick_label, (x - 18, rect.y + pad_top + plot_h + 14), size=14, color=AXIS_LABEL)
+
     y_ticks = 5
     for i in range(y_ticks + 1):
         y_val = y_min + (i / y_ticks) * (y_max - y_min)
         y = rect.y + pad_top + plot_h - (i / y_ticks) * plot_h
         pygame.draw.line(surface, AXIS_GRID, (rect.x + pad_left, y), (rect.x + pad_left + plot_w, y), 1)
-        draw_text(surface, f"{y_val:.0f}", (rect.x + pad_left - 10 - 28, y - 10), size=14, color=AXIS_LABEL)
+        draw_text(surface, f"{y_val:.0f}", (rect.x + pad_left - 34, y - 10), size=14, color=AXIS_LABEL)
 
     # Axes labels
     label_y = rect.y + pad_top + plot_h / 2 - 10
-    draw_text(surface, "gph", (rect.x + 18, label_y), size=14, color=AXIS_LABEL, bold=True)
+    gph_surface = pygame.Surface((40, 20), pygame.SRCALPHA)
+    draw_text(gph_surface, "gph", (0, 0), size=14, color=AXIS_LABEL, bold=True)
+    gph_rot = pygame.transform.rotate(gph_surface, 90)
+    surface.blit(gph_rot, (rect.x + 6, label_y))
     draw_text(
         surface,
         f"last {settings.window_sec // 3600}h",
-        (rect.x + pad_left + plot_w // 2 - 30, rect.y + pad_top + plot_h + 8),
+        (rect.x + pad_left + plot_w // 2 - 30, rect.y + pad_top + plot_h + 30),
         size=14,
         color=AXIS_LABEL,
     )
@@ -287,11 +296,24 @@ def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
         color = COLORS.get(p0.draw_off, COLORS["---"])
         pygame.draw.line(surface, color, to_xy(p0), to_xy(p1), 3)
 
+    # Legend
+    legend_y = rect.y + pad_top + plot_h + 48
+    legend_x = rect.x + pad_left
+    legend_items = [
+        ("Draw Off: ---", COLORS["---"]),
+        ("Draw Off: BROOKSIDE", COLORS["brookside"]),
+        ("Draw Off: ROADSIDE", COLORS["roadside"]),
+    ]
+    for i, (label, col) in enumerate(legend_items):
+        lx = legend_x + i * 220
+        pygame.draw.line(surface, col, (lx, legend_y), (lx + 30, legend_y), 4)
+        draw_text(surface, label, (lx + 40, legend_y - 10), size=14, color=TEXT_MUTED)
+
 
 def draw_status(surface, rect, status: EvapStatus):
     pygame.draw.rect(surface, CARD_BG, rect, border_radius=12)
     x, y = rect.x + 14, rect.y + 12
-    row_y = y + 10
+    row_y = y + 8
     ts_str = status.sample_ts or "–"
     try:
         dt = datetime.fromisoformat(ts_str)
@@ -300,20 +322,20 @@ def draw_status(surface, rect, status: EvapStatus):
         pass
 
     flow_str = f"{status.evap_flow:.1f} gph" if status.evap_flow is not None else "–"
-    last_fire_str = (
-        f"{int(status.last_fire_min // 60):02d}:{int(status.last_fire_min % 60):02d}"
-        if status.last_fire_min is not None
-        else "---"
-    )
+    last_fire_str = "---"
+    if status.last_fire_min is not None:
+        hrs = int(status.last_fire_min // 60)
+        mins = int(status.last_fire_min % 60)
+        last_fire_str = f"{hrs:02d}:{mins:02d}"
     draw_text(surface, f"Evap: {flow_str}", (x, row_y), size=22, color=TEXT_MAIN, bold=True)
-    draw_text(surface, f"Time {ts_str}", (x, row_y + 28), size=16, color=TEXT_MUTED)
+    draw_text(surface, f"Time {ts_str}", (x, row_y + 24), size=16, color=TEXT_MUTED)
     draw_text(surface, f"Draw Off: {status.draw_off.upper()}", (x + 260, row_y), size=20, color=TEXT_MAIN, bold=True)
     do_flow = f"{status.draw_off_flow:.1f} gph" if status.draw_off_flow is not None else "–"
-    draw_text(surface, f"{do_flow}", (x + 260, row_y + 28), size=16, color=TEXT_MUTED)
+    draw_text(surface, f"{do_flow}", (x + 260, row_y + 24), size=16, color=TEXT_MUTED)
     draw_text(surface, f"Pump In: {status.pump_in.upper()}", (x + 500, row_y), size=20, color=TEXT_MAIN, bold=True)
     pi_flow = f"{status.pump_in_flow:.1f} gph" if status.pump_in_flow is not None else "–"
-    draw_text(surface, f"{pi_flow}", (x + 500, row_y + 28), size=16, color=TEXT_MUTED)
-    draw_text(surface, f"Last Fire In: {last_fire_str}", (x + 260, row_y + 56), size=18, color=TEXT_MAIN, bold=True)
+    draw_text(surface, f"{pi_flow}", (x + 500, row_y + 24), size=16, color=TEXT_MUTED)
+    draw_text(surface, f"Last Fire In: {last_fire_str}", (x + 260, row_y + 48), size=18, color=TEXT_MAIN, bold=True)
 
 
 def disable_screen_blanking():
