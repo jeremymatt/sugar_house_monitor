@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Data Downloads - Sugar House Monitor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f131a;
+      color: #f5f5f5;
+      margin: 0;
+      padding: 1.5rem;
+    }
+    .card {
+      background: #181d24;
+      border: 1px solid #262c36;
+      border-radius: 14px;
+      padding: 1rem 1.25rem;
+      max-width: 800px;
+      margin: 0 auto;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+    }
+    h1 {
+      margin-top: 0;
+      margin-bottom: 0.25rem;
+      font-size: 1.35rem;
+    }
+    p {
+      color: #a7afbf;
+      margin-top: 0;
+      margin-bottom: 1rem;
+    }
+    ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 0.75rem;
+    }
+    a {
+      color: #f2a93b;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    .item {
+      padding: 0.65rem 0.75rem;
+      border: 1px solid #262c36;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.02);
+    }
+    .item span {
+      display: block;
+      color: #a7afbf;
+      font-size: 0.9rem;
+      margin-top: 0.25rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Data Downloads</h1>
+    <p>Download full CSV exports of all available data streams.</p>
+    <ul>
+      <li class="item">
+        <a href="/sugar_house_monitor/api/export_csv.php?type=brookside" download>Brookside tank (CSV)</a>
+        <span>Matches format in real_data/brookside.csv</span>
+      </li>
+      <li class="item">
+        <a href="/sugar_house_monitor/api/export_csv.php?type=roadside" download>Roadside tank (CSV)</a>
+        <span>Matches format in real_data/roadside.csv</span>
+      </li>
+      <li class="item">
+        <a href="/sugar_house_monitor/api/export_csv.php?type=pump" download>Transfer pump (CSV)</a>
+        <span>Matches format in real_data/pump_times.csv</span>
+      </li>
+      <li class="item">
+        <a href="/sugar_house_monitor/api/export_csv.php?type=evaporator" download>Evaporator flow (CSV)</a>
+        <span>Timestamp, draw-off/pump-in tanks and flows, evaporator flow</span>
+      </li>
+      <li class="item">
+        <a href="/sugar_house_monitor/api/export_csv.php?type=vacuum" download>Vacuum readings (CSV)</a>
+        <span>Columns: timestamp, Vacuum</span>
+      </li>
+    </ul>
+  </div>
+</body>
+</html>

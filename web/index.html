@@ -394,19 +394,21 @@
           </select>
           <label for="boiling-y-max" class="metric-note" style="white-space:nowrap;">Y-max</label>
           <select id="boiling-y-max" class="metric-note" style="background:rgba(0,0,0,0.25); color:var(--text-main); border:1px solid var(--card-border); border-radius:8px; padding:0.2rem 0.35rem;">
-            <option value="100">100</option>
-            <option value="200">200</option>
             <option value="300">300</option>
             <option value="400">400</option>
             <option value="500">500</option>
             <option value="600" selected>600</option>
+            <option value="700">700</option>
+            <option value="800">800</option>
           </select>
         </div>
       </div>
 
       <div class="chart-container">
         <div class="chart-legend">
-          <span class="legend-item"><span class="legend-swatch" style="background:#f2a93b;"></span>Evaporator</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#7a7f8a;"></span>Draw Off: ---</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#4caf50;"></span>Draw Off: Brookside</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#f2a93b;"></span>Draw Off: Roadside</span>
         </div>
         <canvas id="boiling-history-canvas" width="600" height="220" aria-label="Evaporator flow history" style="width:100%; height:240px;"></canvas>
         <div class="metric-note" id="boiling-history-note">Showing last 2 hours</div>
@@ -578,6 +580,10 @@
         Unable to load tank data. Check network or Pi/server status.
       </div>
     </section>
+
+    <div style="text-align:right; margin-top:-0.25rem;">
+      <a href="/sugar_house_monitor/downloads.html">Download CSV data</a>
+    </div>
 
     <footer class="small" style="margin-top:0.5rem; color:var(--text-muted);">
       Data provided by Raspberry Pi monitors. This page reads a JSON status file and

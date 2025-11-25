@@ -48,9 +48,14 @@ const EVAP_WINDOWS = {
   "43200": "12h",
 };
 const EVAP_Y_MIN_OPTIONS = [0, 100, 200, 300, 400, 500];
-const EVAP_Y_MAX_OPTIONS = [100, 200, 300, 400, 500, 600];
+const EVAP_Y_MAX_OPTIONS = [300, 400, 500, 600, 700, 800];
 const PUMP_Y_MIN_OPTIONS = [0, 50, 100, 150, 200, 250];
 const PUMP_Y_MAX_OPTIONS = [50, 100, 150, 200, 300, 500];
+const DRAW_OFF_COLORS = {
+  brookside: "#4caf50",
+  roadside: "#f2a93b",
+  "---": "#7a7f8a",
+};
 
 // Flow thresholds (gph) and reserve volume (gal)
 const TANKS_FILLING_THRESHOLD = Number(window.TANKS_FILLING_THRESHOLD ?? 5);
@@ -416,7 +421,7 @@ function applyEvapHistoryResponse(resp) {
         const t = msFromIso(p.ts);
         const v = toNumber(p.evaporator_flow_gph);
         if (t == null || v == null) return null;
-        return { t, v };
+        return { t, v, drawOff: p.draw_off_tank || "---" };
       })
       .filter((p) => p != null);
   }
@@ -906,16 +911,22 @@ function updateEvapHistoryChart() {
     canvas.height - padBottom + 6
   );
 
-  drawLine(
-    ctx,
-    filtered,
-    "#f2a93b",
-    start,
-    latestTs,
-    yMin,
-    yMax,
-    { padLeft, padTop, plotW, plotH }
-  );
+  // Draw segments colored by draw-off tank
+  ctx.lineWidth = 2;
+  filtered.forEach((pt, idx) => {
+    if (idx === 0) return;
+    const prev = filtered[idx - 1];
+    const color = DRAW_OFF_COLORS[prev.drawOff] || DRAW_OFF_COLORS["---"];
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    const x0 = padLeft + ((prev.t - start) / (latestTs - start || 1)) * plotW;
+    const y0 = padTop + (1 - (prev.v - yMin) / (yMax - yMin || 1)) * plotH;
+    const x1 = padLeft + ((pt.t - start) / (latestTs - start || 1)) * plotW;
+    const y1 = padTop + (1 - (pt.v - yMin) / (yMax - yMin || 1)) * plotH;
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+  });
 
   if (note) note.textContent = `Showing last ${EVAP_WINDOWS[evapHistoryWindowSec.toString()] || "window"}`;
 }
