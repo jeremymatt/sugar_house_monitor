@@ -6,7 +6,7 @@ $dbPath = resolve_repo_path($env['EVAPORATOR_DB_PATH'] ?? 'data/evaporator.db');
 $db = connect_sqlite($dbPath);
 
 $minOptions = [0, 100, 200, 300, 400, 500];
-$maxOptions = [100, 200, 300, 400, 500, 600];
+$maxOptions = [300, 400, 500, 600, 700, 800];
 $windowOptions = [3600, 7200, 14400, 21600, 28800, 43200]; // 1h,2h,4h,6h,8h,12h
 
 function ensure_tables(PDO $db): void {
