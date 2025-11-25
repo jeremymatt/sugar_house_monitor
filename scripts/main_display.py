@@ -44,6 +44,8 @@ REFRESH_SEC = float(os.environ.get("DISPLAY_REFRESH_SEC", "15"))
 WINDOW_DEFAULT = 2 * 60 * 60  # 2h
 YMIN_DEFAULT = 200.0
 YMAX_DEFAULT = 600.0
+TANKS_EMPTYING_THRESHOLD = -10.0
+RESERVE_GALLONS = 150.0
 
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 480
@@ -94,6 +96,7 @@ class EvapStatus:
     pump_in: str
     pump_in_flow: Optional[float]
     evap_flow: Optional[float]
+    last_fire_min: Optional[float] = None
 
 
 # ---- DATA FETCHING ----
@@ -137,6 +140,8 @@ def ms_from_iso(ts: Optional[str]) -> Optional[int]:
 def fetch_state(preferred_window_sec: Optional[int]) -> Tuple[PlotSettings, List[EvapPoint], EvapStatus]:
     cache_bust = int(time.time())
     status_payload = fetch_json(STATUS_URL, params={"t": cache_bust}) or {}
+    brook_status = fetch_json(f"{BASE_URL}/data/status_brookside.json", params={"t": cache_bust}) or {}
+    road_status = fetch_json(f"{BASE_URL}/data/status_roadside.json", params={"t": cache_bust}) or {}
     history_params = {"t": cache_bust}
     if preferred_window_sec:
         history_params["window_sec"] = preferred_window_sec
@@ -144,10 +149,13 @@ def fetch_state(preferred_window_sec: Optional[int]) -> Tuple[PlotSettings, List
 
     # Settings
     settings_raw = history_payload.get("settings") or {}
+    y_min_val = settings_raw.get("y_axis_min")
+    y_max_val = settings_raw.get("y_axis_max")
+    win_val = settings_raw.get("window_sec")
     settings = PlotSettings(
-        y_min=float(settings_raw.get("y_axis_min") or YMIN_DEFAULT),
-        y_max=float(settings_raw.get("y_axis_max") or YMAX_DEFAULT),
-        window_sec=int(settings_raw.get("window_sec") or WINDOW_DEFAULT),
+        y_min=float(y_min_val) if y_min_val is not None else YMIN_DEFAULT,
+        y_max=float(y_max_val) if y_max_val is not None else YMAX_DEFAULT,
+        window_sec=int(win_val) if win_val is not None else WINDOW_DEFAULT,
     )
 
     # History
@@ -166,6 +174,21 @@ def fetch_state(preferred_window_sec: Optional[int]) -> Tuple[PlotSettings, List
 
     # Latest status
     latest = status_payload or {}
+    last_fire_min = None
+    try:
+        b_flow = float(brook_status.get("flow_gph")) if brook_status.get("flow_gph") is not None else None
+        r_flow = float(road_status.get("flow_gph")) if road_status.get("flow_gph") is not None else None
+        b_vol = float(brook_status.get("volume_gal")) if brook_status.get("volume_gal") is not None else 0.0
+        r_vol = float(road_status.get("volume_gal")) if road_status.get("volume_gal") is not None else 0.0
+        total = b_vol + r_vol
+        net_flow = (b_flow or 0.0) + (r_flow or 0.0)
+        if net_flow <= TANKS_EMPTYING_THRESHOLD:
+            available = max(total - RESERVE_GALLONS, 0.0)
+            if abs(net_flow) > 0:
+                last_fire_min = (available / abs(net_flow)) * 60.0
+    except Exception:
+        last_fire_min = None
+
     status = EvapStatus(
         sample_ts=latest.get("sample_timestamp"),
         draw_off=(latest.get("draw_off_tank") or "---").lower(),
@@ -173,6 +196,7 @@ def fetch_state(preferred_window_sec: Optional[int]) -> Tuple[PlotSettings, List
         pump_in=(latest.get("pump_in_tank") or "---").lower(),
         pump_in_flow=latest.get("pump_in_flow_gph"),
         evap_flow=latest.get("evaporator_flow_gph"),
+        last_fire_min=last_fire_min,
     )
 
     return settings, points, status
@@ -240,7 +264,8 @@ def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
         draw_text(surface, f"{y_val:.0f}", (rect.x + pad_left - 10 - 28, y - 10), size=14, color=AXIS_LABEL)
 
     # Axes labels
-    draw_text(surface, "gph", (rect.x + 20, rect.y + pad_top - 10), size=14, color=AXIS_LABEL)
+    label_y = rect.y + pad_top + plot_h / 2 - 10
+    draw_text(surface, "gph", (rect.x + 18, label_y), size=14, color=AXIS_LABEL, bold=True)
     draw_text(
         surface,
         f"last {settings.window_sec // 3600}h",
@@ -266,22 +291,29 @@ def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
 def draw_status(surface, rect, status: EvapStatus):
     pygame.draw.rect(surface, CARD_BG, rect, border_radius=12)
     x, y = rect.x + 14, rect.y + 12
-    draw_text(surface, "Evaporator Flow", (x, y), size=18, color=TEXT_MUTED)
-    flow_str = f"{status.evap_flow:.1f} gph" if status.evap_flow is not None else "–"
-    draw_text(surface, flow_str, (x, y + 24), size=28, color=TEXT_MAIN, bold=True)
-
+    row_y = y + 10
     ts_str = status.sample_ts or "–"
-    draw_text(surface, f"Time: {ts_str}", (x, y + 58), size=16, color=TEXT_MUTED)
+    try:
+        dt = datetime.fromisoformat(ts_str)
+        ts_str = dt.strftime("%H:%M")
+    except Exception:
+        pass
 
-    draw_text(surface, "Draw Off", (x, y + 88), size=16, color=TEXT_MUTED)
-    draw_text(surface, status.draw_off.upper(), (x, y + 108), size=22, color=TEXT_MAIN, bold=True)
+    flow_str = f"{status.evap_flow:.1f} gph" if status.evap_flow is not None else "–"
+    last_fire_str = (
+        f"{int(status.last_fire_min // 60):02d}:{int(status.last_fire_min % 60):02d}"
+        if status.last_fire_min is not None
+        else "---"
+    )
+    draw_text(surface, f"Evap: {flow_str}", (x, row_y), size=22, color=TEXT_MAIN, bold=True)
+    draw_text(surface, f"Time {ts_str}", (x, row_y + 28), size=16, color=TEXT_MUTED)
+    draw_text(surface, f"Draw Off: {status.draw_off.upper()}", (x + 260, row_y), size=20, color=TEXT_MAIN, bold=True)
     do_flow = f"{status.draw_off_flow:.1f} gph" if status.draw_off_flow is not None else "–"
-    draw_text(surface, f"Flow: {do_flow}", (x, y + 132), size=16, color=TEXT_MUTED)
-
-    draw_text(surface, "Pump In", (x + 220, y + 88), size=16, color=TEXT_MUTED)
-    draw_text(surface, status.pump_in.upper(), (x + 220, y + 108), size=22, color=TEXT_MAIN, bold=True)
+    draw_text(surface, f"{do_flow}", (x + 260, row_y + 28), size=16, color=TEXT_MUTED)
+    draw_text(surface, f"Pump In: {status.pump_in.upper()}", (x + 500, row_y), size=20, color=TEXT_MAIN, bold=True)
     pi_flow = f"{status.pump_in_flow:.1f} gph" if status.pump_in_flow is not None else "–"
-    draw_text(surface, f"Flow: {pi_flow}", (x + 220, y + 132), size=16, color=TEXT_MUTED)
+    draw_text(surface, f"{pi_flow}", (x + 500, row_y + 28), size=16, color=TEXT_MUTED)
+    draw_text(surface, f"Last Fire In: {last_fire_str}", (x + 260, row_y + 56), size=18, color=TEXT_MAIN, bold=True)
 
 
 def disable_screen_blanking():
