@@ -54,6 +54,12 @@ def float_or_none(value) -> Optional[float]:
     except (TypeError, ValueError):
         return None
 
+def is_nan(value) -> bool:
+    try:
+        return math.isnan(float(value))
+    except Exception:
+        return False
+
 
 def build_url(base: str, endpoint: str) -> str:
     return f"{base.rstrip('/')}/{endpoint.lstrip('/')}"
@@ -571,6 +577,9 @@ def load_pump_events(env: Dict[str, str]) -> List[Event]:
             if not ts_raw:
                 continue
             timestamp = parse_timestamp(ts_raw)
+            gph_raw = row.get("Gallons Per Hour") or row.get("gallons_per_hour")
+            if gph_raw is None or gph_raw == "" or is_nan(gph_raw):
+                continue
             events.append(
                 Event(
                     timestamp=timestamp,
@@ -582,8 +591,7 @@ def load_pump_events(env: Dict[str, str]) -> List[Event]:
                         or row.get("pump_run_time_s"),
                         "pump_interval_s": row.get("Pump Interval")
                         or row.get("pump_interval_s"),
-                        "gallons_per_hour": row.get("Gallons Per Hour")
-                        or row.get("gallons_per_hour"),
+                        "gallons_per_hour": gph_raw,
                     },
                 )
             )
