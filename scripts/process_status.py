@@ -488,6 +488,24 @@ def main() -> None:
         insert_evap_record(evap_conn, evap_record)
         evap_payload = build_evap_status_payload(evap_record, timestamp, plot_settings)
         atomic_write(status_base / "status_evaporator.json", evap_payload)
+    else:
+        # Ensure a placeholder exists so clients don't 404 while waiting for data.
+        placeholder = build_evap_status_payload(
+            {
+                "sample_timestamp": None,
+                "draw_off_tank": "---",
+                "pump_in_tank": "---",
+                "draw_off_flow_gph": None,
+                "pump_in_flow_gph": None,
+                "pump_flow_gph": None,
+                "brookside_flow_gph": None,
+                "roadside_flow_gph": None,
+                "evaporator_flow_gph": None,
+            },
+            timestamp,
+            plot_settings,
+        )
+        atomic_write(status_base / "status_evaporator.json", placeholder)
 
     monitor_payload = {
         "generated_at": timestamp,

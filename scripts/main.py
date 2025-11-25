@@ -578,8 +578,7 @@ def load_pump_events(env: Dict[str, str]) -> List[Event]:
                 continue
             timestamp = parse_timestamp(ts_raw)
             gph_raw = row.get("Gallons Per Hour") or row.get("gallons_per_hour")
-            if gph_raw is None or gph_raw == "" or is_nan(gph_raw):
-                continue
+            gph_val = float_or_none(gph_raw)
             events.append(
                 Event(
                     timestamp=timestamp,
@@ -591,7 +590,7 @@ def load_pump_events(env: Dict[str, str]) -> List[Event]:
                         or row.get("pump_run_time_s"),
                         "pump_interval_s": row.get("Pump Interval")
                         or row.get("pump_interval_s"),
-                        "gallons_per_hour": gph_raw,
+                        "gallons_per_hour": gph_val,
                     },
                 )
             )
@@ -809,6 +808,26 @@ class TankPiApp:
                 "pump_monitor_last_received_at": None,
             }
             self._write_status_file(monitor_path, monitor_placeholder)
+        evap_path = self.status_dir / "status_evaporator.json"
+        if not evap_path.exists():
+            evap_placeholder = {
+                "generated_at": timestamp,
+                "sample_timestamp": None,
+                "draw_off_tank": "---",
+                "pump_in_tank": "---",
+                "draw_off_flow_gph": None,
+                "pump_in_flow_gph": None,
+                "pump_flow_gph": None,
+                "brookside_flow_gph": None,
+                "roadside_flow_gph": None,
+                "evaporator_flow_gph": None,
+                "plot_settings": {
+                    "y_axis_min": None,
+                    "y_axis_max": None,
+                    "window_sec": None,
+                },
+            }
+            self._write_status_file(evap_path, evap_placeholder)
 
     def _write_status_file(self, path: Path, payload: Dict) -> None:
         tmp = path.with_suffix(path.suffix + ".tmp")
