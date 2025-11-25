@@ -76,6 +76,15 @@ function reconcile_bounds(float $yMin, float $yMax, array $mins, array $maxes): 
     return [$yMin, $yMax];
 }
 
+function is_allowed_value($value, array $options): bool {
+    foreach ($options as $opt) {
+        if ($value == $opt) { // intentional loose compare to accept numeric strings/floats
+            return true;
+        }
+    }
+    return false;
+}
+
 ensure_tables($db);
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
@@ -89,10 +98,10 @@ if ($method === 'POST') {
     if ($yMin === null || $yMax === null || $windowSec === null) {
         respond_error('Missing required fields', 400);
     }
-    if (!in_array($yMin, $minOptions, true) || !in_array($yMax, $maxOptions, true)) {
+    if (!is_allowed_value($yMin, $minOptions) || !is_allowed_value($yMax, $maxOptions)) {
         respond_error('Invalid y-axis bounds', 400);
     }
-    if (!in_array($windowSec, $windowOptions, true)) {
+    if (!is_allowed_value($windowSec, $windowOptions)) {
         respond_error('Invalid window', 400);
     }
 
