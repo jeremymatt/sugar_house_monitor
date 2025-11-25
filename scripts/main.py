@@ -644,6 +644,10 @@ class TankPiApp:
         self.pump_thread: Optional[threading.Thread] = None
         self.vacuum_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
+        self.last_tank_update: Dict[str, float] = {name: 0.0 for name in TVF.tank_names}
+        self._last_measurement_params = None
+        self._last_clock = None
+        self._last_tank_records: Dict[str, List[TVF.DebugSample]] = {}
         self._ensure_status_placeholders()
 
     def reset_if_needed(self) -> None:
@@ -858,12 +862,47 @@ class TankPiApp:
             LOGGER.error("Failed to start tank controller %s after retries", tank_name)
         return proc
 
+    def _restart_tank_controller(self, tank_name: str) -> None:
+        proc = self.tank_processes.get(tank_name)
+        if proc and proc.is_alive():
+            try:
+                proc.terminate()
+                proc.join(timeout=1)
+            except Exception:
+                pass
+        self._start_tank_controller(
+            tank_name,
+            self._last_measurement_params,
+            self._last_clock,
+            self._last_tank_records.get(tank_name) if self._last_tank_records else None,
+        )
+
+    def _check_tank_health(self) -> None:
+        if not self._last_measurement_params:
+            return
+        now = time.time()
+        stale_seconds = 30 if self.debug_enabled else 120
+        for name in TVF.tank_names:
+            last_ts = self.last_tank_update.get(name, 0)
+            proc = self.tank_processes.get(name)
+            if proc and proc.is_alive():
+                if now - last_ts > stale_seconds:
+                    LOGGER.warning(
+                        "Tank %s produced no updates for %.0f s; restarting controller",
+                        name,
+                        now - last_ts,
+                    )
+                    self._restart_tank_controller(name)
+
     def _start_tank_processes(
         self,
         measurement_params,
         clock: Optional[SyntheticClock],
         tank_records: Dict[str, List[TVF.DebugSample]],
     ) -> None:
+        self._last_measurement_params = measurement_params
+        self._last_clock = clock
+        self._last_tank_records = tank_records or {}
         for tank_name in TVF.tank_names:
             self._start_tank_controller(
                 tank_name,
@@ -904,9 +943,11 @@ class TankPiApp:
                     continue
                 if payload:
                     self.handle_tank_measurement(payload, payload.get("source_timestamp"))
+                    self.last_tank_update[name] = time.time()
                     processed = True
             if not processed:
                 self.stop_event.wait(0.2)
+            self._check_tank_health()
 
     def _start_pump_debug_thread(
         self, clock: Optional[SyntheticClock], pump_events: List[Event]

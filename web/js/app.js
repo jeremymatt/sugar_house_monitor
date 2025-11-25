@@ -3,7 +3,8 @@
 // ---- CONFIG ----
 
 // Where to load per-component status files from.
-const WORDPRESS_STATUS_BASE = "/sugar_house_monitor/data";
+const WORDPRESS_ORIGIN = "https://mattsmaplesyrup.com";
+const WORDPRESS_STATUS_BASE = `${WORDPRESS_ORIGIN}/sugar_house_monitor/data`;
 const LOCAL_STATUS_BASE = "/data";
 const STATUS_BASE_URL =
   window.STATUS_URL_OVERRIDE ||
@@ -23,12 +24,12 @@ const MONITOR_STATUS_FILE = "status_monitor.json";
 const FLOW_HISTORY_ENDPOINT =
   window.location.hostname.includes("mattsmaplesyrup.com") ||
   window.location.pathname.includes("/sugar_house_monitor")
-    ? "/sugar_house_monitor/api/flow_history.php"
+    ? `${WORDPRESS_ORIGIN}/sugar_house_monitor/api/flow_history.php`
     : "/api/flow_history.php";
 const EVAP_HISTORY_ENDPOINT =
   window.location.hostname.includes("mattsmaplesyrup.com") ||
   window.location.pathname.includes("/sugar_house_monitor")
-    ? "/sugar_house_monitor/api/evaporator_history.php"
+    ? `${WORDPRESS_ORIGIN}/sugar_house_monitor/api/evaporator_history.php`
     : "/api/evaporator_history.php";
 const FLOW_WINDOWS = {
   "10800": "3h",
