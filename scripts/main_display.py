@@ -376,8 +376,8 @@ def main():
             last_fetch = now
 
         screen.fill(BACKGROUND)
-        chart_rect = pygame.Rect(16, 16, SCREEN_WIDTH - 32, SCREEN_HEIGHT - 200)
-        status_rect = pygame.Rect(16, SCREEN_HEIGHT - 170, SCREEN_WIDTH - 32, 140)
+        chart_rect = pygame.Rect(16, 16, SCREEN_WIDTH - 32, SCREEN_HEIGHT - 180)
+        status_rect = pygame.Rect(16, SCREEN_HEIGHT - 140, SCREEN_WIDTH - 32, 110)
         draw_chart(screen, chart_rect, settings, points)
         draw_status(screen, status_rect, status)
 
