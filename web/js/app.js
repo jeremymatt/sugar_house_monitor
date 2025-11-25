@@ -3,13 +3,13 @@
 // ---- CONFIG ----
 
 // Where to load per-component status files from.
-const WORDPRESS_ORIGIN = "https://mattsmaplesyrup.com";
-const WORDPRESS_STATUS_BASE = `${WORDPRESS_ORIGIN}/sugar_house_monitor/data`;
+const BASE_ORIGIN = window.location.origin;
+const WORDPRESS_STATUS_BASE = `${BASE_ORIGIN}/sugar_house_monitor/data`;
 const LOCAL_STATUS_BASE = "/data";
 const STATUS_BASE_URL =
   window.STATUS_URL_OVERRIDE ||
-  (window.location.hostname.includes("mattsmaplesyrup.com") ||
-  window.location.pathname.includes("/sugar_house_monitor")
+  (window.location.pathname.includes("/sugar_house_monitor") ||
+    window.location.hostname.includes("mattsmaplesyrup.com")
     ? WORDPRESS_STATUS_BASE
     : LOCAL_STATUS_BASE);
 
@@ -22,14 +22,14 @@ const EVAP_STATUS_FILE = "status_evaporator.json";
 const VACUUM_STATUS_FILE = "status_vacuum.json";
 const MONITOR_STATUS_FILE = "status_monitor.json";
 const FLOW_HISTORY_ENDPOINT =
-  window.location.hostname.includes("mattsmaplesyrup.com") ||
-  window.location.pathname.includes("/sugar_house_monitor")
-    ? `${WORDPRESS_ORIGIN}/sugar_house_monitor/api/flow_history.php`
+  window.location.pathname.includes("/sugar_house_monitor") ||
+  window.location.hostname.includes("mattsmaplesyrup.com")
+    ? `${BASE_ORIGIN}/sugar_house_monitor/api/flow_history.php`
     : "/api/flow_history.php";
 const EVAP_HISTORY_ENDPOINT =
-  window.location.hostname.includes("mattsmaplesyrup.com") ||
-  window.location.pathname.includes("/sugar_house_monitor")
-    ? `${WORDPRESS_ORIGIN}/sugar_house_monitor/api/evaporator_history.php`
+  window.location.pathname.includes("/sugar_house_monitor") ||
+  window.location.hostname.includes("mattsmaplesyrup.com")
+    ? `${BASE_ORIGIN}/sugar_house_monitor/api/evaporator_history.php`
     : "/api/evaporator_history.php";
 const FLOW_WINDOWS = {
   "10800": "3h",
