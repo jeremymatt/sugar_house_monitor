@@ -2,6 +2,14 @@
 
 // ---- CONFIG ----
 
+// Force apex domain to avoid CORS/redirect issues if user hits www.
+(function enforceApexHost() {
+  if (typeof window !== "undefined" && window.location.hostname.startsWith("www.")) {
+    const newUrl = window.location.href.replace("://www.", "://");
+    window.location.replace(newUrl);
+  }
+})();
+
 // Where to load per-component status files from.
 const WORDPRESS_STATUS_BASE = "/sugar_house_monitor/data";
 const LOCAL_STATUS_BASE = "/data";
