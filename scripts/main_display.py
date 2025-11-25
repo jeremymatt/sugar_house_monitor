@@ -167,8 +167,11 @@ def fetch_state() -> Tuple[PlotSettings, List[EvapPoint], EvapStatus]:
 
 
 def draw_text(surface, text, pos, size=20, color=TEXT_MAIN, bold=False):
-    font = pygame.font.SysFont("arial", size, bold=bold)
-    render = font.render(text, True, color)
+    try:
+        font_obj = pygame.font.SysFont("arial", size, bold=bold)
+    except Exception:
+        font_obj = pygame.font.Font(None, size)
+    render = font_obj.render(text, True, color)
     surface.blit(render, pos)
 
 
@@ -253,13 +256,18 @@ def draw_status(surface, rect, status: EvapStatus):
 
 
 def disable_screen_blanking():
+    if not os.environ.get("DISPLAY"):
+        os.environ["DISPLAY"] = ":0"
     os.system("xset s off")      # disable screen saver
     os.system("xset -dpms")      # disable DPMS
     os.system("xset s noblank")  # disable blanking
 
 
 def main():
+    if not os.environ.get("DISPLAY"):
+        os.environ["DISPLAY"] = ":0"
     pygame.init()
+    pygame.font.init()
     disable_screen_blanking()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN)
     pygame.mouse.set_visible(False)
