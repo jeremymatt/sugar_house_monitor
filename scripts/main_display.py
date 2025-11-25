@@ -297,7 +297,7 @@ def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
         pygame.draw.line(surface, color, to_xy(p0), to_xy(p1), 3)
 
     # Legend
-    legend_y = rect.y + pad_top + plot_h + 48
+    legend_y = rect.y + pad_top + plot_h + 56
     legend_x = rect.x + pad_left
     legend_items = [
         ("Draw Off: ---", COLORS["---"]),
@@ -376,8 +376,8 @@ def main():
             last_fetch = now
 
         screen.fill(BACKGROUND)
-        chart_rect = pygame.Rect(16, 16, SCREEN_WIDTH - 32, SCREEN_HEIGHT - 170)
-        status_rect = pygame.Rect(16, SCREEN_HEIGHT - 140, SCREEN_WIDTH - 32, 120)
+        chart_rect = pygame.Rect(16, 16, SCREEN_WIDTH - 32, SCREEN_HEIGHT - 200)
+        status_rect = pygame.Rect(16, SCREEN_HEIGHT - 170, SCREEN_WIDTH - 32, 140)
         draw_chart(screen, chart_rect, settings, points)
         draw_status(screen, status_rect, status)
 
