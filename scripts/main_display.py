@@ -134,9 +134,13 @@ def ms_from_iso(ts: Optional[str]) -> Optional[int]:
     return int(dt.timestamp() * 1000) if dt else None
 
 
-def fetch_state() -> Tuple[PlotSettings, List[EvapPoint], EvapStatus]:
-    status_payload = fetch_json(STATUS_URL) or {}
-    history_payload = fetch_json(HISTORY_URL) or {}
+def fetch_state(preferred_window_sec: Optional[int]) -> Tuple[PlotSettings, List[EvapPoint], EvapStatus]:
+    cache_bust = int(time.time())
+    status_payload = fetch_json(STATUS_URL, params={"t": cache_bust}) or {}
+    history_params = {"t": cache_bust}
+    if preferred_window_sec:
+        history_params["window_sec"] = preferred_window_sec
+    history_payload = fetch_json(HISTORY_URL, params=history_params) or {}
 
     # Settings
     settings_raw = history_payload.get("settings") or {}
@@ -312,7 +316,7 @@ def main():
 
         now = time.time()
         if now - last_fetch >= REFRESH_SEC:
-            fetched = fetch_state()
+            fetched = fetch_state(settings.window_sec if settings else None)
             if fetched:
                 settings, points, status = fetched
             last_fetch = now
