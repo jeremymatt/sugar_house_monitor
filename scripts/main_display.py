@@ -65,6 +65,11 @@ try:
     HAS_FREETYPE = True
 except Exception:
     HAS_FREETYPE = False
+try:
+    import pygame.font as pg_font
+    HAS_FONT = True
+except Exception:
+    HAS_FONT = False
 
 
 @dataclass
@@ -174,16 +179,25 @@ def fetch_state() -> Tuple[PlotSettings, List[EvapPoint], EvapStatus]:
 
 def draw_text(surface, text, pos, size=20, color=TEXT_MAIN, bold=False):
     if HAS_FREETYPE:
-        font_obj = pg_ft.SysFont("arial", size, bold=bold)
-        font_obj.render_to(surface, pos, text, color)
-        return
-    # Fallback to font module if available.
-    try:
-        font_obj = pygame.font.SysFont("arial", size, bold=bold)
-    except Exception:
-        font_obj = pygame.font.Font(None, size)
-    render = font_obj.render(text, True, color)
-    surface.blit(render, pos)
+        try:
+            font_obj = pg_ft.SysFont("arial", size, bold=bold)
+            font_obj.render_to(surface, pos, text, color)
+            return
+        except Exception:
+            pass
+    if HAS_FONT:
+        try:
+            font_obj = pg_font.SysFont("arial", size, bold=bold)
+        except Exception:
+            try:
+                font_obj = pg_font.Font(None, size)
+            except Exception:
+                return
+        try:
+            render = font_obj.render(text, True, color)
+            surface.blit(render, pos)
+        except Exception:
+            return
 
 
 def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
