@@ -73,6 +73,7 @@ while True:
        # convert 16bit adc0 (0-65535) trim pot read into 0-5volt level
        adc_input_voltage = 5
        voltage0 = remap_range(trim_pot0, 0, 65535, 0, adc_input_voltage)
+       pressure0 = remap_range(trim_pot0, 0, 65535, -14.5, 30)
 
     #    if voltage0<0.9:
     #        GPIO.output(output_pin,GPIO.HIGH)
@@ -82,7 +83,7 @@ while True:
 
 
        # print voltage
-       print('Reading0 = {:0.3f}v'.format(voltage0))
+       print('Current State = {:0.3f}v, {:0.3f}psi'.format(voltage0,pressure0))
 
        # save the potentiometer reading for the next loop
        last_read0 = trim_pot0
