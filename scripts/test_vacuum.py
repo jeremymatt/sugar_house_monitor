@@ -71,14 +71,14 @@ while True:
    # trim_pot_changed = True
    if trim_pot_changed:
        # convert 16bit adc0 (0-65535) trim pot read into 0-5volt level
-       adc_input_voltage = 3.3
+       adc_input_voltage = 5
        voltage0 = remap_range(trim_pot0, 0, 65535, 0, adc_input_voltage)
 
-       if voltage0<0.9:
-           GPIO.output(output_pin,GPIO.HIGH)
-           print("BOOM")
-       else:
-           GPIO.output(output_pin,GPIO.LOW)
+    #    if voltage0<0.9:
+    #        GPIO.output(output_pin,GPIO.HIGH)
+    #        print("BOOM")
+    #    else:
+    #        GPIO.output(output_pin,GPIO.LOW)
 
 
        # print voltage
@@ -88,4 +88,4 @@ while True:
        last_read0 = trim_pot0
 
    # hang out and do nothing for a half second
-   time.sleep(0.5)
+   time.sleep(0.05)
