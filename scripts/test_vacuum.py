@@ -74,7 +74,7 @@ while True:
        adc_input_voltage = 5
        voltage0 = remap_range(trim_pot0, 0, 65535, 0, adc_input_voltage)
        pressure0 = remap_range(trim_pot0, 0, 65535, -14.5, 30)
-       pressureinhg0 = remap_range(trim_pot0, 0, 65535, -29.52, 61.08)
+       pressureinhg0 = remap_range(trim_pot0, 0, 65535, -29.52, 60)
 
     #    if voltage0<0.9:
     #        GPIO.output(output_pin,GPIO.HIGH)
