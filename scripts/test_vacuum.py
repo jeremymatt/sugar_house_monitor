@@ -69,7 +69,7 @@ while True:
    if (pot_adjust0 > tolerance):
        trim_pot_changed = True
    # trim_pot_changed = True
-   if trim_pot_changed:
+   if True:
        # convert 16bit adc0 (0-65535) trim pot read into 0-5volt level
        adc_input_voltage = 5
        voltage0 = remap_range(trim_pot0, 0, 65535, 0, adc_input_voltage)
