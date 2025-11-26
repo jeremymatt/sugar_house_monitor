@@ -74,6 +74,7 @@ while True:
        adc_input_voltage = 5
        voltage0 = remap_range(trim_pot0, 0, 65535, 0, adc_input_voltage)
        pressure0 = remap_range(trim_pot0, 0, 65535, -14.5, 30)
+       pressureinhg0 = remap_range(trim_pot0, 0, 65535, -29.52, 61.08)
 
     #    if voltage0<0.9:
     #        GPIO.output(output_pin,GPIO.HIGH)
@@ -83,7 +84,7 @@ while True:
 
 
        # print voltage
-       print('Current State = {:0.3f}v, {:0.3f}psi'.format(voltage0,pressure0))
+       print('Current State = {:0.3f}v, {:0.3f}psi, {:0.3f}inHg'.format(voltage0,pressure0,pressureinhg0))
 
        # save the potentiometer reading for the next loop
        last_read0 = trim_pot0
