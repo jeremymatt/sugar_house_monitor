@@ -84,7 +84,7 @@ while True:
 
 
        # print voltage
-       print('Current State = {:0.3f}v, {:0.3f}psi, {:0.3f}inHg'.format(voltage0,pressure0,pressureinhg0))
+       print('Current State = {}raw, {:0.3f}v, {:0.3f}psi, {:0.3f}inHg'.format(trim_pot0,voltage0,pressure0,pressureinhg0))
 
        # save the potentiometer reading for the next loop
        last_read0 = trim_pot0
