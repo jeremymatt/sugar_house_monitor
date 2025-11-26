@@ -52,10 +52,12 @@ const EVAP_Y_MAX_OPTIONS = [300, 400, 500, 600, 700, 800];
 const PUMP_Y_MIN_OPTIONS = [0, 50, 100, 150, 200, 250];
 const PUMP_Y_MAX_OPTIONS = [50, 100, 150, 200, 300, 500];
 const DRAW_OFF_COLORS = {
-  brookside: "#4caf50",
-  roadside: "#f2a93b",
+  brookside: "#0072b2", // blue
+  roadside: "#d55e00",  // orange
   "---": "#7a7f8a",
 };
+const PUMP_COLOR = "#d55e00"; // pump line orange
+const NET_COLOR = "#0072b2";  // net flow line blue
 
 // Flow thresholds (gph) and reserve volume (gal)
 const TANKS_FILLING_THRESHOLD = Number(window.TANKS_FILLING_THRESHOLD ?? 5);
@@ -796,8 +798,8 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
   ctx.fillText(`time (last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"})`, padLeft + plotW / 2, canvas.height - padBottom + 6);
 
   // Lines
-  drawLine(ctx, pumpHistory, "#f2a93b", start, now, yMin, yMax, { padLeft, padTop, plotW, plotH });
-  drawLine(ctx, netFlowHistory, "#4caf50", start, now, yMin, yMax, { padLeft, padTop, plotW, plotH });
+  drawLine(ctx, pumpHistory, PUMP_COLOR, start, now, yMin, yMax, { padLeft, padTop, plotW, plotH });
+  drawLine(ctx, netFlowHistory, NET_COLOR, start, now, yMin, yMax, { padLeft, padTop, plotW, plotH });
 
   if ((!pumpHistory.length) && (!netFlowHistory.length)) {
     ctx.fillStyle = "#888";
@@ -1034,7 +1036,7 @@ function recomputeStalenessAndRender() {
 async function fetchStatusOnce() {
   try {
     lastFetchError = false;
-    const [brookside, roadside, pumpRaw, vacuum, monitor, history, evapStatus, evapHistoryResp] = await Promise.all([
+    const settled = await Promise.allSettled([
       fetchStatusFile(TANK_STATUS_FILES.brookside),
       fetchStatusFile(TANK_STATUS_FILES.roadside),
       fetchStatusFile(PUMP_STATUS_FILE),
@@ -1044,6 +1046,15 @@ async function fetchStatusOnce() {
       fetchStatusFile(EVAP_STATUS_FILE),
       fetchEvaporatorHistory(),
     ]);
+    const getVal = (idx) => (settled[idx].status === "fulfilled" ? settled[idx].value : null);
+    const brookside = getVal(0);
+    const roadside = getVal(1);
+    const pumpRaw = getVal(2);
+    const vacuum = getVal(3);
+    const monitor = getVal(4);
+    const history = getVal(5);
+    const evapStatus = getVal(6);
+    const evapHistoryResp = getVal(7);
     let pump = pumpRaw;
     if (pump && pump.gallons_per_hour == null && lastPumpFlow != null) {
       pump = { ...pump, gallons_per_hour: lastPumpFlow };
