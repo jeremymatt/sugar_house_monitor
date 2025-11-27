@@ -4,6 +4,7 @@ config/*.env
 config/*.ini
 config/*.json
 config/*.key
+log.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
