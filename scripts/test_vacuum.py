@@ -80,8 +80,13 @@ while True:
        pressure0 = remap_range(trim_pot0, 0, 65535, -14.5, 30)
        pressureinhg0 = remap_range(trim_pot0, 0, 65535, -29.52, 60)
 
+       start_voltage = np.interp(start_raw,adc_value_range,adc_voltage_range)
+       manual_start_voltage = np.interp(manual_start_raw,adc_value_range,adc_voltage_range)
+       end_voltage = np.interp(end_raw,adc_value_range,adc_voltage_range)
+
        # print voltage
        print('Current State = {}raw, {:0.3f}v, {:0.3f}v, {:0.3f}psi, {:0.3f}inHg'.format(trim_pot0,voltage0,voltage0a,pressure0,pressureinhg0))
+       print('start: {:0.3f}v, manual start: {:0.3f}v, end: {:0.3f}v'.format(start_voltage,manual_start_voltage,end_voltage))
 
        # save the potentiometer reading for the next loop
        last_read0 = trim_pot0
