@@ -36,9 +36,10 @@ start_chan = AnalogIn(mcp, MCP.P1)
 manual_start_chan = AnalogIn(mcp, MCP.P2)
 end_chan = AnalogIn(mcp, MCP.P3)
 
-last_read0 = 0       # this keeps track of the last potentiometer value
-last_read1 = 0       # this keeps track of the last potentiometer value
-last_read2 = 0       # this keeps track of the last potentiometer value
+last_vac = 0       # this keeps track of the last potentiometer value
+last_start = 0       # this keeps track of the last potentiometer value
+last_manual_start = 0       # this keeps track of the last potentiometer value
+last_end = 0       # this keeps track of the last potentiometer value
 tolerance = 250     # to keep from being jittery we'll only change
                    # volume when the pot has moved a significant amount
                    # on a 16-bit ADC
