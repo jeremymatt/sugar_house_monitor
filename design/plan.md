@@ -36,6 +36,7 @@ timestamp,yr,mo,day,hr,m,s,surf_dist,depth,gal
 ```
 
 ## B. Pump Pi  
+- Raspberry pi zero, so limited processing power.
 - Reads pump events (“Pump Start”, “Pump Stop”, etc).
 - Stores events in **pump_pi.db**.
 - Computes:
