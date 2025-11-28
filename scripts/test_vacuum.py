@@ -6,6 +6,8 @@ import board
 import adafruit_mcp3xxx.mcp3008 as MCP
 from adafruit_mcp3xxx.analog_in import AnalogIn
 import RPi.GPIO as GPIO
+import pandas as pd
+import numpy as np
 
 GPIO.setmode(GPIO.BCM)
 
@@ -13,6 +15,11 @@ GPIO.setmode(GPIO.BCM)
 output_pin = 13
 GPIO.setup(output_pin,GPIO.OUT)
 GPIO.output(output_pin,GPIO.LOW)
+
+#set voltage conversion constants
+adc_reference_voltage = 5
+adc_voltage_range = [0,adc_reference_voltage]
+adc_value_range = [0,65535]
 
 # create the spi bus
 spi = busio.SPI(clock=board.SCK, MISO=board.MISO, MOSI=board.MOSI)
@@ -24,18 +31,10 @@ cs = digitalio.DigitalInOut(board.D5)
 mcp = MCP.MCP3008(spi, cs)
 
 # create an analog input channel on pin 0
-chan0 = AnalogIn(mcp, MCP.P0)
-chan1 = AnalogIn(mcp, MCP.P1)
-chan2 = AnalogIn(mcp, MCP.P2)
-
-print('Raw ADC Value: ', chan0.value)
-print('ADC Voltage: ' + str(chan0.voltage) + 'V')
-
-print('Raw ADC Value: ', chan1.value)
-print('ADC Voltage: ' + str(chan1.voltage) + 'V')
-
-print('Raw ADC Value: ', chan2.value)
-print('ADC Voltage: ' + str(chan2.voltage) + 'V')
+vac_chan = AnalogIn(mcp, MCP.P0)
+start_chan = AnalogIn(mcp, MCP.P1)
+manual_start_chan = AnalogIn(mcp, MCP.P2)
+end_chan = AnalogIn(mcp, MCP.P3)
 
 last_read0 = 0       # this keeps track of the last potentiometer value
 last_read1 = 0       # this keeps track of the last potentiometer value
@@ -43,6 +42,7 @@ last_read2 = 0       # this keeps track of the last potentiometer value
 tolerance = 250     # to keep from being jittery we'll only change
                    # volume when the pot has moved a significant amount
                    # on a 16-bit ADC
+
 
 def remap_range(value, left_min, left_max, right_min, right_max):
    # this remaps a value from original (left) range to new (right) range
@@ -61,10 +61,13 @@ while True:
    trim_pot_changed = False
 
    # read the analog pin
-   trim_pot0 = chan0.value
+   vacuum_raw = vac_chan.value
+   start_raw = start_chan.value
+   manual_start_raw = manual_start_chan.value
+   end_raw = end_chan.value
 
    # how much has it changed since the last read?
-   pot_adjust0 = abs(trim_pot0 - last_read0)
+   pot_adjust0 = abs(vacuum_raw - last_read0)
 
    if (pot_adjust0 > tolerance):
        trim_pot_changed = True
@@ -72,19 +75,13 @@ while True:
    if True:
        # convert 16bit adc0 (0-65535) trim pot read into 0-5volt level
        adc_input_voltage = 5
-       voltage0 = remap_range(trim_pot0, 0, 65535, 0, adc_input_voltage)
+       voltage0 = remap_range(vacuum_raw, 0, 65535, 0, adc_input_voltage)
+       voltage0a = np.interp(vacuum_raw,adc_value_range,adc_voltage_range)
        pressure0 = remap_range(trim_pot0, 0, 65535, -14.5, 30)
        pressureinhg0 = remap_range(trim_pot0, 0, 65535, -29.52, 60)
 
-    #    if voltage0<0.9:
-    #        GPIO.output(output_pin,GPIO.HIGH)
-    #        print("BOOM")
-    #    else:
-    #        GPIO.output(output_pin,GPIO.LOW)
-
-
        # print voltage
-       print('Current State = {}raw, {:0.3f}v, {:0.3f}psi, {:0.3f}inHg'.format(trim_pot0,voltage0,pressure0,pressureinhg0))
+       print('Current State = {}raw, {:0.3f}v, {:0.3f}v, {:0.3f}psi, {:0.3f}inHg'.format(trim_pot0,voltage0,voltage0a,pressure0,pressureinhg0))
 
        # save the potentiometer reading for the next loop
        last_read0 = trim_pot0
