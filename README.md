@@ -1,18 +1,35 @@
-# Sugar house monitor
-Planned functionality includes
-1. Monitoring sap levels in each tank
-1. Projecting time to full/empty
-1. Monitoring the vacuum in the line system
-1. Montitoring the stack temperature
+# Sugar House Monitor
 
+Live/Simulated monitoring for Brookside/Roadside tanks, transfer pump, evaporator flow, and vacuum with three Pis and a WordPress-hosted UI.
 
-# Install/setup notes:
+## Data Flow (current)
+- Tank Pi + Pump Pi (or Tank Pi debug replay) write readings/events locally, then POST to WordPress APIs (`web/api/ingest_tank.php`, `ingest_pump.php`, `ingest_vacuum.php`).
+- Each ingest call updates the server SQLite DBs and triggers `scripts/process_status.py`, which emits `web/data/status_*.json` (including `status_evaporator.json`) from the latest records.
+- Frontend (`web/index.html` + `web/js/app.js`) and Display Pi (`scripts/main_display.py`) read the status JSON plus history APIs (`flow_history.php`, `evaporator_history.php`).
+- CSV exports are available via `web/api/export_csv.php` and `/downloads.html`.
+
+## Device Roles
+### Tank Pi
+- Two ultrasonic sensors (Brookside/Roadside); computes volume/flow/ETA locally.
+- Queues to `tank_pi.db`; uploads via shared API key.
+- Debug: replays `real_data/brookside.csv` / `roadside.csv` (and optionally pump CSV) with SyntheticClock.
+- Hosts local fallback UI from `web/`.
+
+### Pump Pi
+- Captures pump start/stop events, computes run/interval/gph, uploads to server (`pump_events` table).
+- Debug is handled by Tank Pi using `real_data/pump_times.csv`.
+
+### Display Pi
+- Pygame fullscreen display (`scripts/main_display.py`) reading `status_evaporator.json` + `evaporator_history.php`.
+- Uses server plot settings (window/y-limits) and shows colored evaporator flow by draw-off tank.
+
+## Install/setup notes (Tank Pi)
 1. Enable UART (hardware serial) with raspi-config:
-    * sudo raspi-config nonint do_serial_cons 1
-    * sudo raspi-config nonint do_serial_hw 0
+    * `sudo raspi-config nonint do_serial_cons 1`
+    * `sudo raspi-config nonint do_serial_hw 0`
 1. Enable a second UART port:
-    * sudo vi /boot/firmware/config.txt
-    * Make sure the following is at the bottom of the file (un-comment the port  you want to use):
+    * `sudo vi /boot/firmware/config.txt`
+    * Ensure one `dtoverlay` is enabled:
     ```
     enable_uart=1
     # dtoverlay=uart2   #TX: GPIO0 /   RX: GPIO1
@@ -21,9 +38,9 @@ Planned functionality includes
     dtoverlay=uart5   #TX: GPIO12 /   RX: GPIO13
     ```
     
-# Setup on wordpress site
-1. Clone the https://github.com/jeremymatt/sugar_house_monitor to `~/git/`
-1. `ln -s ~/git/sugar_house_monitor/web \~/mattsmaplesyrup.com/sugar_house_monitor` to create a symlink from the sugar_house_monitor directory to the web directory in the git repo
+## Setup on WordPress site
+1. Clone https://github.com/jeremymatt/sugar_house_monitor to `~/git/`
+1. `ln -s ~/git/sugar_house_monitor/web ~/mattsmaplesyrup.com/sugar_house_monitor` to expose the web assets/API under the site
 
 ## Repository layout (2024 refactor)
 
@@ -90,9 +107,9 @@ Tank Pi batching is configurable via `UPLOAD_BATCH_SIZE`, while pump events alwa
 
 ## Data flow overview
 
-1. Tank Pi / Pump Pi sample hardware, write to local SQLite queues, and POST processed readings/events to `web/api/ingest_tank.php` or `web/api/ingest_pump.php`.
-2. Each ingest script validates the API key, stores rows in `data/*_server.db`, triggers `python3 scripts/process_status.py`, and responds with an ACK (latest timestamp per stream).
-3. `scripts/process_status.py` composes the per-component `web/data/status_*.json` files, which power both the WordPress UI and the Tank Pi fallback UI.
-4. `scripts/export_db_to_csv.py` can be run manually to dump long-term history from the server DBs into `data/exports/`.
+1. Tank Pi / Pump Pi sample hardware (or replay CSV), write to local SQLite queues, and POST processed readings/events to `web/api/ingest_tank.php`, `ingest_pump.php`, and `ingest_vacuum.php`.
+2. Ingest scripts validate API key, upsert into `data/*_server.db`, trigger `scripts/process_status.py`, and ACK with latest timestamps.
+3. `scripts/process_status.py` composes per-component `web/data/status_*.json` (including evaporator placeholder if no data yet) and keeps plot settings in `data/evaporator.db`.
+4. `flow_history.php` / `evaporator_history.php` serve chart history; `export_csv.php` and `/downloads.html` provide full CSV exports.
 
-See `design/plan.md` §13 for the current implementation roadmap and device-specific notes.
+See `design/plan.md` §13/§14 for roadmap and status.

@@ -353,6 +353,21 @@ This gives Codex a complete system map to work with.
 
 All work-items below assume **headless services** (no CLI flags) whose behavior is entirely controlled through `.env` files that live inside a gitignored `config/` folder.
 
+# 14. Status (Nov 2025)
+
+✅ Implemented
+- Tank Pi: sampling + geometry, local queues, debug replay (tank + pump CSV), fallback UI hosting.
+- Pump ingest: API, DB schema, status generation; pump replay via Tank Pi debug.
+- Evaporator flow logic: derived draw-off/pump-in, persisted to `evaporator.db`, status JSON + history API, plot settings persisted via web UI.
+- Display Pi: pygame fullscreen reader of status_evaporator + history with server plot settings.
+- Frontend: Boiling Status card, colorblind-safe charts, y-limit/window controls persisted server-side, CSV download page.
+- Export + reset helpers: CSV exports via `export_csv.php`; reset endpoints and placeholder status files to avoid 404s.
+
+⏳ In progress / remaining
+- Hardening network/host redirects on WordPress (www vs apex) and ensuring status files/DBs are always reachable post-reset.
+- Pump Pi hardware capture refit (currently simulated via Tank Pi debug).
+- Additional resilience around API timeouts/uploads (shorter timeouts, optional remote reset, better logging).
+
 ## 13.1 Config + credential management
 - Track documentation and examples inside `config/README.md` & `config/example/*.env`.
 - Real configs live in `config/*.env` (gitignored) and are loaded by every Python + PHP component via `scripts/config_loader.py` and `web/api/common.php`.
