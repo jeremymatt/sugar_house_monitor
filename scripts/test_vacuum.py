@@ -6,7 +6,7 @@ import board
 import adafruit_mcp3xxx.mcp3008 as MCP
 from adafruit_mcp3xxx.analog_in import AnalogIn
 import RPi.GPIO as GPIO
-import pandas as pd
+# import pandas as pd
 import numpy as np
 
 GPIO.setmode(GPIO.BCM)
