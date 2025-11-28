@@ -81,8 +81,8 @@ while True:
        adc_input_voltage = 5
        voltage0 = remap_range(vacuum_raw, 0, 65535, 0, adc_input_voltage)
        voltage0a = np.interp(vacuum_raw,adc_value_range,adc_voltage_range)
-       pressure0 = remap_range(trim_pot0, 0, 65535, -14.5, 30)
-       pressureinhg0 = remap_range(trim_pot0, 0, 65535, -29.52, 60)
+       pressure0 = remap_range(vacuum_raw, 0, 65535, -14.5, 30)
+       pressureinhg0 = remap_range(vacuum_raw, 0, 65535, -29.52, 60)
 
        start_voltage = np.interp(start_raw,adc_value_range,adc_voltage_range)
        manual_start_voltage = np.interp(manual_start_raw,adc_value_range,adc_voltage_range)
