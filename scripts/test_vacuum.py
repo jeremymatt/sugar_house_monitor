@@ -45,6 +45,11 @@ tolerance = 250     # to keep from being jittery we'll only change
                    # on a 16-bit ADC
 
 
+#load calibration values
+cal_data = np.loadtxt('vacuum_cal.csv', delimiter=',', dtype=float, skiprows=1)
+
+
+
 def remap_range(value, left_min, left_max, right_min, right_max):
    # this remaps a value from original (left) range to new (right) range
    # Figure out how 'wide' each range is
@@ -79,9 +84,8 @@ while True:
    # if True:
        # convert 16bit adc0 (0-65535) trim pot read into 0-5volt level
        adc_input_voltage = 5
-       voltage0 = remap_range(vacuum_raw, 0, 65535, 0, adc_input_voltage)
-       voltage0a = np.interp(vacuum_raw,adc_value_range,adc_voltage_range)
-       pressure0 = remap_range(vacuum_raw, 0, 65535, -14.5, 30)
+       vac_voltage = np.interp(vacuum_raw,adc_value_range,adc_voltage_range)
+       pressure0 = np.interp(vac_voltage,cal_data[:,0],cal_data[:,1])
        pressureinhg0 = remap_range(vacuum_raw, 0, 65535, -29.52, 60)
 
        start_voltage = np.interp(start_raw,adc_value_range,adc_voltage_range)
@@ -89,7 +93,7 @@ while True:
        end_voltage = np.interp(end_raw,adc_value_range,adc_voltage_range)
 
        # print voltage
-       print('Current State = {}raw, {:0.3f}v, {:0.3f}v, {:0.3f}psi, {:0.3f}inHg'.format(vacuum_raw,voltage0,voltage0a,pressure0,pressureinhg0))
+       print('Current State = {}raw, {:0.3f}v, {:0.3f}psi, {:0.3f}inHg'.format(vacuum_raw,vac_voltage,pressure0,pressureinhg0))
        print('start: {:0.3f}v, manual start: {:0.3f}v, end: {:0.3f}v'.format(start_voltage,manual_start_voltage,end_voltage))
 
        # save the potentiometer reading for the next loop
