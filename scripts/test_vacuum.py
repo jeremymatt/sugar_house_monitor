@@ -74,7 +74,7 @@ while True:
 
    if vac_change or start_change or manual_start_change or end_change:
        trim_pot_changed = True
-   if trim_pot_changed == True
+   if trim_pot_changed == True:
    # if True:
        # convert 16bit adc0 (0-65535) trim pot read into 0-5volt level
        adc_input_voltage = 5
