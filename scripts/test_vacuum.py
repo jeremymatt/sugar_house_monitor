@@ -89,7 +89,7 @@ while True:
        end_voltage = np.interp(end_raw,adc_value_range,adc_voltage_range)
 
        # print voltage
-       print('Current State = {}raw, {:0.3f}v, {:0.3f}v, {:0.3f}psi, {:0.3f}inHg'.format(trim_pot0,voltage0,voltage0a,pressure0,pressureinhg0))
+       print('Current State = {}raw, {:0.3f}v, {:0.3f}v, {:0.3f}psi, {:0.3f}inHg'.format(vacuum_raw,voltage0,voltage0a,pressure0,pressureinhg0))
        print('start: {:0.3f}v, manual start: {:0.3f}v, end: {:0.3f}v'.format(start_voltage,manual_start_voltage,end_voltage))
 
        # save the potentiometer reading for the next loop
