@@ -67,12 +67,15 @@ while True:
    end_raw = end_chan.value
 
    # how much has it changed since the last read?
-   pot_adjust0 = abs(vacuum_raw - last_read0)
+   vac_change = abs(vacuum_raw - last_vac) > tolerance
+   start_change = abs(start_raw - last_start) > tolerance
+   manual_start_change = abs(manual_start_raw - last_manual_start) > tolerance
+   end_change = abs(end_raw - last_end) > tolerance
 
-   if (pot_adjust0 > tolerance):
+   if vac_change or start_change or manual_start_change or end_change:
        trim_pot_changed = True
-   # trim_pot_changed = True
-   if True:
+   if trim_pot_changed == True
+   # if True:
        # convert 16bit adc0 (0-65535) trim pot read into 0-5volt level
        adc_input_voltage = 5
        voltage0 = remap_range(vacuum_raw, 0, 65535, 0, adc_input_voltage)
@@ -89,7 +92,10 @@ while True:
        print('start: {:0.3f}v, manual start: {:0.3f}v, end: {:0.3f}v'.format(start_voltage,manual_start_voltage,end_voltage))
 
        # save the potentiometer reading for the next loop
-       last_read0 = trim_pot0
+       last_vac = vacuum_raw
+       last_start = start_raw
+       last_manual_start = manual_start_raw
+       last_end = end_raw
 
    # hang out and do nothing for a half second
    time.sleep(0.05)
