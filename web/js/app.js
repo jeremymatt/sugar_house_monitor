@@ -630,10 +630,27 @@ function updateMonitorCard(data) {
   const tankNoteElem = document.getElementById("monitor-tank-note");
   const pumpStatusElem = document.getElementById("monitor-pump-status");
   const pumpNoteElem = document.getElementById("monitor-pump-note");
+  const pumpFatal = data?.pumpFatal === true;
 
-  function apply(elem, noteElem, seconds) {
+  function apply(elem, noteElem, seconds, isPump = false) {
     if (!elem || !noteElem) return;
     elem.classList.remove("status-good", "status-bad");
+    const fatal = isPump && pumpFatal;
+    if (fatal) {
+      elem.classList.add("status-bad");
+      if (seconds == null) {
+        elem.textContent = "FATAL ERROR (Unknown)";
+        noteElem.textContent = "Fatal state reported; awaiting heartbeat";
+      } else if (seconds <= MONITOR_STALE_SECONDS) {
+        elem.textContent = "FATAL ERROR (Online)";
+        noteElem.textContent = "Pump Pi signaled fatal error";
+      } else {
+        elem.textContent = "FATAL ERROR (Offline)";
+        const hours = formatHoursAgo(seconds);
+        noteElem.textContent = hours ? `Last heartbeat: ${hours} h ago` : "No recent heartbeat";
+      }
+      return;
+    }
     if (seconds == null) {
       elem.textContent = "Unknown";
       noteElem.textContent = "Awaiting heartbeat";
@@ -652,7 +669,7 @@ function updateMonitorCard(data) {
   }
 
   apply(tankStatusElem, tankNoteElem, data?.tankSec);
-  apply(pumpStatusElem, pumpNoteElem, data?.pumpSec);
+  apply(pumpStatusElem, pumpNoteElem, data?.pumpSec, true);
 }
 
 function addHistoryPoint(arr, value, tsMs) {
@@ -973,6 +990,7 @@ function recomputeStalenessAndRender() {
   const pumpSec      = pump      ? secondsSinceLast(pump.last_received_at      || pump.last_event_timestamp)      : null;
   const tankMonitorSec = monitor?.tank_monitor_last_received_at ? secondsSinceLast(monitor.tank_monitor_last_received_at) : null;
   const pumpMonitorSec = monitor?.pump_monitor_last_received_at ? secondsSinceLast(monitor.pump_monitor_last_received_at) : null;
+  const pumpFatal = monitor?.pump_fatal === true;
 
   const brooksideThresh = STALE_THRESHOLDS.tank_brookside;
   const roadsideThresh  = STALE_THRESHOLDS.tank_roadside;
@@ -997,6 +1015,7 @@ function recomputeStalenessAndRender() {
   updateMonitorCard({
     tankSec: tankMonitorSec,
     pumpSec: pumpMonitorSec,
+    pumpFatal,
   });
   updatePumpHistoryChart(
     pumpFlowVal != null && pumpTs != null ? { v: pumpFlowVal, t: pumpTs } : null,

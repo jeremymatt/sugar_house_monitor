@@ -448,6 +448,7 @@ def main() -> None:
         }
         atomic_write(status_base / f"status_{tank_id}.json", payload)
 
+    pump_payload = None
     pump_row = get_latest_pump_row(pump_conn)
     pump_gph_row = get_latest_pump_gph(pump_conn)
     if pump_row:
@@ -456,8 +457,14 @@ def main() -> None:
             gph = pump_gph_row["gallons_per_hour"]
         event_type = pump_row["event_type"]
         pump_status = "Pumping"
-        if isinstance(event_type, str) and event_type.lower() == "pump stop":
-            pump_status = "Not pumping"
+        pump_fatal = False
+        if isinstance(event_type, str):
+            lowered = event_type.lower()
+            if lowered == "pump stop":
+                pump_status = "Not pumping"
+            elif lowered == "fatal error":
+                pump_status = "FATAL ERROR"
+                pump_fatal = True
         pump_row = dict(pump_row)
         pump_row["gallons_per_hour"] = gph
         pump_payload = {
@@ -469,6 +476,7 @@ def main() -> None:
             "last_event_timestamp": pump_row["source_timestamp"],
             "last_received_at": pump_row["received_at"],
             "pump_status": pump_status,
+            "pump_fatal": pump_fatal,
         }
         atomic_write(status_base / "status_pump.json", pump_payload)
 
@@ -511,6 +519,7 @@ def main() -> None:
         "generated_at": timestamp,
         "tank_monitor_last_received_at": get_latest_monitor_ts(tank_conn, "tank"),
         "pump_monitor_last_received_at": get_latest_monitor_ts(pump_conn, "pump"),
+        "pump_fatal": pump_payload["pump_fatal"] if pump_row else None,
     }
     atomic_write(status_base / "status_monitor.json", monitor_payload)
 

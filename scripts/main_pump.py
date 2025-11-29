@@ -33,8 +33,8 @@ from config_loader import load_role, repo_path_from_config
 LOGGER = logging.getLogger("pump_pi")
 
 # Config defaults (overridable via pump_pi.env)
-ERROR_THRESHOLD = 30
-LOOP_DELAY = 1.0  # seconds for process 1 and 2 loops
+ERROR_THRESHOLD = 30  # seconds of continuous error before fatal
+LOOP_DELAY = 0.1  # seconds for process 1 and 2 loops (fast input response)
 VACUUM_REFRESH_RATE = 10.0  # seconds between vacuum batches
 VACUUM_SAMPLES = 10
 VACUUM_SAMPLE_DELAY = 0.05  # seconds between individual vacuum samples
@@ -351,14 +351,16 @@ class MCP3008Reader:
 @dataclass
 class PumpState:
     current_state: str = "not_pumping"
-    error_count: int = 0
     fatal_error: bool = False
+    fatal_sent: bool = False
     pump_start_time: Optional[float] = None
     pump_end_time: Optional[float] = None
     last_stop_time: Optional[float] = None
     last_fill_time: Optional[float] = None
     last_flow_rate: Optional[float] = None
     last_error_message: Optional[str] = None
+    last_error_log_time: Optional[float] = None
+    error_started_at: Optional[float] = None
 
 
 class PumpController:
@@ -396,6 +398,19 @@ class PumpController:
             return PumpState(**self.state.__dict__)
 
     def _record_error(self, message: str) -> None:
+        now = time.time()
+        should_log = False
+        if message != self.state.last_error_message:
+            should_log = True
+            self.state.last_error_message = message
+            self.state.last_error_log_time = now
+        else:
+            last = self.state.last_error_log_time
+            if last is None or (now - last) >= 1.0:
+                should_log = True
+                self.state.last_error_log_time = now
+        if not should_log:
+            return
         payload = {"source": "pump_pi", "message": message, "source_timestamp": iso_now()}
         self.db.insert_error_log(payload)
         self.error_writer.append(message)
@@ -407,16 +422,28 @@ class PumpController:
             self.state.pump_start_time = None
             self.state.last_error_message = "FATAL ERROR: STOPPING"
             self._record_error(self.state.last_error_message)
+        if not self.state.fatal_sent:
+            payload = {
+                "event_type": "Fatal Error",
+                "source_timestamp": iso_now(),
+                "pump_run_time_s": None,
+                "pump_interval_s": None,
+                "gallons_per_hour": None,
+            }
+            self.db.insert_pump_event(payload)
+            self.state.fatal_sent = True
 
     def _increment_error(self, message: Optional[str] = None) -> None:
-        self.state.error_count += 1
+        now = time.time()
+        if self.state.error_started_at is None:
+            self.state.error_started_at = now
         if message:
             self._record_error(message)
-        if self.state.error_count >= self.error_threshold:
+        if (now - self.state.error_started_at) >= self.error_threshold:
             self._handle_fatal()
 
-    def _reset_error_count(self) -> None:
-        self.state.error_count = 0
+    def _reset_error_timer(self) -> None:
+        self.state.error_started_at = None
 
     def _tank_full_event_handling(self, event_type: str) -> None:
         now = time.time()
@@ -499,7 +526,10 @@ class PumpController:
 
     def _apply_signals(self, signals: Dict[str, bool]) -> None:
         with self.lock:
-            if self.state.fatal_error or self.state.error_count >= self.error_threshold:
+            if self.state.fatal_error:
+                self._handle_fatal()
+                return
+            if self.state.error_started_at is not None and (time.time() - self.state.error_started_at) >= self.error_threshold:
                 self._handle_fatal()
                 return
 
@@ -510,7 +540,7 @@ class PumpController:
 
             # 0 0 0
             if not p1 and not p2 and not p3:
-                self._reset_error_count()
+                self._reset_error_timer()
                 return
 
             # 1 1 1
@@ -544,7 +574,7 @@ class PumpController:
                     msg = "WARNING: received simultaneous tank empty and manual pump start signals while manual pumping"
                 if state == "not_pumping":
                     msg = "WARNING: received simultaneous tank empty and manual pump start signals while not pumping"
-                self._reset_error_count()
+                self._reset_error_timer()
                 self._record_error(msg)
                 self.state.current_state = "not_pumping"
                 self._pump_stop(state) if state in {"pumping", "manual_pumping"} else None
@@ -573,7 +603,7 @@ class PumpController:
                     self.state.current_state = "pumping"
                     self._tank_full_event_handling("Auto Pump Start")
                 elif state == "not_pumping":
-                    self._reset_error_count()
+                    self._reset_error_timer()
                     self.state.current_state = "pumping"
                     self._tank_full_event_handling("Auto Pump Start")
                 return
@@ -581,26 +611,26 @@ class PumpController:
             # 0 1 0
             if (not p1) and p2 and (not p3):
                 if state == "pumping":
-                    self._reset_error_count()
+                    self._reset_error_timer()
                     self._record_error("WARNING: received manual pump signal while auto pumping")
                 elif state == "manual_pumping":
-                    self._reset_error_count()
+                    self._reset_error_timer()
                 elif state == "not_pumping":
-                    self._reset_error_count()
+                    self._reset_error_timer()
                     self.state.current_state = "manual_pumping"
                     self._manual_start()
                 return
 
             # 0 0 1
             if (not p1) and (not p2) and p3:
-                self._reset_error_count()
+                self._reset_error_timer()
                 if state in {"pumping", "manual_pumping"}:
                     self.state.current_state = "not_pumping"
                     self._pump_stop(state)
                 return
 
             # Fallback: ensure fatal if needed
-            if self.state.error_count >= self.error_threshold:
+            if self.state.error_started_at is not None and (time.time() - self.state.error_started_at) >= self.error_threshold:
                 self._handle_fatal()
 
 
