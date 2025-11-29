@@ -40,6 +40,8 @@ VACUUM_SAMPLES = 10
 VACUUM_SAMPLE_DELAY = 0.05  # seconds between individual vacuum samples
 ADC_REFERENCE_VOLTAGE = 5.0
 ADC_BOOL_THRESHOLD_V = 1.0
+ADC_DEBOUNCE_SAMPLES = 3
+ADC_DEBOUNCE_DELAY = 0.01  # seconds between debounce samples
 PUMP_CONTROL_PIN = 17  # BCM pin for optical relay control
 HANDSHAKE_INTERVAL_SECONDS = 150  # pump heartbeat cadence
 UPLOAD_BATCH_SIZE = 1
@@ -270,10 +272,19 @@ class LocalErrorWriter:
 
 
 class MCP3008Reader:
-    def __init__(self, adc_threshold_v: float, reference_voltage: float, calibration_path: Path):
+    def __init__(
+        self,
+        adc_threshold_v: float,
+        reference_voltage: float,
+        calibration_path: Path,
+        debounce_samples: int = ADC_DEBOUNCE_SAMPLES,
+        debounce_delay: float = ADC_DEBOUNCE_DELAY,
+    ):
         self.adc_threshold_v = adc_threshold_v
         self.reference_voltage = reference_voltage
         self.calibration_path = calibration_path
+        self.debounce_samples = max(1, int(debounce_samples))
+        self.debounce_delay = max(0.0, float(debounce_delay))
         self._setup_hardware()
         self._load_calibration()
         self.adc_value_range = (0, 65535)
@@ -337,8 +348,14 @@ class MCP3008Reader:
         return {"raw": raw, "volts": volts, "inhg": pressure}
 
     def read_boolean(self, channel: str) -> bool:
-        volts = self._voltage_from_raw(self.channels[channel].value)
-        return volts >= self.adc_threshold_v
+        votes = 0
+        for idx in range(self.debounce_samples):
+            volts = self._voltage_from_raw(self.channels[channel].value)
+            if volts >= self.adc_threshold_v:
+                votes += 1
+            if idx + 1 < self.debounce_samples and self.debounce_delay > 0:
+                time.sleep(self.debounce_delay)
+        return votes >= math.ceil(self.debounce_samples / 2)
 
     def read_signals(self) -> Dict[str, bool]:
         return {
@@ -766,6 +783,9 @@ class UploadWorker:
         except error.URLError as exc:
             log_http_error("Pump upload failed", exc)
             return False
+        except Exception as exc:  # pragma: no cover
+            LOGGER.warning("Pump upload failed: %s", exc)
+            return False
         return True
 
     def _upload_vacuum(self) -> bool:
@@ -783,6 +803,9 @@ class UploadWorker:
             self.db.mark_acked("vacuum_readings", [row["id"] for row in rows])
         except error.URLError as exc:
             log_http_error("Vacuum upload failed", exc)
+            return False
+        except Exception as exc:  # pragma: no cover
+            LOGGER.warning("Vacuum upload failed: %s", exc)
             return False
         return True
 
@@ -806,6 +829,9 @@ class UploadWorker:
         except error.URLError as exc:
             log_http_error("Error-log upload failed", exc)
             return False
+        except Exception as exc:  # pragma: no cover
+            LOGGER.warning("Error-log upload failed: %s", exc)
+            return False
         return True
 
     def _send_handshake(self) -> None:
@@ -816,6 +842,8 @@ class UploadWorker:
             LOGGER.info("Sent pump heartbeat (resp=%s)", resp.get("status"))
         except error.URLError as exc:
             log_http_error("Pump heartbeat failed", exc)
+        except Exception as exc:  # pragma: no cover
+            LOGGER.warning("Pump heartbeat failed: %s", exc)
 
 
 class VacuumSampler:
@@ -869,6 +897,8 @@ class PumpApp:
             adc_threshold_v=env_float(env, "ADC_BOOL_THRESHOLD_V", ADC_BOOL_THRESHOLD_V),
             reference_voltage=env_float(env, "ADC_REFERENCE_VOLTAGE", ADC_REFERENCE_VOLTAGE),
             calibration_path=repo_path_from_config(env.get("VACUUM_CAL_PATH", str(CALIBRATION_PATH))),
+            debounce_samples=env_int(env, "ADC_DEBOUNCE_SAMPLES", ADC_DEBOUNCE_SAMPLES),
+            debounce_delay=env_float(env, "ADC_DEBOUNCE_DELAY", ADC_DEBOUNCE_DELAY),
         )
         self.controller = PumpController(
             db=self.db,
