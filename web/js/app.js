@@ -97,7 +97,6 @@ let lastPumpFlow = null;
 const pumpHistory = [];
 const netFlowHistory = [];
 let evapHistory = [];
-const HISTORY_WINDOW_MS = 6 * 60 * 60 * 1000; // 6 hours
 const HISTORY_MIN_SPACING_MS = 30 * 1000; // throttle points every 30s unless value changes
 let evapPlotSettings = {
   y_axis_min: 200,
@@ -686,13 +685,6 @@ function addHistoryPoint(arr, value, tsMs) {
   arr.push({ t: tsMs, v: value });
 }
 
-function pruneHistory(arr, windowEndMs) {
-  const cutoff = windowEndMs - HISTORY_WINDOW_MS;
-  while (arr.length && arr[0].t < cutoff) {
-    arr.shift();
-  }
-}
-
 function pruneToWindow(arr, windowSec) {
   if (!arr.length || !Number.isFinite(windowSec)) return;
   const latestTs = arr[arr.length - 1].t;
@@ -739,12 +731,12 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
       ctx.font = "12px sans-serif";
       ctx.fillText("No flow data yet", 10, 20);
     }
-    if (note) note.textContent = "Showing last 6 hours";
+    if (note) note.textContent = `Showing last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"}`;
     return;
   }
 
-  pruneHistory(pumpHistory, latestTs);
-  pruneHistory(netFlowHistory, latestTs);
+  pruneToWindow(pumpHistory, flowHistoryWindowSec);
+  pruneToWindow(netFlowHistory, flowHistoryWindowSec);
 
   const canvas = document.getElementById("pump-history-canvas");
   const note = document.getElementById("pump-history-note");
