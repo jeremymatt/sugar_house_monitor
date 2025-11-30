@@ -404,7 +404,7 @@ function coerceEvapSettings(raw) {
   };
 }
 
-function applyEvapHistoryResponse(resp) {
+function applyEvapHistoryResponse(resp, expectedWindow) {
   if (!resp) {
     return;
   }
@@ -415,10 +415,8 @@ function applyEvapHistoryResponse(resp) {
       evapSettingsPending = null;
     }
   }
-  if (resp.window_sec_used && Number.isFinite(resp.window_sec_used)) {
-    if (!evapSettingsPending || resp.window_sec_used === evapSettingsPending.window_sec) {
-      evapHistoryWindowSec = resp.window_sec_used;
-    }
+  if (Number.isFinite(expectedWindow)) {
+    evapHistoryWindowSec = expectedWindow;
   } else if (evapPlotSettings.window_sec && (!evapSettingsPending || evapPlotSettings.window_sec === evapSettingsPending.window_sec)) {
     evapHistoryWindowSec = evapPlotSettings.window_sec;
   }
@@ -771,7 +769,7 @@ async function refreshEvapHistory(windowSec) {
     const resp = await fetchEvaporatorHistory(windowSec, aborter.signal);
     console.info("[evap] history response", resp ? "ok" : "null");
     if (!resp || aborter.signal.aborted) return;
-    applyEvapHistoryResponse(resp);
+    applyEvapHistoryResponse(resp, windowSec);
     updateEvapHistoryChart();
   } catch (err) {
     if (!aborter.signal.aborted) {
@@ -1153,18 +1151,18 @@ function recomputeStalenessAndRender() {
 async function fetchStatusOnce() {
   try {
     lastFetchError = false;
-    const currentPumpWindow = flowHistoryWindowSec;
-    const currentEvapWindow = evapHistoryWindowSec;
-    const settled = await Promise.allSettled([
-      fetchStatusFile(TANK_STATUS_FILES.brookside),
-      fetchStatusFile(TANK_STATUS_FILES.roadside),
-      fetchStatusFile(PUMP_STATUS_FILE),
-      fetchStatusFile(VACUUM_STATUS_FILE),
-      fetchStatusFile(MONITOR_STATUS_FILE),
-      pumpFetchGuard ? Promise.resolve(null) : fetchHistory(currentPumpWindow),
-      fetchStatusFile(EVAP_STATUS_FILE),
-      evapFetchGuard ? Promise.resolve(null) : fetchEvaporatorHistory(currentEvapWindow),
-    ]);
+  const currentPumpWindow = flowHistoryWindowSec;
+  const currentEvapWindow = evapHistoryWindowSec;
+  const settled = await Promise.allSettled([
+    fetchStatusFile(TANK_STATUS_FILES.brookside),
+    fetchStatusFile(TANK_STATUS_FILES.roadside),
+    fetchStatusFile(PUMP_STATUS_FILE),
+    fetchStatusFile(VACUUM_STATUS_FILE),
+    fetchStatusFile(MONITOR_STATUS_FILE),
+    pumpFetchGuard ? Promise.resolve(null) : fetchHistory(currentPumpWindow),
+    fetchStatusFile(EVAP_STATUS_FILE),
+    evapFetchGuard ? Promise.resolve(null) : fetchEvaporatorHistory(currentEvapWindow),
+  ]);
     const getVal = (idx) => (settled[idx].status === "fulfilled" ? settled[idx].value : null);
     const brookside = getVal(0);
     const roadside = getVal(1);
@@ -1196,7 +1194,7 @@ async function fetchStatusOnce() {
         evapSettingsPending = null;
       }
     }
-    applyEvapHistoryResponse(evapHistoryResp);
+    applyEvapHistoryResponse(evapHistoryResp, evapFetchGuard ? null : currentEvapWindow);
     if (!latestEvaporator && evapHistoryResp?.latest) {
       latestEvaporator = evapHistoryResp.latest;
     }
