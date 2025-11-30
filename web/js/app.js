@@ -114,6 +114,7 @@ let evapPlotSettings = {
 let pumpYAxisMin = PUMP_Y_MIN_OPTIONS[0];
 let pumpYAxisMax = PUMP_Y_MAX_OPTIONS[3]; // default 200
 let evapSettingsPending = null;
+let statusFetchInFlight = false;
 
 // ---- UTILITIES ----
 
@@ -704,6 +705,25 @@ function pruneToWindow(arr, windowSec) {
   }
 }
 
+function addEvapHistoryPoint(value, tsMs, drawOffTank) {
+  if (value == null || !isFinite(value)) return;
+  if (tsMs == null || !isFinite(tsMs)) return;
+  const drawOff = drawOffTank || "---";
+  const last = evapHistory[evapHistory.length - 1];
+  if (last) {
+    if (tsMs < last.t) return;
+    if (last.t === tsMs) {
+      last.v = value;
+      last.drawOff = drawOff;
+      return;
+    }
+    if (tsMs - last.t < HISTORY_MIN_SPACING_MS && last.v === value && last.drawOff === drawOff) {
+      return;
+    }
+  }
+  evapHistory.push({ t: tsMs, v: value, drawOff });
+}
+
 async function refreshPumpHistory(windowSec) {
   pendingPumpWindow = windowSec;
   if (pumpFetchAbort) {
@@ -1135,6 +1155,12 @@ function recomputeStalenessAndRender() {
     pumpSec: pumpMonitorSec,
     pumpFatal,
   });
+  const evapFlowVal = toNumber(latestEvaporator?.evaporator_flow_gph);
+  const evapTs = msFromIso(latestEvaporator?.sample_timestamp || latestEvaporator?.last_received_at);
+  if (!evapFetchGuard) {
+    addEvapHistoryPoint(evapFlowVal, evapTs, latestEvaporator?.draw_off_tank);
+    pruneToWindow(evapHistory, evapHistoryWindowSec);
+  }
   updatePumpHistoryChart(
     pumpFlowVal != null && pumpTs != null ? { v: pumpFlowVal, t: pumpTs } : null,
     overview?.netFlow != null && netTs != null ? { v: overview.netFlow, t: netTs } : null
@@ -1171,25 +1197,23 @@ function recomputeStalenessAndRender() {
 // ---- FETCH LOOP ----
 
 async function fetchStatusOnce() {
+  if (pumpFetchGuard || evapFetchGuard) {
+    console.info("[status] history fetch in progress; skipping status poll");
+    return;
+  }
+  if (statusFetchInFlight) {
+    return;
+  }
+  statusFetchInFlight = true;
   try {
     lastFetchError = false;
-    const currentPumpWindow = flowHistoryWindowSec;
-    const currentEvapWindow = evapHistoryWindowSec;
-    if (pendingPumpWindow != null) {
-      console.info("[pump] pending window in-flight, skipping status fetch history");
-    }
-    if (pendingEvapWindow != null) {
-      console.info("[evap] pending window in-flight, skipping status fetch history");
-    }
     const settled = await Promise.allSettled([
       fetchStatusFile(TANK_STATUS_FILES.brookside),
       fetchStatusFile(TANK_STATUS_FILES.roadside),
       fetchStatusFile(PUMP_STATUS_FILE),
       fetchStatusFile(VACUUM_STATUS_FILE),
       fetchStatusFile(MONITOR_STATUS_FILE),
-      (pumpFetchGuard || pendingPumpWindow != null) ? Promise.resolve(null) : fetchHistory(currentPumpWindow),
       fetchStatusFile(EVAP_STATUS_FILE),
-      (evapFetchGuard || pendingEvapWindow != null) ? Promise.resolve(null) : fetchEvaporatorHistory(currentEvapWindow),
     ]);
     const getVal = (idx) => (settled[idx].status === "fulfilled" ? settled[idx].value : null);
     const brookside = getVal(0);
@@ -1197,9 +1221,7 @@ async function fetchStatusOnce() {
     const pumpRaw = getVal(2);
     const vacuum = getVal(3);
     const monitor = getVal(4);
-    const history = getVal(5);
-    const evapStatus = getVal(6);
-    const evapHistoryResp = getVal(7);
+    const evapStatus = getVal(5);
     let pump = pumpRaw;
     if (pump && pump.gallons_per_hour == null && lastPumpFlow != null) {
       pump = { ...pump, gallons_per_hour: lastPumpFlow };
@@ -1222,34 +1244,6 @@ async function fetchStatusOnce() {
         evapSettingsPending = null;
       }
     }
-    applyEvapHistoryResponse(evapHistoryResp, evapFetchGuard ? null : currentEvapWindow);
-    if (!latestEvaporator && evapHistoryResp?.latest) {
-      latestEvaporator = evapHistoryResp.latest;
-    }
-  pumpHistory.splice(0, pumpHistory.length);
-  netFlowHistory.splice(0, netFlowHistory.length);
-  if (history && history.pump) {
-    history.pump
-      .slice()
-      .reverse()
-      .forEach((p) => {
-        const t = msFromIso(p.ts);
-        const v = toNumber(p.flow_gph);
-        if (t != null && v != null) pumpHistory.unshift({ t, v });
-      });
-  }
-  if (history && history.net) {
-    history.net
-      .slice()
-      .reverse()
-      .forEach((p) => {
-        const t = msFromIso(p.ts);
-        const v = toNumber(p.flow_gph);
-        if (t != null && v != null) netFlowHistory.unshift({ t, v });
-      });
-  }
-    pruneToWindow(pumpHistory, flowHistoryWindowSec);
-    pruneToWindow(netFlowHistory, flowHistoryWindowSec);
     syncEvapControls();
     syncPumpControls();
     lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump, vacuum, monitor, latestEvaporator]);
@@ -1266,20 +1260,18 @@ async function fetchStatusOnce() {
       tanksStale: true,
       pumpStale: true
     });
+  } finally {
+    statusFetchInFlight = false;
   }
 }
 
-function startLoops() {
+async function startLoops() {
   syncPumpControls();
   syncEvapControls();
-  // Initial fetch
-  fetchStatusOnce();
-
-  // Periodic refetch
-  setInterval(fetchStatusOnce, FETCH_INTERVAL_MS);
-
-  // Staleness recompute even if we don't refetch
-  setInterval(recomputeStalenessAndRender, STALENESS_UPDATE_MS);
+  const initialHistoryPromise = Promise.all([
+    refreshPumpHistory(flowHistoryWindowSec),
+    refreshEvapHistory(evapHistoryWindowSec),
+  ]);
 
   const windowSelect = document.getElementById("pump-history-window");
   if (windowSelect) {
@@ -1406,6 +1398,17 @@ function startLoops() {
       await refreshEvapHistory(val);
     });
   }
+
+  await initialHistoryPromise;
+  await fetchStatusOnce();
+
+  // Periodic refetch
+  setInterval(fetchStatusOnce, FETCH_INTERVAL_MS);
+
+  // Staleness recompute even if we don't refetch
+  setInterval(recomputeStalenessAndRender, STALENESS_UPDATE_MS);
 }
 
-document.addEventListener("DOMContentLoaded", startLoops);
+document.addEventListener("DOMContentLoaded", () => {
+  startLoops().catch((err) => console.error("Failed to start loops:", err));
+});
