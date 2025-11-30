@@ -52,6 +52,7 @@ ERROR_UPLOAD_BATCH_SIZE = 8
 ERROR_UPLOAD_INTERVAL_SECONDS = 30
 ERROR_LOG_PATH = repo_path_from_config("web/tank_error_log.txt")
 CALIBRATION_PATH = repo_path_from_config("scripts/vacuum_cal.csv")
+DEBUG_SIGNAL_LOG = False
 
 
 def iso_now() -> str:
@@ -369,12 +370,27 @@ class MCP3008Reader:
                 time.sleep(self.debounce_delay)
         return votes >= math.ceil(self.debounce_samples / 2)
 
-    def read_signals(self) -> Dict[str, bool]:
-        return {
-            "tank_full": self.read_boolean("tank_full"),
-            "manual_start": self.read_boolean("manual_start"),
-            "tank_empty": self.read_boolean("tank_empty"),
-        }
+    def read_signals(self, return_volts: bool = False):
+        volts: Dict[str, float] = {}
+        signals: Dict[str, bool] = {}
+        for key, channel_name in (
+            ("tank_full", "tank_full"),
+            ("manual_start", "manual_start"),
+            ("tank_empty", "tank_empty"),
+        ):
+            samples = []
+            high_votes = 0
+            for idx in range(self.debounce_samples):
+                raw_volts = self._voltage_from_raw(self.channels[channel_name].value)
+                samples.append(raw_volts)
+                if raw_volts >= self.adc_threshold_v:
+                    high_votes += 1
+                if idx + 1 < self.debounce_samples and self.debounce_delay > 0:
+                    time.sleep(self.debounce_delay)
+            avg_volts = float(np.mean(samples))
+            volts[key] = avg_volts
+            signals[key] = high_votes >= math.ceil(self.debounce_samples / 2)
+        return (signals, volts) if return_volts else signals
 
 
 @dataclass
@@ -399,12 +415,14 @@ class PumpController:
         error_writer: LocalErrorWriter,
         error_threshold: int,
         loop_delay: float,
+        debug_signal_log: bool = False,
     ):
         self.db = db
         self.error_writer = error_writer
         self.state = PumpState()
         self.error_threshold = error_threshold
         self.loop_delay = loop_delay
+        self.debug_signal_log = debug_signal_log
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
@@ -547,10 +565,10 @@ class PumpController:
     def _run(self, reader: MCP3008Reader) -> None:
         while not self.stop_event.is_set():
             try:
-                signals = reader.read_signals()
+                signals, volts = reader.read_signals(return_volts=True)
                 self._last_signals = signals
-                if any(signals.values()):
-                    now = time.time()
+                now = time.time()
+                if any(signals.values()) or self.debug_signal_log:
                     if (
                         self._last_signal_log is None
                         or signals != self._last_signal_log
@@ -558,14 +576,20 @@ class PumpController:
                         or (now - self._last_signal_log_time) >= 1.0
                     ):
                         LOGGER.info(
-                            "Signal state: tank_full=%s manual_start=%s tank_empty=%s",
+                            "Signals: tank_full=%s (%.2fv) manual_start=%s (%.2fv) tank_empty=%s (%.2fv)",
                             signals.get("tank_full"),
+                            volts.get("tank_full"),
                             signals.get("manual_start"),
+                            volts.get("manual_start"),
                             signals.get("tank_empty"),
+                            volts.get("tank_empty"),
                         )
                         self._last_signal_log = dict(signals)
                         self._last_signal_log_time = now
+                prev_state = self.state.current_state
                 self._apply_signals(signals)
+                if self.state.current_state != prev_state:
+                    LOGGER.info("State transition: %s -> %s", prev_state, self.state.current_state)
             except Exception as exc:  # pragma: no cover
                 LOGGER.exception("Signal loop error: %s", exc)
                 self._record_error(f"Signal loop error: {exc}")
@@ -932,6 +956,7 @@ class PumpApp:
         self.loop_delay = env_float(env, "LOOP_DELAY", LOOP_DELAY)
         self.vacuum_refresh_rate = env_float(env, "VACUUM_REFRESH_RATE", VACUUM_REFRESH_RATE)
         self.pump_control_pin = env_int(env, "PUMP_CONTROL_PIN", PUMP_CONTROL_PIN)
+        debug_signal_log = env_bool(env, "DEBUG_SIGNAL_LOG", DEBUG_SIGNAL_LOG)
         self.reader = MCP3008Reader(
             adc_threshold_v=env_float(env, "ADC_BOOL_THRESHOLD_V", ADC_BOOL_THRESHOLD_V),
             reference_voltage=env_float(env, "ADC_REFERENCE_VOLTAGE", ADC_REFERENCE_VOLTAGE),
@@ -944,6 +969,7 @@ class PumpApp:
             error_writer=self.error_writer,
             error_threshold=self.error_threshold,
             loop_delay=self.loop_delay,
+            debug_signal_log=debug_signal_log,
         )
         self.relay = PumpRelay(self.pump_control_pin)
         self.relay_worker = PumpRelayWorker(self.relay, self.controller, self.loop_delay)
