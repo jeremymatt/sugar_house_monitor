@@ -331,8 +331,9 @@ async function fetchStatusFile(file) {
   }
 }
 
-async function fetchHistory() {
-  const url = `${FLOW_HISTORY_ENDPOINT}?window_sec=${flowHistoryWindowSec}`;
+async function fetchHistory(windowOverrideSec) {
+  const win = Number.isFinite(windowOverrideSec) ? windowOverrideSec : flowHistoryWindowSec;
+  const url = `${FLOW_HISTORY_ENDPOINT}?window_sec=${win}`;
   const res = await fetch(url, { cache: "no-store" });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`HTTP ${res.status} for flow_history`);
@@ -347,7 +348,7 @@ async function fetchHistory() {
 }
 
 async function fetchEvaporatorHistory(windowOverrideSec) {
-  const windowParam = windowOverrideSec ?? evapHistoryWindowSec;
+  const windowParam = Number.isFinite(windowOverrideSec) ? windowOverrideSec : evapHistoryWindowSec;
   const url = `${EVAP_HISTORY_ENDPOINT}?window_sec=${windowParam}`;
   const res = await fetch(url, { cache: "no-store" });
   if (res.status === 404) return null;
@@ -425,6 +426,7 @@ function applyEvapHistoryResponse(resp) {
         return { t, v, drawOff: p.draw_off_tank || "---" };
       })
       .filter((p) => p != null);
+    pruneToWindow(evapHistory, evapHistoryWindowSec);
   }
 
   if (resp.latest && !latestEvaporator) {
@@ -1056,15 +1058,17 @@ function recomputeStalenessAndRender() {
 async function fetchStatusOnce() {
   try {
     lastFetchError = false;
+    const currentPumpWindow = flowHistoryWindowSec;
+    const currentEvapWindow = evapHistoryWindowSec;
     const settled = await Promise.allSettled([
       fetchStatusFile(TANK_STATUS_FILES.brookside),
       fetchStatusFile(TANK_STATUS_FILES.roadside),
       fetchStatusFile(PUMP_STATUS_FILE),
       fetchStatusFile(VACUUM_STATUS_FILE),
       fetchStatusFile(MONITOR_STATUS_FILE),
-      fetchHistory(),
+      fetchHistory(currentPumpWindow),
       fetchStatusFile(EVAP_STATUS_FILE),
-      fetchEvaporatorHistory(),
+      fetchEvaporatorHistory(currentEvapWindow),
     ]);
     const getVal = (idx) => (settled[idx].status === "fulfilled" ? settled[idx].value : null);
     const brookside = getVal(0);
@@ -1156,6 +1160,8 @@ function startLoops() {
       const val = parseInt(windowSelect.value, 10);
       if (Number.isFinite(val)) {
         flowHistoryWindowSec = val;
+        pumpHistory = [];
+        netFlowHistory = [];
         fetchStatusOnce();
       }
     });
@@ -1271,6 +1277,7 @@ function startLoops() {
         }
       }
       const resp = await fetchEvaporatorHistory(val);
+      evapHistory = [];
       applyEvapHistoryResponse(resp);
       syncEvapControls();
       updateEvapHistoryChart();
