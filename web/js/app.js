@@ -100,8 +100,12 @@ let evapHistory = [];
 const HISTORY_MIN_SPACING_MS = 30 * 1000; // throttle points every 30s unless value changes
 let pumpFetchGuard = false;
 let pumpFetchAbort = null;
+let pumpFetchToken = 0;
+let pendingPumpWindow = null;
 let evapFetchGuard = false;
 let evapFetchAbort = null;
+let evapFetchToken = 0;
+let pendingEvapWindow = null;
 let evapPlotSettings = {
   y_axis_min: 200,
   y_axis_max: 600,
@@ -701,12 +705,14 @@ function pruneToWindow(arr, windowSec) {
 }
 
 async function refreshPumpHistory(windowSec) {
+  pendingPumpWindow = windowSec;
   if (pumpFetchAbort) {
     console.info("[pump] aborting previous fetch");
     pumpFetchAbort.abort();
     pumpFetchAbort = null;
   }
   pumpFetchGuard = true;
+  const token = ++pumpFetchToken;
   pumpHistory.splice(0, pumpHistory.length);
   netFlowHistory.splice(0, netFlowHistory.length);
   updatePumpHistoryChart();
@@ -717,6 +723,10 @@ async function refreshPumpHistory(windowSec) {
     console.info("[pump] history response", history ? "ok" : "null");
     if (!history) return;
     if (aborter.signal.aborted) return;
+    if (token !== pumpFetchToken) {
+      console.info("[pump] ignoring stale history response");
+      return;
+    }
     if (history.pump) {
       history.pump
         .slice()
@@ -747,20 +757,25 @@ async function refreshPumpHistory(windowSec) {
   } finally {
     if (pumpFetchAbort === aborter) {
       pumpFetchAbort = null;
-      pumpFetchGuard = false;
-      console.info("[pump] history refresh complete");
-      recomputeStalenessAndRender();
+      if (token === pumpFetchToken) {
+        pumpFetchGuard = false;
+        pendingPumpWindow = null;
+        console.info("[pump] history refresh complete");
+        recomputeStalenessAndRender();
+      }
     }
   }
 }
 
 async function refreshEvapHistory(windowSec) {
+  pendingEvapWindow = windowSec;
   if (evapFetchAbort) {
     console.info("[evap] aborting previous fetch");
     evapFetchAbort.abort();
     evapFetchAbort = null;
   }
   evapFetchGuard = true;
+  const token = ++evapFetchToken;
   evapHistory = [];
   updateEvapHistoryChart();
   const aborter = new AbortController();
@@ -769,6 +784,10 @@ async function refreshEvapHistory(windowSec) {
     const resp = await fetchEvaporatorHistory(windowSec, aborter.signal);
     console.info("[evap] history response", resp ? "ok" : "null");
     if (!resp || aborter.signal.aborted) return;
+    if (token !== evapFetchToken) {
+      console.info("[evap] ignoring stale history response");
+      return;
+    }
     applyEvapHistoryResponse(resp, windowSec);
     updateEvapHistoryChart();
   } catch (err) {
@@ -778,9 +797,12 @@ async function refreshEvapHistory(windowSec) {
   } finally {
     if (evapFetchAbort === aborter) {
       evapFetchAbort = null;
-      evapFetchGuard = false;
-      console.info("[evap] history refresh complete");
-      recomputeStalenessAndRender();
+      if (token === evapFetchToken) {
+        evapFetchGuard = false;
+        pendingEvapWindow = null;
+        console.info("[evap] history refresh complete");
+        recomputeStalenessAndRender();
+      }
     }
   }
 }
@@ -1151,18 +1173,24 @@ function recomputeStalenessAndRender() {
 async function fetchStatusOnce() {
   try {
     lastFetchError = false;
-  const currentPumpWindow = flowHistoryWindowSec;
-  const currentEvapWindow = evapHistoryWindowSec;
-  const settled = await Promise.allSettled([
-    fetchStatusFile(TANK_STATUS_FILES.brookside),
-    fetchStatusFile(TANK_STATUS_FILES.roadside),
-    fetchStatusFile(PUMP_STATUS_FILE),
-    fetchStatusFile(VACUUM_STATUS_FILE),
-    fetchStatusFile(MONITOR_STATUS_FILE),
-    pumpFetchGuard ? Promise.resolve(null) : fetchHistory(currentPumpWindow),
-    fetchStatusFile(EVAP_STATUS_FILE),
-    evapFetchGuard ? Promise.resolve(null) : fetchEvaporatorHistory(currentEvapWindow),
-  ]);
+    const currentPumpWindow = flowHistoryWindowSec;
+    const currentEvapWindow = evapHistoryWindowSec;
+    if (pendingPumpWindow != null) {
+      console.info("[pump] pending window in-flight, skipping status fetch history");
+    }
+    if (pendingEvapWindow != null) {
+      console.info("[evap] pending window in-flight, skipping status fetch history");
+    }
+    const settled = await Promise.allSettled([
+      fetchStatusFile(TANK_STATUS_FILES.brookside),
+      fetchStatusFile(TANK_STATUS_FILES.roadside),
+      fetchStatusFile(PUMP_STATUS_FILE),
+      fetchStatusFile(VACUUM_STATUS_FILE),
+      fetchStatusFile(MONITOR_STATUS_FILE),
+      (pumpFetchGuard || pendingPumpWindow != null) ? Promise.resolve(null) : fetchHistory(currentPumpWindow),
+      fetchStatusFile(EVAP_STATUS_FILE),
+      (evapFetchGuard || pendingEvapWindow != null) ? Promise.resolve(null) : fetchEvaporatorHistory(currentEvapWindow),
+    ]);
     const getVal = (idx) => (settled[idx].status === "fulfilled" ? settled[idx].value : null);
     const brookside = getVal(0);
     const roadside = getVal(1);
