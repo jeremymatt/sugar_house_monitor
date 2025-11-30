@@ -337,6 +337,7 @@ async function fetchStatusFile(file) {
 
 async function fetchHistory(windowOverrideSec, signal) {
   const win = Number.isFinite(windowOverrideSec) ? windowOverrideSec : flowHistoryWindowSec;
+  console.info("[pump] fetchHistory request", win);
   const url = `${FLOW_HISTORY_ENDPOINT}?window_sec=${win}`;
   const res = await fetch(url, { cache: "no-store", signal });
   if (res.status === 404) return null;
@@ -353,6 +354,7 @@ async function fetchHistory(windowOverrideSec, signal) {
 
 async function fetchEvaporatorHistory(windowOverrideSec, signal) {
   const windowParam = Number.isFinite(windowOverrideSec) ? windowOverrideSec : evapHistoryWindowSec;
+  console.info("[evap] fetchEvaporatorHistory request", windowParam);
   const url = `${EVAP_HISTORY_ENDPOINT}?window_sec=${windowParam}`;
   const res = await fetch(url, { cache: "no-store", signal });
   if (res.status === 404) return null;
@@ -702,6 +704,7 @@ function pruneToWindow(arr, windowSec) {
 
 async function refreshPumpHistory(windowSec) {
   if (pumpFetchAbort) {
+    console.info("[pump] aborting previous fetch");
     pumpFetchAbort.abort();
     pumpFetchAbort = null;
   }
@@ -713,6 +716,7 @@ async function refreshPumpHistory(windowSec) {
   pumpFetchAbort = aborter;
   try {
     const history = await fetchHistory(windowSec, aborter.signal);
+    console.info("[pump] history response", history ? "ok" : "null");
     if (!history) return;
     if (aborter.signal.aborted) return;
     if (history.pump) {
@@ -746,6 +750,7 @@ async function refreshPumpHistory(windowSec) {
     if (pumpFetchAbort === aborter) {
       pumpFetchAbort = null;
       pumpFetchGuard = false;
+      console.info("[pump] history refresh complete");
       recomputeStalenessAndRender();
     }
   }
@@ -753,6 +758,7 @@ async function refreshPumpHistory(windowSec) {
 
 async function refreshEvapHistory(windowSec) {
   if (evapFetchAbort) {
+    console.info("[evap] aborting previous fetch");
     evapFetchAbort.abort();
     evapFetchAbort = null;
   }
@@ -763,6 +769,7 @@ async function refreshEvapHistory(windowSec) {
   evapFetchAbort = aborter;
   try {
     const resp = await fetchEvaporatorHistory(windowSec, aborter.signal);
+    console.info("[evap] history response", resp ? "ok" : "null");
     if (!resp || aborter.signal.aborted) return;
     applyEvapHistoryResponse(resp);
     updateEvapHistoryChart();
@@ -774,6 +781,7 @@ async function refreshEvapHistory(windowSec) {
     if (evapFetchAbort === aborter) {
       evapFetchAbort = null;
       evapFetchGuard = false;
+      console.info("[evap] history refresh complete");
       recomputeStalenessAndRender();
     }
   }
@@ -1252,6 +1260,7 @@ function startLoops() {
     windowSelect.addEventListener("change", () => {
       const val = parseInt(windowSelect.value, 10);
       if (Number.isFinite(val)) {
+        console.info("[pump] window change", flowHistoryWindowSec, "=>", val);
         flowHistoryWindowSec = val;
         refreshPumpHistory(val);
       }
@@ -1351,6 +1360,7 @@ function startLoops() {
     evapWindowSel.addEventListener("change", async () => {
       const val = parseInt(evapWindowSel.value, 10);
       if (!Number.isFinite(val)) return;
+      console.info("[evap] window change", evapHistoryWindowSec, "=>", val);
       evapHistoryWindowSec = val;
       evapPlotSettings = { ...evapPlotSettings, window_sec: val };
       evapSettingsPending = { ...evapPlotSettings };
