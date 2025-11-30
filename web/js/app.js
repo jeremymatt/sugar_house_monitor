@@ -413,9 +413,9 @@ function applyEvapHistoryResponse(resp, expectedWindow) {
   if (!resp) {
     return;
   }
-  if (resp.settings) {
+  if (resp.settings && evapSettingsPending) {
     const incoming = coerceEvapSettings(resp.settings);
-    if (!evapSettingsPending || settingsEqual(incoming, evapSettingsPending)) {
+    if (settingsEqual(incoming, evapSettingsPending)) {
       evapPlotSettings = incoming;
       evapSettingsPending = null;
     }
@@ -724,6 +724,23 @@ function addEvapHistoryPoint(value, tsMs, drawOffTank) {
   evapHistory.push({ t: tsMs, v: value, drawOff });
 }
 
+function drawCenteredMessage(canvas, bgColor, textColor, msg) {
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const desiredWidth = canvas.clientWidth || canvas.width || 600;
+  if (canvas.width !== desiredWidth) {
+    canvas.width = desiredWidth;
+  }
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = textColor;
+  ctx.font = "12px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(msg, canvas.width / 2, canvas.height / 2);
+}
+
 async function refreshPumpHistory(windowSec) {
   pendingPumpWindow = windowSec;
   if (pumpFetchAbort) {
@@ -854,29 +871,17 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
     netFlowHistory.length ? netFlowHistory[netFlowHistory.length - 1].t : 0
   );
 
+  const canvas = document.getElementById("pump-history-canvas");
+  const note = document.getElementById("pump-history-note");
+  if (!canvas) return;
   if (!latestTs) {
-    const canvas = document.getElementById("pump-history-canvas");
-    const note = document.getElementById("pump-history-note");
-    if (canvas) {
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "#1a1f28";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "#888";
-      ctx.font = "12px sans-serif";
-      const msg = pumpFetchGuard ? "FETCHING DATA..." : "No flow data yet";
-      ctx.fillText(msg, 10, 20);
-    }
+    drawCenteredMessage(canvas, "#1a1f28", "#888", pumpFetchGuard ? "FETCHING DATA..." : "No flow data yet");
     if (note) note.textContent = `Showing last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"}`;
     return;
   }
 
   pruneToWindow(pumpHistory, flowHistoryWindowSec);
   pruneToWindow(netFlowHistory, flowHistoryWindowSec);
-
-  const canvas = document.getElementById("pump-history-canvas");
-  const note = document.getElementById("pump-history-note");
-  if (!canvas) return;
   // Fit to container width on each draw for responsiveness.
   const desiredWidth = canvas.clientWidth || canvas.width || 600;
   if (canvas.width !== desiredWidth) {
@@ -956,9 +961,7 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
   drawLine(ctx, netFlowHistory, NET_COLOR, start, now, yMin, yMax, { padLeft, padTop, plotW, plotH });
 
   if ((!pumpHistory.length) && (!netFlowHistory.length)) {
-    ctx.fillStyle = "#888";
-    ctx.font = "12px sans-serif";
-    ctx.fillText("No flow data yet", 10, 20);
+    drawCenteredMessage(canvas, "#1a1f28", "#888", "No flow data yet");
     if (note) note.textContent = `Showing last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"}`;
     return;
   }
@@ -974,14 +977,7 @@ function updateEvapHistoryChart() {
   if (!canvas) return;
 
   if (!evapHistory.length) {
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#1a1f28";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#888";
-    ctx.font = "12px sans-serif";
-    const msg = evapFetchGuard ? "FETCHING DATA..." : "No evaporator data yet";
-    ctx.fillText(msg, 10, 20);
+    drawCenteredMessage(canvas, "#1a1f28", "#888", evapFetchGuard ? "FETCHING DATA..." : "No evaporator data yet");
     if (note) note.textContent = `Showing last ${EVAP_WINDOWS[evapHistoryWindowSec.toString()] || "window"}`;
     return;
   }
@@ -1234,9 +1230,9 @@ async function fetchStatusOnce() {
     latestVacuum = vacuum;
     latestMonitor = monitor;
     latestEvaporator = evapStatus || latestEvaporator;
-    if (evapStatus?.plot_settings) {
+    if (evapSettingsPending && evapStatus?.plot_settings) {
       const incoming = coerceEvapSettings(evapStatus.plot_settings);
-      if (!evapSettingsPending || settingsEqual(incoming, evapSettingsPending)) {
+      if (settingsEqual(incoming, evapSettingsPending)) {
         evapPlotSettings = incoming;
         if (evapPlotSettings.window_sec) {
           evapHistoryWindowSec = evapPlotSettings.window_sec;
