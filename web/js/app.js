@@ -98,6 +98,10 @@ const pumpHistory = [];
 const netFlowHistory = [];
 let evapHistory = [];
 const HISTORY_MIN_SPACING_MS = 30 * 1000; // throttle points every 30s unless value changes
+let pumpFetchGuard = false;
+let pumpFetchAbort = null;
+let evapFetchGuard = false;
+let evapFetchAbort = null;
 let evapPlotSettings = {
   y_axis_min: 200,
   y_axis_max: 600,
@@ -331,10 +335,10 @@ async function fetchStatusFile(file) {
   }
 }
 
-async function fetchHistory(windowOverrideSec) {
+async function fetchHistory(windowOverrideSec, signal) {
   const win = Number.isFinite(windowOverrideSec) ? windowOverrideSec : flowHistoryWindowSec;
   const url = `${FLOW_HISTORY_ENDPOINT}?window_sec=${win}`;
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetch(url, { cache: "no-store", signal });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`HTTP ${res.status} for flow_history`);
   const text = await res.text();
@@ -347,10 +351,10 @@ async function fetchHistory(windowOverrideSec) {
   }
 }
 
-async function fetchEvaporatorHistory(windowOverrideSec) {
+async function fetchEvaporatorHistory(windowOverrideSec, signal) {
   const windowParam = Number.isFinite(windowOverrideSec) ? windowOverrideSec : evapHistoryWindowSec;
   const url = `${EVAP_HISTORY_ENDPOINT}?window_sec=${windowParam}`;
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetch(url, { cache: "no-store", signal });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`HTTP ${res.status} for evaporator_history`);
   const text = await res.text();
@@ -696,6 +700,85 @@ function pruneToWindow(arr, windowSec) {
   }
 }
 
+async function refreshPumpHistory(windowSec) {
+  if (pumpFetchAbort) {
+    pumpFetchAbort.abort();
+    pumpFetchAbort = null;
+  }
+  pumpFetchGuard = true;
+  pumpHistory.splice(0, pumpHistory.length);
+  netFlowHistory.splice(0, netFlowHistory.length);
+  updatePumpHistoryChart();
+  const aborter = new AbortController();
+  pumpFetchAbort = aborter;
+  try {
+    const history = await fetchHistory(windowSec, aborter.signal);
+    if (!history) return;
+    if (aborter.signal.aborted) return;
+    if (history.pump) {
+      history.pump
+        .slice()
+        .reverse()
+        .forEach((p) => {
+          const t = msFromIso(p.ts);
+          const v = toNumber(p.flow_gph);
+          if (t != null && v != null) pumpHistory.unshift({ t, v });
+        });
+    }
+    if (history.net) {
+      history.net
+        .slice()
+        .reverse()
+        .forEach((p) => {
+          const t = msFromIso(p.ts);
+          const v = toNumber(p.flow_gph);
+          if (t != null && v != null) netFlowHistory.unshift({ t, v });
+        });
+    }
+    pruneToWindow(pumpHistory, windowSec);
+    pruneToWindow(netFlowHistory, windowSec);
+    updatePumpHistoryChart();
+  } catch (err) {
+    if (!aborter.signal.aborted) {
+      console.warn("Pump history refresh error:", err);
+    }
+  } finally {
+    if (pumpFetchAbort === aborter) {
+      pumpFetchAbort = null;
+      pumpFetchGuard = false;
+      recomputeStalenessAndRender();
+    }
+  }
+}
+
+async function refreshEvapHistory(windowSec) {
+  if (evapFetchAbort) {
+    evapFetchAbort.abort();
+    evapFetchAbort = null;
+  }
+  evapFetchGuard = true;
+  evapHistory = [];
+  updateEvapHistoryChart();
+  const aborter = new AbortController();
+  evapFetchAbort = aborter;
+  try {
+    const resp = await fetchEvaporatorHistory(windowSec, aborter.signal);
+    if (!resp || aborter.signal.aborted) return;
+    applyEvapHistoryResponse(resp);
+    updateEvapHistoryChart();
+  } catch (err) {
+    if (!aborter.signal.aborted) {
+      console.warn("Evap history refresh error:", err);
+    }
+  } finally {
+    if (evapFetchAbort === aborter) {
+      evapFetchAbort = null;
+      evapFetchGuard = false;
+      recomputeStalenessAndRender();
+    }
+  }
+}
+
 function drawLine(ctx, points, color, x0, x1, yMin, yMax, dims) {
   if (!points.length) return;
   ctx.strokeStyle = color;
@@ -713,8 +796,10 @@ function drawLine(ctx, points, color, x0, x1, yMin, yMax, dims) {
 }
 
 function updatePumpHistoryChart(pumpPoint, netPoint) {
-  if (pumpPoint) addHistoryPoint(pumpHistory, pumpPoint.v, pumpPoint.t);
-  if (netPoint) addHistoryPoint(netFlowHistory, netPoint.v, netPoint.t);
+  if (!pumpFetchGuard) {
+    if (pumpPoint) addHistoryPoint(pumpHistory, pumpPoint.v, pumpPoint.t);
+    if (netPoint) addHistoryPoint(netFlowHistory, netPoint.v, netPoint.t);
+  }
 
   const latestTs = Math.max(
     pumpHistory.length ? pumpHistory[pumpHistory.length - 1].t : 0,
@@ -731,7 +816,8 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = "#888";
       ctx.font = "12px sans-serif";
-      ctx.fillText("No flow data yet", 10, 20);
+      const msg = pumpFetchGuard ? "FETCHING DATA..." : "No flow data yet";
+      ctx.fillText(msg, 10, 20);
     }
     if (note) note.textContent = `Showing last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"}`;
     return;
@@ -846,7 +932,8 @@ function updateEvapHistoryChart() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = "#888";
     ctx.font = "12px sans-serif";
-    ctx.fillText("No evaporator data yet", 10, 20);
+    const msg = evapFetchGuard ? "FETCHING DATA..." : "No evaporator data yet";
+    ctx.fillText(msg, 10, 20);
     if (note) note.textContent = `Showing last ${EVAP_WINDOWS[evapHistoryWindowSec.toString()] || "window"}`;
     return;
   }
@@ -1066,9 +1153,9 @@ async function fetchStatusOnce() {
       fetchStatusFile(PUMP_STATUS_FILE),
       fetchStatusFile(VACUUM_STATUS_FILE),
       fetchStatusFile(MONITOR_STATUS_FILE),
-      fetchHistory(currentPumpWindow),
+      pumpFetchGuard ? Promise.resolve(null) : fetchHistory(currentPumpWindow),
       fetchStatusFile(EVAP_STATUS_FILE),
-      fetchEvaporatorHistory(currentEvapWindow),
+      evapFetchGuard ? Promise.resolve(null) : fetchEvaporatorHistory(currentEvapWindow),
     ]);
     const getVal = (idx) => (settled[idx].status === "fulfilled" ? settled[idx].value : null);
     const brookside = getVal(0);
@@ -1105,22 +1192,28 @@ async function fetchStatusOnce() {
     if (!latestEvaporator && evapHistoryResp?.latest) {
       latestEvaporator = evapHistoryResp.latest;
     }
-    pumpHistory.splice(0, pumpHistory.length);
-    netFlowHistory.splice(0, netFlowHistory.length);
-    if (history && history.pump) {
-      history.pump.forEach((p) => {
+  pumpHistory.splice(0, pumpHistory.length);
+  netFlowHistory.splice(0, netFlowHistory.length);
+  if (history && history.pump) {
+    history.pump
+      .slice()
+      .reverse()
+      .forEach((p) => {
         const t = msFromIso(p.ts);
         const v = toNumber(p.flow_gph);
-        if (t != null && v != null) pumpHistory.push({ t, v });
+        if (t != null && v != null) pumpHistory.unshift({ t, v });
       });
-    }
-    if (history && history.net) {
-      history.net.forEach((p) => {
+  }
+  if (history && history.net) {
+    history.net
+      .slice()
+      .reverse()
+      .forEach((p) => {
         const t = msFromIso(p.ts);
         const v = toNumber(p.flow_gph);
-        if (t != null && v != null) netFlowHistory.push({ t, v });
+        if (t != null && v != null) netFlowHistory.unshift({ t, v });
       });
-    }
+  }
     pruneToWindow(pumpHistory, flowHistoryWindowSec);
     pruneToWindow(netFlowHistory, flowHistoryWindowSec);
     syncEvapControls();
@@ -1160,9 +1253,7 @@ function startLoops() {
       const val = parseInt(windowSelect.value, 10);
       if (Number.isFinite(val)) {
         flowHistoryWindowSec = val;
-        pumpHistory = [];
-        netFlowHistory = [];
-        fetchStatusOnce();
+        refreshPumpHistory(val);
       }
     });
   }
@@ -1276,12 +1367,7 @@ function startLoops() {
           evapSettingsPending = null;
         }
       }
-      const resp = await fetchEvaporatorHistory(val);
-      evapHistory = [];
-      applyEvapHistoryResponse(resp);
-      syncEvapControls();
-      updateEvapHistoryChart();
-      recomputeStalenessAndRender();
+      await refreshEvapHistory(val);
     });
   }
 }
