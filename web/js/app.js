@@ -693,6 +693,15 @@ function pruneHistory(arr, windowEndMs) {
   }
 }
 
+function pruneToWindow(arr, windowSec) {
+  if (!arr.length || !Number.isFinite(windowSec)) return;
+  const latestTs = arr[arr.length - 1].t;
+  const cutoff = latestTs - windowSec * 1000;
+  while (arr.length && arr[0].t < cutoff) {
+    arr.shift();
+  }
+}
+
 function drawLine(ctx, points, color, x0, x1, yMin, yMax, dims) {
   if (!points.length) return;
   ctx.strokeStyle = color;
@@ -1116,6 +1125,8 @@ async function fetchStatusOnce() {
         if (t != null && v != null) netFlowHistory.push({ t, v });
       });
     }
+    pruneToWindow(pumpHistory, flowHistoryWindowSec);
+    pruneToWindow(netFlowHistory, flowHistoryWindowSec);
     syncEvapControls();
     syncPumpControls();
     lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump, vacuum, monitor, latestEvaporator]);
