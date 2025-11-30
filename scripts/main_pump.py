@@ -238,7 +238,7 @@ class PumpDatabase:
                 SELECT *
                 FROM {table}
                 WHERE acked_by_server = 0
-                ORDER BY source_timestamp
+                ORDER BY source_timestamp DESC
                 LIMIT ?
                 """,
                 (limit,),

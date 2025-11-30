@@ -25,6 +25,35 @@ def open_db(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def parse_iso(ts: Optional[str]) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts)
+    except Exception:
+        return None
+
+
+def should_update_status(path: Path, new_ts: Optional[str]) -> bool:
+    """
+    Only update a status file if the incoming timestamp is newer than what is present.
+    """
+    if new_ts is None:
+        return False
+    if not path.exists():
+        return True
+    try:
+        current = json.loads(path.read_text())
+    except Exception:
+        return True
+    current_ts = current.get("last_event_timestamp") or current.get("source_timestamp")
+    cur_dt = parse_iso(current_ts)
+    new_dt = parse_iso(new_ts)
+    if cur_dt is None or new_dt is None:
+        return True
+    return new_dt > cur_dt
+
+
 def table_exists(conn: sqlite3.Connection, table: str) -> bool:
     cur = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
@@ -462,6 +491,8 @@ def main() -> None:
             lowered = event_type.lower()
             if lowered == "pump stop":
                 pump_status = "Not pumping"
+            elif lowered == "manual pump start":
+                pump_status = "Manual pumping"
             elif lowered == "fatal error":
                 pump_status = "FATAL ERROR"
                 pump_fatal = True
@@ -478,7 +509,9 @@ def main() -> None:
             "pump_status": pump_status,
             "pump_fatal": pump_fatal,
         }
-        atomic_write(status_base / "status_pump.json", pump_payload)
+        pump_status_path = status_base / "status_pump.json"
+        if should_update_status(pump_status_path, pump_payload["last_event_timestamp"]):
+            atomic_write(pump_status_path, pump_payload)
 
     vac_row = get_latest_vacuum_row(vacuum_conn)
     if vac_row:
@@ -488,7 +521,9 @@ def main() -> None:
             "source_timestamp": vac_row["source_timestamp"],
             "last_received_at": vac_row["received_at"],
         }
-        atomic_write(status_base / "status_vacuum.json", vacuum_payload)
+        vac_path = status_base / "status_vacuum.json"
+        if should_update_status(vac_path, vacuum_payload["source_timestamp"]):
+            atomic_write(vac_path, vacuum_payload)
 
     evap_prev = latest_evap_row(evap_conn)
     evap_record = build_evap_record(tank_rows, pump_row, evap_prev)
