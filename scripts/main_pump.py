@@ -244,6 +244,18 @@ class PumpDatabase:
             )
             return cur.fetchall()
 
+    def count_unsent(self, table: str) -> int:
+        with self.lock:
+            cur = self.conn.execute(
+                f"""
+                SELECT COUNT(*) AS cnt
+                FROM {table}
+                WHERE acked_by_server = 0
+                """
+            )
+            row = cur.fetchone()
+            return int(row["cnt"]) if row else 0
+
     def mark_acked(self, table: str, ids: List[int]) -> None:
         if not ids:
             return
@@ -397,6 +409,8 @@ class PumpController:
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self._last_signals: Dict[str, bool] = {}
+        self._last_signal_log: Optional[Dict[str, bool]] = None
+        self._last_signal_log_time: Optional[float] = None
 
     def start(self, reader: MCP3008Reader) -> None:
         if self.thread and self.thread.is_alive():
@@ -535,6 +549,22 @@ class PumpController:
             try:
                 signals = reader.read_signals()
                 self._last_signals = signals
+                if any(signals.values()):
+                    now = time.time()
+                    if (
+                        self._last_signal_log is None
+                        or signals != self._last_signal_log
+                        or (self._last_signal_log_time is None)
+                        or (now - self._last_signal_log_time) >= 1.0
+                    ):
+                        LOGGER.info(
+                            "Signal state: tank_full=%s manual_start=%s tank_empty=%s",
+                            signals.get("tank_full"),
+                            signals.get("manual_start"),
+                            signals.get("tank_empty"),
+                        )
+                        self._last_signal_log = dict(signals)
+                        self._last_signal_log_time = now
                 self._apply_signals(signals)
             except Exception as exc:  # pragma: no cover
                 LOGGER.exception("Signal loop error: %s", exc)
@@ -780,6 +810,9 @@ class UploadWorker:
             resp = post_json(url, {"events": events}, self.api_key)
             LOGGER.info("Uploaded %s pump events (resp=%s)", len(events), resp.get("status"))
             self.db.mark_acked("pump_events", [row["id"] for row in rows])
+            remaining = self.db.count_unsent("pump_events")
+            if remaining > 0:
+                LOGGER.info("Pump queue pending after upload: %s", remaining)
         except error.URLError as exc:
             log_http_error("Pump upload failed", exc)
             return False
@@ -801,6 +834,9 @@ class UploadWorker:
             resp = post_json(url, {"readings": readings}, self.api_key)
             LOGGER.info("Uploaded %s vacuum readings (resp=%s)", len(readings), resp.get("status"))
             self.db.mark_acked("vacuum_readings", [row["id"] for row in rows])
+            remaining = self.db.count_unsent("vacuum_readings")
+            if remaining > 0:
+                LOGGER.info("Vacuum queue pending after upload: %s", remaining)
         except error.URLError as exc:
             log_http_error("Vacuum upload failed", exc)
             return False
@@ -826,6 +862,9 @@ class UploadWorker:
             resp = post_json(url, {"errors": records}, self.api_key)
             LOGGER.info("Uploaded %s error logs (resp=%s)", len(records), resp.get("status"))
             self.db.mark_acked("error_logs", [row["id"] for row in rows])
+            remaining = self.db.count_unsent("error_logs")
+            if remaining > 0:
+                LOGGER.info("Error-log queue pending after upload: %s", remaining)
         except error.URLError as exc:
             log_http_error("Error-log upload failed", exc)
             return False
