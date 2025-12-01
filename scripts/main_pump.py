@@ -238,7 +238,7 @@ class PumpDatabase:
                 SELECT *
                 FROM {table}
                 WHERE acked_by_server = 0
-                ORDER BY source_timestamp DESC
+                ORDER BY source_timestamp ASC
                 LIMIT ?
                 """,
                 (limit,),
@@ -406,6 +406,7 @@ class PumpState:
     last_error_message: Optional[str] = None
     last_error_log_time: Optional[float] = None
     error_started_at: Optional[float] = None
+    last_error_count_logged: Optional[int] = None
 
 
 class PumpController:
@@ -488,11 +489,17 @@ class PumpController:
             self.state.error_started_at = now
         if message:
             self._record_error(message)
-        if (now - self.state.error_started_at) >= self.error_threshold:
-            self._handle_fatal()
+        if self.state.error_started_at is not None:
+            error_count = int(now - self.state.error_started_at)
+            if error_count > 0 and error_count != self.state.last_error_count_logged:
+                LOGGER.info("error_count=%s", error_count)
+                self.state.last_error_count_logged = error_count
+            if (now - self.state.error_started_at) >= self.error_threshold:
+                self._handle_fatal()
 
     def _reset_error_timer(self) -> None:
         self.state.error_started_at = None
+        self.state.last_error_count_logged = None
 
     def _tank_full_event_handling(self, event_type: str) -> None:
         now = time.time()
@@ -617,10 +624,10 @@ class PumpController:
             # 1 1 1
             if p1 and p2 and p3:
                 self._increment_error(
-                    "ERROR: received simultaneous tank empty, manual start, and tank full signals while pumping"
+                    "ERROR: received simultaneous tank empty, manual start, and tank full signals while auto pumping"
                     if state == "pumping"
                     else (
-                        "ERROR: received simultaneous tank empty, manual start, and tank full signals while pumping"
+                        "ERROR: received simultaneous tank empty, manual start, and tank full signals while manual pumping"
                         if state == "manual_pumping"
                         else "ERROR: received simultaneous tank empty, manual start, and tank full signals while not pumping"
                     )
@@ -631,8 +638,10 @@ class PumpController:
 
             # 1 0 1
             if p1 and not p2 and p3:
-                msg = "ERROR: received simultaneous tank empty and tank full signals while pumping"
-                if state == "not_pumping":
+                msg = "ERROR: received simultaneous tank empty and tank full signals while auto pumping"
+                if state == "manual_pumping":
+                    msg = "ERROR: received simultaneous tank empty and tank full signals while manual pumping"
+                elif state == "not_pumping":
                     msg = "ERROR: received simultaneous tank empty and tank full signals while not pumping"
                     self.state.current_state = "pumping"
                 self._increment_error(msg)
@@ -640,10 +649,10 @@ class PumpController:
 
             # 0 1 1
             if (not p1) and p2 and p3:
-                msg = "WARNING: received simultaneous tank empty and manual pump start signals while pumping"
+                msg = "WARNING: received simultaneous tank empty and manual pump start signals while auto pumping"
                 if state == "manual_pumping":
                     msg = "WARNING: received simultaneous tank empty and manual pump start signals while manual pumping"
-                if state == "not_pumping":
+                elif state == "not_pumping":
                     msg = "WARNING: received simultaneous tank empty and manual pump start signals while not pumping"
                 self._reset_error_timer()
                 self._record_error(msg)
@@ -668,7 +677,7 @@ class PumpController:
             # 1 0 0
             if p1 and not p2 and not p3:
                 if state == "pumping":
-                    self._increment_error("WARNING: received tank full signal while manual pumping")
+                    self._increment_error("WARNING: received tank full signal while auto pumping")
                 elif state == "manual_pumping":
                     self._increment_error("WARNING: received tank full signal while manual pumping")
                     self.state.current_state = "pumping"
@@ -698,6 +707,10 @@ class PumpController:
                 if state in {"pumping", "manual_pumping"}:
                     self.state.current_state = "not_pumping"
                     self._pump_stop(state)
+                else:
+                    self.state.pump_end_time = time.time()
+                if self.state.pump_end_time is None:
+                    self.state.pump_end_time = time.time()
                 return
 
             # Fallback: ensure fatal if needed
