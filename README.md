@@ -19,6 +19,40 @@ Live/Simulated monitoring for Brookside/Roadside tanks, transfer pump, evaporato
 - Captures pump start/stop events, computes run/interval/gph, uploads to server (`pump_events` table).
 - Debug is handled by Tank Pi using `real_data/pump_times.csv`.
 
+#### Pump Pi state machine (P1/P2/P3 truth table)
+- P1 = tank_full input, P2 = manual_start input, P3 = tank_empty input; states are `pumping`, `manual_pumping`, and `not_pumping`.
+- `error_count` increments while an error condition persists and resets when signals clear; if `error_count >= error_threshold`, the controller forces a fatal stop.
+
+| P1 | P2 | P3 | Error state | Error action | Current state | Next state / action |
+|----|----|----|-------------|--------------|---------------|---------------------|
+| any | any | any | error_count >= error_threshold | no action | `ERROR_STATE` | `not_pumping` / stop loop, flag error on WordPress, set `error_message="FATAL ERROR: STOPPING"`, write/queue error log |
+| 0 | 0 | 0 | error_count < error_threshold | reset `error_count=0` | `pumping` | `pumping` / no action |
+| 0 | 0 | 0 | error_count < error_threshold | reset `error_count=0` | `manual_pumping` | `manual_pumping` / no action |
+| 0 | 0 | 0 | error_count < error_threshold | reset `error_count=0` | `not_pumping` | `not_pumping` / no action |
+| 1 | 0 | 0 | error_count < error_threshold | `error_count += 1` | `pumping` | `pumping` / set `error_message="WARNING: received tank full signal while auto pumping"` and write/queue error |
+| 1 | 0 | 0 | error_count < error_threshold | `error_count += 1` | `manual_pumping` | `pumping` / set `error_message="WARNING: received tank full signal while manual pumping"`, write/queue error, run `tank_full_event_handling()` |
+| 1 | 0 | 0 | error_count < error_threshold | reset `error_count=0` | `not_pumping` | `pumping` / run `tank_full_event_handling()` |
+| 0 | 1 | 0 | error_count < error_threshold | reset `error_count=0` | `pumping` | `pumping` / set `error_message="WARNING: received manual pump signal while auto pumping"` and write/queue error |
+| 0 | 1 | 0 | error_count < error_threshold | reset `error_count=0` | `manual_pumping` | `manual_pumping` / no action |
+| 0 | 1 | 0 | error_count < error_threshold | reset `error_count=0` | `not_pumping` | `manual_pumping` / record event locally, queue to WordPress, set `pump_end_time=None`, set `pump_start_time=time.time()` if missing |
+| 0 | 0 | 1 | error_count < error_threshold | reset `error_count=0` | `pumping` | `not_pumping` / calculate pump time, record locally, queue to WordPress, set `pump_end_time=time.time()` |
+| 0 | 0 | 1 | error_count < error_threshold | reset `error_count=0` | `manual_pumping` | `not_pumping` / record locally, queue to WordPress, set `pump_end_time=time.time()` |
+| 0 | 0 | 1 | error_count < error_threshold | reset `error_count=0` | `not_pumping` | `not_pumping` / set `pump_end_time=time.time()` |
+| 1 | 1 | 0 | error_count < error_threshold | `error_count += 1` | `pumping` | `pumping` / set `error_message="WARNING: received simultaneous tank full and manual start signals while auto pumping"` and queue to WordPress |
+| 1 | 1 | 0 | error_count < error_threshold | `error_count += 1` | `manual_pumping` | `pumping` / set `error_message="WARNING: received simultaneous tank full and manual start signals while manually pumping"`, queue to WordPress, run `tank_full_event_handling()` |
+| 1 | 1 | 0 | error_count < error_threshold | `error_count += 1` | `not_pumping` | `pumping` / set `error_message="WARNING: received simultaneous tank full and manual start signals while not pumping"`, queue to WordPress, run `tank_full_event_handling()` |
+| 1 | 0 | 1 | error_count < error_threshold | `error_count += 1` | `pumping` | `pumping` / set `error_message="ERROR: received simultaneous tank empty and tank full signals while auto pumping"`, write/queue error |
+| 1 | 0 | 1 | error_count < error_threshold | `error_count += 1` | `manual_pumping` | `manual_pumping` / set `error_message="ERROR: received simultaneous tank empty and tank full signals while manual pumping"`, write/queue error |
+| 1 | 0 | 1 | error_count < error_threshold | `error_count += 1` | `not_pumping` | `pumping` / set `error_message="ERROR: received simultaneous tank empty and tank full signals while not pumping"`, write/queue error |
+| 0 | 1 | 1 | error_count < error_threshold | reset `error_count=0` | `pumping` | `not_pumping` / set `error_message="WARNING: received simultaneous tank empty and manual pump start signals while auto pumping"`, write/queue error |
+| 0 | 1 | 1 | error_count < error_threshold | reset `error_count=0` | `manual_pumping` | `not_pumping` / set `error_message="WARNING: received simultaneous tank empty and manual pump start signals while manual pumping"`, write/queue error |
+| 0 | 1 | 1 | error_count < error_threshold | reset `error_count=0` | `not_pumping` | `not_pumping` / set `error_message="WARNING: received simultaneous tank empty and manual pump start signals while not pumping"`, write/queue error |
+| 1 | 1 | 1 | error_count < error_threshold | `error_count += 1` | `pumping` | `pumping` / set `error_message="ERROR: received simultaneous tank empty, manual start, and tank full signals while auto pumping"`, write/queue error |
+| 1 | 1 | 1 | error_count < error_threshold | `error_count += 1` | `manual_pumping` | `manual_pumping` / set `error_message="ERROR: received simultaneous tank empty, manual start, and tank full signals while manual pumping"`, write/queue error |
+| 1 | 1 | 1 | error_count < error_threshold | `error_count += 1` | `not_pumping` | `pumping` / set `error_message="ERROR: received simultaneous tank empty, manual start, and tank full signals while not pumping"`, write/queue error |
+
+- `tank_full_event_handling()`: sets `pump_start_time` if missing; when `pump_end_time` is present, computes `fill_time` and `flow_rate`, records an event, and clears `pump_end_time`; otherwise logs a warning that `pump_end_time` was missing.
+
 ### Display Pi
 - Pygame fullscreen display (`scripts/main_display.py`) reading `status_evaporator.json` + `evaporator_history.php`.
 - Uses server plot settings (window/y-limits) and shows colored evaporator flow by draw-off tank.
