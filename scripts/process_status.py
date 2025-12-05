@@ -46,7 +46,11 @@ def should_update_status(path: Path, new_ts: Optional[str]) -> bool:
         current = json.loads(path.read_text())
     except Exception:
         return True
-    current_ts = current.get("last_event_timestamp") or current.get("source_timestamp")
+    current_ts = (
+        current.get("last_event_timestamp")
+        or current.get("source_timestamp")
+        or current.get("last_sample_timestamp")
+    )
     cur_dt = parse_iso(current_ts)
     new_dt = parse_iso(new_ts)
     if cur_dt is None or new_dt is None:
@@ -69,11 +73,11 @@ def get_latest_tank_rows(conn: sqlite3.Connection) -> Dict[str, sqlite3.Row]:
         SELECT tr.*
         FROM tank_readings tr
         INNER JOIN (
-            SELECT tank_id, MAX(received_at) AS max_received
+            SELECT tank_id, MAX(source_timestamp) AS max_source
             FROM tank_readings
             GROUP BY tank_id
         ) latest
-            ON latest.tank_id = tr.tank_id AND latest.max_received = tr.received_at
+            ON latest.tank_id = tr.tank_id AND latest.max_source = tr.source_timestamp
         """
     )
     return {row["tank_id"]: row for row in cur.fetchall()}
@@ -475,7 +479,9 @@ def main() -> None:
             "last_sample_timestamp": row["source_timestamp"],
             "last_received_at": row["received_at"],
         }
-        atomic_write(status_base / f"status_{tank_id}.json", payload)
+        tank_status_path = status_base / f"status_{tank_id}.json"
+        if should_update_status(tank_status_path, payload["last_sample_timestamp"]):
+            atomic_write(tank_status_path, payload)
 
     pump_payload = None
     pump_row = get_latest_pump_row(pump_conn)

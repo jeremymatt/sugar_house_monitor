@@ -1179,6 +1179,8 @@ class TankPiApp:
         self.vacuum_thread = None
 
     def _ensure_tank_processes_alive(self) -> None:
+        if self.stop_event.is_set():
+            return
         for tank_name in TVF.tank_names:
             proc = self.tank_processes.get(tank_name)
             if proc and proc.is_alive():
@@ -1200,6 +1202,8 @@ class TankPiApp:
         """Signal the app to begin shutdown and wake any waiting loops."""
         self.stop_event.set()
         self.upload_worker.stop_event.set()
+        # Stop tank processes immediately so sensor reads cease even before full shutdown.
+        self._stop_tank_processes()
 
     def shutdown(self) -> None:
         if not self.stop_event.is_set():
