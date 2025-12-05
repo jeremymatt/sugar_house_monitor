@@ -86,7 +86,11 @@ def post_json(url: str, payload: Dict | List, api_key: str, timeout: int = 10) -
     req = request.Request(url, data=data, headers=headers, method="POST")
     with request.urlopen(req, timeout=timeout) as resp:
         body = resp.read().decode("utf-8")
-        return json.loads(body or "{}")
+        try:
+            return json.loads(body or "{}")
+        except json.JSONDecodeError as exc:
+            LOGGER.warning("Non-JSON response from %s: %s", url, body[:200])
+            raise RuntimeError(f"Failed to parse JSON response from {url}") from exc
 
 
 def log_http_error(prefix: str, exc: error.URLError) -> None:
@@ -293,7 +297,7 @@ class TankDatabase:
                 SELECT *
                 FROM tank_readings
                 WHERE acked_by_server = 0
-                ORDER BY source_timestamp
+                ORDER BY source_timestamp DESC, id DESC
                 LIMIT ?
                 """,
                 (limit,),
@@ -320,7 +324,7 @@ class TankDatabase:
                 SELECT *
                 FROM pump_events
                 WHERE acked_by_server = 0
-                ORDER BY source_timestamp
+                ORDER BY source_timestamp DESC, id DESC
                 LIMIT ?
                 """,
                 (limit,),
@@ -347,7 +351,7 @@ class TankDatabase:
                 SELECT *
                 FROM vacuum_readings
                 WHERE acked_by_server = 0
-                ORDER BY source_timestamp
+                ORDER BY source_timestamp DESC, id DESC
                 LIMIT ?
                 """,
                 (limit,),
@@ -367,6 +371,43 @@ class TankDatabase:
                 [(row_id,) for row_id in ids],
             )
 
+    def _count_unsent(self, table: str) -> int:
+        if table not in {"tank_readings", "pump_events", "vacuum_readings"}:
+            return 0
+        with self.lock:
+            cur = self.conn.execute(
+                f"SELECT COUNT(*) AS count FROM {table} WHERE acked_by_server = 0"
+            )
+            row = cur.fetchone()
+            return int(row["count"] if row else 0)
+
+    def count_unsent_tank(self) -> int:
+        return self._count_unsent("tank_readings")
+
+    def count_unsent_pump(self) -> int:
+        return self._count_unsent("pump_events")
+
+    def count_unsent_vacuum(self) -> int:
+        return self._count_unsent("vacuum_readings")
+
+    def prune_acknowledged(self, retention_days: float) -> int:
+        """Delete acked rows older than the retention window. Returns rows deleted."""
+        if not retention_days or retention_days <= 0:
+            return 0
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+        deleted = 0
+        with self.lock, self.conn:
+            for table in ("tank_readings", "pump_events", "vacuum_readings"):
+                cur = self.conn.execute(
+                    f"""
+                    DELETE FROM {table}
+                    WHERE acked_by_server = 1 AND received_at < ?
+                    """,
+                    (cutoff,),
+                )
+                deleted += cur.rowcount if cur.rowcount is not None else 0
+        return deleted
+
 
 class UploadWorker:
     def __init__(self, env: Dict[str, str], db: TankDatabase, speed_factor: float = 1.0):
@@ -384,6 +425,9 @@ class UploadWorker:
         self.pump_interval = base_pump_interval
         self.vacuum_batch = int(env.get("VACUUM_UPLOAD_BATCH_SIZE", "8"))
         self.vacuum_interval = int(env.get("VACUUM_UPLOAD_INTERVAL_SECONDS", "30"))
+        self.heartbeat_interval = float(env.get("UPLOAD_HEARTBEAT_SECONDS", "120"))
+        self.retention_days = float_or_none(env.get("DB_RETENTION_DAYS"))
+        self.prune_interval = float(env.get("DB_PRUNE_INTERVAL_SECONDS", "3600"))
         self.speed_factor = max(speed_factor, 1.0)
         if self.speed_factor > 1.0:
             # Speed up uploads when the synthetic clock is running faster than real time.
@@ -399,6 +443,10 @@ class UploadWorker:
         now = time.monotonic()
         self._last_tank_handshake = now
         self._last_pump_handshake = now
+        self._next_heartbeat = now + self.heartbeat_interval
+        self._next_prune = (
+            now + self.prune_interval if self.retention_days and self.prune_interval > 0 else None
+        )
 
     def start(self) -> None:
         self.thread.start()
@@ -411,32 +459,54 @@ class UploadWorker:
         next_tank = time.monotonic()
         next_pump = time.monotonic()
         next_vac = time.monotonic()
-        while not self.stop_event.wait(1):
-            now = time.monotonic()
-            if now >= next_tank:
-                sent = self._upload_tank()
-                if sent:
-                    self._last_tank_handshake = now
-                elif now - self._last_tank_handshake >= self.handshake_interval:
-                    self._send_handshake("tank")
-                    self._last_tank_handshake = now
-                next_tank = now + self.tank_interval
-            if now >= next_pump:
-                sent = self._upload_pump()
-                if sent:
-                    self._last_pump_handshake = now
-                elif now - self._last_pump_handshake >= self.handshake_interval:
-                    self._send_handshake("pump")
-                    self._last_pump_handshake = now
-                next_pump = now + self.pump_interval
-            if now >= next_vac:
-                self._upload_vacuum()
-                next_vac = now + self.vacuum_interval
+        while not self.stop_event.is_set():
+            try:
+                now = time.monotonic()
+                if now >= next_tank:
+                    sent = self._upload_tank()
+                    if sent:
+                        self._last_tank_handshake = now
+                    elif now - self._last_tank_handshake >= self.handshake_interval:
+                        self._send_handshake("tank")
+                        self._last_tank_handshake = now
+                    next_tank = now + self.tank_interval
+                if now >= next_pump:
+                    sent = self._upload_pump()
+                    if sent:
+                        self._last_pump_handshake = now
+                    elif now - self._last_pump_handshake >= self.handshake_interval:
+                        self._send_handshake("pump")
+                        self._last_pump_handshake = now
+                    next_pump = now + self.pump_interval
+                if now >= next_vac:
+                    self._upload_vacuum()
+                    next_vac = now + self.vacuum_interval
+                if self._next_prune and now >= self._next_prune:
+                    pruned = self.db.prune_acknowledged(self.retention_days)
+                    if pruned:
+                        LOGGER.info("Pruned %s acked records older than %s days", pruned, self.retention_days)
+                    self._next_prune = now + self.prune_interval
+                if self.heartbeat_interval > 0 and now >= self._next_heartbeat:
+                    self._log_heartbeat()
+                    self._next_heartbeat = now + self.heartbeat_interval
+            except Exception:
+                LOGGER.exception("Upload loop encountered an error; will retry shortly")
+                now = time.monotonic()
+                next_tank = next_pump = next_vac = now + 1
+                if self._next_prune:
+                    self._next_prune = now + max(self.prune_interval, 5)
+                if self.heartbeat_interval > 0:
+                    self._next_heartbeat = now + max(self.heartbeat_interval, 5)
+                self.stop_event.wait(5)
+                continue
+            self.stop_event.wait(1)
 
     def _upload_tank(self) -> bool:
         rows = self.db.fetch_unsent_tank(self.tank_batch)
         if not rows:
             return False
+        backlog = self.db.count_unsent_tank()
+        LOGGER.info("Uploading %s/%s tank readings (newest first)", len(rows), backlog)
         readings = [
             {
                 "tank_id": row["tank_id"],
@@ -462,12 +532,17 @@ class UploadWorker:
         except error.URLError as exc:
             log_http_error("Tank upload failed", exc)
             return False
+        except Exception:
+            LOGGER.exception("Tank upload failed with unexpected error")
+            return False
         return True
 
     def _upload_pump(self) -> bool:
         rows = self.db.fetch_unsent_pump(self.pump_batch)
         if not rows:
             return False
+        backlog = self.db.count_unsent_pump()
+        LOGGER.info("Uploading %s/%s pump events (newest first)", len(rows), backlog)
         events = [
             {
                 "event_type": row["event_type"],
@@ -486,6 +561,9 @@ class UploadWorker:
         except error.URLError as exc:
             log_http_error("Pump upload failed", exc)
             return False
+        except Exception:
+            LOGGER.exception("Pump upload failed with unexpected error")
+            return False
         return True
 
     def _send_handshake(self, stream: str) -> None:
@@ -501,6 +579,8 @@ class UploadWorker:
         rows = self.db.fetch_unsent_vacuum(self.vacuum_batch)
         if not rows:
             return False
+        backlog = self.db.count_unsent_vacuum()
+        LOGGER.info("Uploading %s/%s vacuum readings (newest first)", len(rows), backlog)
         payload = [
             {
                 "reading_inhg": row["reading_inhg"],
@@ -516,7 +596,21 @@ class UploadWorker:
         except error.URLError as exc:
             log_http_error("Vacuum upload failed", exc)
             return False
+        except Exception:
+            LOGGER.exception("Vacuum upload failed with unexpected error")
+            return False
         return True
+
+    def _log_heartbeat(self) -> None:
+        tank_backlog = self.db.count_unsent_tank()
+        pump_backlog = self.db.count_unsent_pump()
+        vac_backlog = self.db.count_unsent_vacuum()
+        LOGGER.info(
+            "Upload heartbeat: tank_backlog=%s pump_backlog=%s vacuum_backlog=%s",
+            tank_backlog,
+            pump_backlog,
+            vac_backlog,
+        )
 
 
 @dataclass
@@ -650,6 +744,7 @@ class TankPiApp:
         self.collector_thread: Optional[threading.Thread] = None
         self.pump_thread: Optional[threading.Thread] = None
         self.vacuum_thread: Optional[threading.Thread] = None
+        self.http_server: Optional[ThreadingHTTPServer] = None
         self.stop_event = threading.Event()
         self.last_tank_update: Dict[str, float] = {name: 0.0 for name in TVF.tank_names}
         self._last_measurement_params = None
@@ -1101,6 +1196,11 @@ class TankPiApp:
                 (self.debug_records or {}).get(tank_name),
             )
 
+    def request_shutdown(self) -> None:
+        """Signal the app to begin shutdown and wake any waiting loops."""
+        self.stop_event.set()
+        self.upload_worker.stop_event.set()
+
     def shutdown(self) -> None:
         if not self.stop_event.is_set():
             self.stop_event.set()
@@ -1112,6 +1212,13 @@ class TankPiApp:
         self._stop_measurement_collector()
         self._stop_lcd_process()
         self._stop_tank_processes()
+        if self.http_server:
+            try:
+                self.http_server.shutdown()
+                self.http_server.server_close()
+            except Exception:
+                LOGGER.warning("HTTP server shutdown encountered an error", exc_info=True)
+            self.http_server = None
 
     def reset_server_state(self) -> None:
         try:
@@ -1178,7 +1285,7 @@ class TankPiApp:
         host = self.env.get("LOCAL_HTTP_HOST", "0.0.0.0")
         port = int(self.env.get("LOCAL_HTTP_PORT", "8080"))
         web_root = repo_path_from_config(self.env.get("WEB_ROOT", "web"))
-        start_static_server(web_root, host, port)
+        self.http_server = start_static_server(web_root, host, port)
 
         clock = None
         tank_records: Dict[str, List[TVF.DebugSample]] = {}
@@ -1229,9 +1336,8 @@ def main() -> None:
     def handle_signal(sig, frame):
         if current_process().name != "MainProcess":
             return
-        LOGGER.info("Received signal %s, shutting down.", sig)
-        app.shutdown()
-        sys.exit(0)
+        LOGGER.info("Received signal %s, requesting shutdown.", sig)
+        app.request_shutdown()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, handle_signal)
