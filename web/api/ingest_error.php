@@ -15,6 +15,8 @@ if (!is_array($records)) {
 }
 
 $logPath = REPO_ROOT . '/web/error_log.txt';
+$tankLogPath = REPO_ROOT . '/web/tank_error_log.txt';
+$pumpLogPath = REPO_ROOT . '/web/pump_error_log.txt';
 $dir = dirname($logPath);
 if (!is_dir($dir)) {
     mkdir($dir, 0775, true);
@@ -33,12 +35,26 @@ foreach ($records as $record) {
         continue;
     }
     $line = sprintf("[%s] %s: %s\n", $timestamp, $source, $message);
-    file_put_contents($logPath, $line, FILE_APPEND);
+    $targets = [$logPath];
+    $lowerSource = strtolower((string) $source);
+    if (str_contains($lowerSource, 'tank')) {
+        $targets[] = $tankLogPath;
+    }
+    if (str_contains($lowerSource, 'pump')) {
+        $targets[] = $pumpLogPath;
+    }
+    foreach ($targets as $path) {
+        file_put_contents($path, $line, FILE_APPEND);
+    }
     $accepted++;
 }
 
 respond_json([
     'status' => 'ok',
     'accepted' => $accepted,
-    'written_to' => $logPath,
+    'written_to' => [
+        'all' => $logPath,
+        'tank' => $tankLogPath,
+        'pump' => $pumpLogPath,
+    ],
 ]);

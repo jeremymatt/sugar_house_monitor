@@ -63,6 +63,7 @@ for tank_name in tank_names:
         "response": Queue(),
         "screen_response": Queue(),
         "status_updates": Queue(),
+        "errors": Queue(),
     }
 
 
@@ -368,6 +369,7 @@ def run_tank_controller(
     response_queue = queue_dict[tank_name]["response"]
     screen_response_queue = queue_dict[tank_name]["screen_response"]
     status_queue = queue_dict[tank_name]["status_updates"]
+    error_queue = queue_dict[tank_name]["errors"]
     debug_feed = (
         DebugTankFeed(
             debug_records,
@@ -394,7 +396,16 @@ def run_tank_controller(
         history_db_path=history_db_path,
         status_dir=status_dir,
         history_hours=history_hours,
+        error_queue=error_queue,
     )
+    if not debug_feed and uart is None and error_queue:
+        error_queue.put(
+            {
+                "tank_id": tank_name,
+                "message": f"UART unavailable on port {SERIAL_PORTS.get(tank_name)}",
+                "source_timestamp": _clock_now(clock).isoformat(),
+            }
+        )
     update_time = _clock_now(clock) - dt.timedelta(days=1)
     while True:
         now = _clock_now(clock)
@@ -444,6 +455,7 @@ class TANK:
         history_db_path: Optional[Path] = None,
         status_dir: Optional[Path] = None,
         history_hours: int = DEFAULT_HISTORY_HOURS,
+        error_queue=None,
     ):
         self.name = tank_name
         self.uart = uart
@@ -452,6 +464,7 @@ class TANK:
         self.history_db_path = Path(history_db_path) if history_db_path else None
         self.history_hours = history_hours
         self.status_writer = TankStatusFileWriter(status_dir, tank_name)
+        self.error_queue = error_queue
         self.num_to_average = num_to_average
         self.delay = delay
         self.window_size = window_size
@@ -482,9 +495,33 @@ class TANK:
         self.eta_empty = None
         self.time_to_full_min = None
         self.time_to_empty_min = None
+        self._last_error_message = None
+        self._last_error_at = None
 
     def _now(self):
         return _clock_now(self.clock)
+
+    def _emit_error(self, message: str, ts: Optional[dt.datetime] = None) -> None:
+        if not self.error_queue:
+            return
+        now = ts or self._now()
+        now_ts = ensure_utc(now).isoformat()
+        if message == self._last_error_message and self._last_error_at:
+            delta = (ensure_utc(now).timestamp() - ensure_utc(self._last_error_at).timestamp())
+            if delta < 60:
+                return
+        self._last_error_message = message
+        self._last_error_at = ensure_utc(now)
+        try:
+            self.error_queue.put(
+                {
+                    "tank_id": self.name,
+                    "message": message,
+                    "source_timestamp": now_ts,
+                }
+            )
+        except Exception:
+            pass
 
     def _load_recent_history(self):
         df = pd.DataFrame(columns=df_col_order)
@@ -588,7 +625,7 @@ class TANK:
             measurement_time = self._now()
 
         if self.dist_to_surf is None:
-            print(f"ERROR ({self.name} at {measurement_time}): No distance measurement")
+            self._emit_error("No distance measurement", measurement_time)
             return None
 
         self.get_gal_in_tank()

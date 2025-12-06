@@ -35,6 +35,10 @@ from synthetic_clock import SyntheticClock, parse_timestamp
 
 LOGGER = logging.getLogger("tank_pi")
 
+ERROR_UPLOAD_BATCH_SIZE = 8
+ERROR_UPLOAD_INTERVAL_SECONDS = 30
+ERROR_LOG_PATH = repo_path_from_config("web/tank_error_log.txt")
+
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -169,6 +173,19 @@ class TankDatabase:
                 )
                 """
             )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS error_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    source_timestamp TEXT NOT NULL,
+                    received_at TEXT NOT NULL,
+                    sent_to_server INTEGER DEFAULT 0,
+                    acked_by_server INTEGER DEFAULT 0
+                )
+                """
+            )
 
     def reset(self) -> None:
         with self.lock:
@@ -257,6 +274,27 @@ class TankDatabase:
                     reading_inhg, source_timestamp, received_at
                 ) VALUES (
                     :reading_inhg, :source_timestamp, :received_at
+                )
+                """,
+                payload,
+            )
+
+    def insert_error_log(self, record: Dict[str, object], received_at: Optional[str] = None) -> None:
+        payload = {
+            "source": record.get("source", "tank_pi"),
+            "message": record.get("message"),
+            "source_timestamp": record.get("source_timestamp") or iso_now(),
+            "received_at": received_at or iso_now(),
+        }
+        if not payload["message"]:
+            return
+        with self.lock, self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO error_logs (
+                    source, message, source_timestamp, received_at
+                ) VALUES (
+                    :source, :message, :source_timestamp, :received_at
                 )
                 """,
                 payload,
@@ -371,8 +409,35 @@ class TankDatabase:
                 [(row_id,) for row_id in ids],
             )
 
+    def fetch_unsent_errors(self, limit: int) -> List[sqlite3.Row]:
+        with self.lock:
+            cur = self.conn.execute(
+                """
+                SELECT *
+                FROM error_logs
+                WHERE acked_by_server = 0
+                ORDER BY source_timestamp DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            return cur.fetchall()
+
+    def mark_errors_acked(self, ids: List[int]) -> None:
+        if not ids:
+            return
+        with self.lock, self.conn:
+            self.conn.executemany(
+                """
+                UPDATE error_logs
+                SET sent_to_server = 1, acked_by_server = 1
+                WHERE id = ?
+                """,
+                [(row_id,) for row_id in ids],
+            )
+
     def _count_unsent(self, table: str) -> int:
-        if table not in {"tank_readings", "pump_events", "vacuum_readings"}:
+        if table not in {"tank_readings", "pump_events", "vacuum_readings", "error_logs"}:
             return 0
         with self.lock:
             cur = self.conn.execute(
@@ -390,6 +455,22 @@ class TankDatabase:
     def count_unsent_vacuum(self) -> int:
         return self._count_unsent("vacuum_readings")
 
+    def count_unsent_errors(self) -> int:
+        return self._count_unsent("error_logs")
+
+
+class LocalErrorWriter:
+    def __init__(self, path: Path):
+        self.path = path
+        self.lock = threading.Lock()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def append(self, message: str, source: str = "tank_pi") -> None:
+        line = f"[{iso_now()}] {source}: {message}\n"
+        with self.lock:
+            with self.path.open("a", encoding="utf-8") as fp:
+                fp.write(line)
+
     def prune_acknowledged(self, retention_days: float) -> int:
         """Delete acked rows older than the retention window. Returns rows deleted."""
         if not retention_days or retention_days <= 0:
@@ -397,7 +478,7 @@ class TankDatabase:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
         deleted = 0
         with self.lock, self.conn:
-            for table in ("tank_readings", "pump_events", "vacuum_readings"):
+            for table in ("tank_readings", "pump_events", "vacuum_readings", "error_logs"):
                 cur = self.conn.execute(
                     f"""
                     DELETE FROM {table}
@@ -419,6 +500,8 @@ class UploadWorker:
         base_pump_batch = int(env.get("PUMP_UPLOAD_BATCH_SIZE", "1"))
         base_pump_interval = int(env.get("PUMP_UPLOAD_INTERVAL_SECONDS", "60"))
         self.handshake_interval = float(env.get("HANDSHAKE_INTERVAL_SECONDS", "60"))
+        self.error_batch = int(env.get("ERROR_UPLOAD_BATCH_SIZE", str(ERROR_UPLOAD_BATCH_SIZE)))
+        self.error_interval = int(env.get("ERROR_UPLOAD_INTERVAL_SECONDS", str(ERROR_UPLOAD_INTERVAL_SECONDS)))
         self.tank_batch = base_tank_batch
         self.tank_interval = base_tank_interval
         self.pump_batch = base_pump_batch
@@ -447,6 +530,7 @@ class UploadWorker:
         self._next_prune = (
             now + self.prune_interval if self.retention_days and self.prune_interval > 0 else None
         )
+        self._next_error_upload = time.monotonic()
 
     def start(self) -> None:
         self.thread.start()
@@ -459,6 +543,7 @@ class UploadWorker:
         next_tank = time.monotonic()
         next_pump = time.monotonic()
         next_vac = time.monotonic()
+        next_error = self._next_error_upload
         while not self.stop_event.is_set():
             try:
                 now = time.monotonic()
@@ -481,6 +566,9 @@ class UploadWorker:
                 if now >= next_vac:
                     self._upload_vacuum()
                     next_vac = now + self.vacuum_interval
+                if now >= next_error:
+                    self._upload_errors()
+                    next_error = now + self.error_interval
                 if self._next_prune and now >= self._next_prune:
                     pruned = self.db.prune_acknowledged(self.retention_days)
                     if pruned:
@@ -497,6 +585,7 @@ class UploadWorker:
                     self._next_prune = now + max(self.prune_interval, 5)
                 if self.heartbeat_interval > 0:
                     self._next_heartbeat = now + max(self.heartbeat_interval, 5)
+                next_error = now + max(self.error_interval, 5)
                 self.stop_event.wait(5)
                 continue
             self.stop_event.wait(1)
@@ -601,15 +690,44 @@ class UploadWorker:
             return False
         return True
 
+    def _upload_errors(self) -> bool:
+        rows = self.db.fetch_unsent_errors(self.error_batch)
+        if not rows:
+            return False
+        backlog = self.db.count_unsent_errors()
+        LOGGER.info("Uploading %s/%s error logs (newest first)", len(rows), backlog)
+        records = [
+            {
+                "timestamp": row["source_timestamp"],
+                "source": row["source"],
+                "message": row["message"],
+            }
+            for row in rows
+        ]
+        try:
+            url = build_url(self.api_base, "ingest_error.php")
+            resp = post_json(url, {"errors": records}, self.api_key)
+            LOGGER.info("Uploaded %s error logs (resp=%s)", len(rows), resp.get("status"))
+            self.db.mark_errors_acked([row["id"] for row in rows])
+        except error.URLError as exc:
+            log_http_error("Error-log upload failed", exc)
+            return False
+        except Exception:
+            LOGGER.exception("Error-log upload failed with unexpected error")
+            return False
+        return True
+
     def _log_heartbeat(self) -> None:
         tank_backlog = self.db.count_unsent_tank()
         pump_backlog = self.db.count_unsent_pump()
         vac_backlog = self.db.count_unsent_vacuum()
+        error_backlog = self.db.count_unsent_errors()
         LOGGER.info(
-            "Upload heartbeat: tank_backlog=%s pump_backlog=%s vacuum_backlog=%s",
+            "Upload heartbeat: tank_backlog=%s pump_backlog=%s vacuum_backlog=%s error_backlog=%s",
             tank_backlog,
             pump_backlog,
             vac_backlog,
+            error_backlog,
         )
 
 
@@ -718,6 +836,7 @@ class TankPiApp:
         self.env = env
         self.db = TankDatabase(repo_path_from_config(env.get("DB_PATH", "data/tank_pi.db")))
         self.evaporator_db_path = repo_path_from_config(env.get("EVAPORATOR_DB_PATH", "data/evaporator.db"))
+        self.error_writer = LocalErrorWriter(ERROR_LOG_PATH)
         self.debug_enabled = str_to_bool(env.get("DEBUG_TANK"), False) or str_to_bool(
             env.get("DEBUG_RELEASER"), False
         )
@@ -750,6 +869,7 @@ class TankPiApp:
         self._last_measurement_params = None
         self._last_clock = None
         self._last_tank_records: Dict[str, List[TVF.DebugSample]] = {}
+        self._last_error_seen: Dict[tuple, float] = {}
         self._ensure_status_placeholders()
 
     def reset_if_needed(self) -> None:
@@ -982,6 +1102,13 @@ class TankPiApp:
             LOGGER.info("Started %s tank controller (pid=%s)", tank_name, proc.pid)
         else:
             LOGGER.error("Failed to start tank controller %s after retries", tank_name)
+            self._handle_error_event(
+                tank_name,
+                {
+                    "message": "Controller failed to start after retries",
+                    "source_timestamp": iso_now(),
+                },
+            )
         return proc
 
     def _restart_tank_controller(self, tank_name: str) -> None:
@@ -1015,6 +1142,24 @@ class TankPiApp:
                         now - last_ts,
                     )
                     self._restart_tank_controller(name)
+
+    def _handle_error_event(self, tank_name: str, event: Dict[str, object]) -> None:
+        message = event.get("message") or "Unknown error"
+        timestamp = event.get("source_timestamp") or iso_now()
+        key = (tank_name, message)
+        now = time.time()
+        last_seen = self._last_error_seen.get(key)
+        if last_seen and (now - last_seen) < 60:
+            return
+        self._last_error_seen[key] = now
+        payload = {
+            "source": "tank_pi",
+            "message": f"{tank_name}: {message}",
+            "source_timestamp": timestamp,
+        }
+        self.db.insert_error_log(payload, timestamp)
+        self.error_writer.append(payload["message"], source="tank_pi")
+        LOGGER.warning("Tank %s error at %s: %s", tank_name, timestamp, message)
 
     def _start_tank_processes(
         self,
@@ -1054,19 +1199,32 @@ class TankPiApp:
 
     def _drain_status_updates(self) -> None:
         queues = {name: TVF.queue_dict[name]["status_updates"] for name in TVF.tank_names}
+        error_queues = {name: TVF.queue_dict[name].get("errors") for name in TVF.tank_names}
         while not self.stop_event.is_set():
             processed = False
             for name, status_queue in queues.items():
-                try:
-                    payload = status_queue.get_nowait()
-                except queue.Empty:
-                    continue
-                except EOFError:
-                    continue
-                if payload:
-                    self.handle_tank_measurement(payload, payload.get("source_timestamp"))
-                    self.last_tank_update[name] = time.time()
-                    processed = True
+                while True:
+                    try:
+                        payload = status_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    except EOFError:
+                        break
+                    if payload:
+                        self.handle_tank_measurement(payload, payload.get("source_timestamp"))
+                        self.last_tank_update[name] = time.time()
+                        processed = True
+                if error_queues.get(name):
+                    while True:
+                        try:
+                            err_payload = error_queues[name].get_nowait()
+                        except queue.Empty:
+                            break
+                        except EOFError:
+                            break
+                        if err_payload:
+                            self._handle_error_event(name, err_payload)
+                            processed = True
             if not processed:
                 self.stop_event.wait(0.2)
             self._check_tank_health()
