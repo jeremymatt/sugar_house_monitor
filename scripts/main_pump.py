@@ -124,8 +124,18 @@ class PumpDatabase:
         self._connect()
 
     def _connect(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path, check_same_thread=False)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to create pump DB directory {self.path.parent}: {exc}") from exc
+
+        db_exists = self.path.exists()
+        try:
+            self.conn = sqlite3.connect(self.path, check_same_thread=False)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to open pump DB at {self.path}: {exc}") from exc
+        LOGGER.info("Opened pump DB at %s (%s)", self.path, "existing" if db_exists else "new")
+
         self.conn.row_factory = sqlite3.Row
         with self.conn:
             self.conn.execute(
@@ -801,6 +811,7 @@ class UploadWorker:
         self._last_pump_handshake = now
 
     def start(self) -> None:
+        self.flush_once(label="startup")
         self.thread.start()
 
     def stop(self) -> None:
@@ -827,6 +838,42 @@ class UploadWorker:
             if now >= next_error:
                 self._upload_errors()
                 next_error = now + self.error_interval
+
+    def flush_once(self, label: str = "manual") -> None:
+        try:
+            pump_pending = self.db.count_unsent("pump_events")
+            vacuum_pending = self.db.count_unsent("vacuum_readings")
+            error_pending = self.db.count_unsent("error_logs")
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.warning("Unable to inspect upload queues during %s flush: %s", label, exc)
+            pump_pending = vacuum_pending = error_pending = None
+
+        if pump_pending or vacuum_pending or error_pending:
+            LOGGER.info(
+                "Starting %s upload flush (pump=%s, vacuum=%s, errors=%s)",
+                label,
+                pump_pending,
+                vacuum_pending,
+                error_pending,
+            )
+        else:
+            LOGGER.info("Starting %s upload flush (queues empty or unavailable)", label)
+
+        pump_sent = self._upload_pump()
+        vacuum_sent = self._upload_vacuum()
+        error_sent = self._upload_errors()
+
+        if pump_sent:
+            self._last_pump_handshake = time.monotonic()
+
+        if pump_sent or vacuum_sent or error_sent:
+            LOGGER.info(
+                "Completed %s upload flush (pump=%s, vacuum=%s, errors=%s)",
+                label,
+                pump_sent,
+                vacuum_sent,
+                error_sent,
+            )
 
     def _upload_pump(self) -> bool:
         rows = self.db.fetch_unsent("pump_events", self.pump_batch)
@@ -964,6 +1011,7 @@ class PumpApp:
         self.env = env
         db_path = repo_path_from_config(env.get("DB_PATH", "data/pump_pi.db"))
         self.db = PumpDatabase(db_path)
+        LOGGER.info("Using pump DB at %s", self.db.path)
         self.error_writer = LocalErrorWriter(ERROR_LOG_PATH)
         self.error_threshold = env_int(env, "ERROR_THRESHOLD", ERROR_THRESHOLD)
         self.loop_delay = env_float(env, "LOOP_DELAY", LOOP_DELAY)
@@ -1046,7 +1094,11 @@ def main() -> None:
         LOGGER.error("Failed to load pump_pi env: %s", exc)
         sys.exit(1)
 
-    app = PumpApp(env)
+    try:
+        app = PumpApp(env)
+    except Exception as exc:
+        LOGGER.error("Failed to initialize pump app: %s", exc)
+        sys.exit(1)
 
     def handle_signal(sig, frame):
         LOGGER.info("Received signal %s, shutting down.", sig)

@@ -534,7 +534,9 @@ def main() -> None:
     evap_prev = latest_evap_row(evap_conn)
     evap_record = build_evap_record(tank_rows, pump_row, evap_prev)
     if evap_record:
-        insert_evap_record(evap_conn, evap_record)
+        evap_flow = evap_record.get("evaporator_flow_gph")
+        if evap_flow is None or evap_flow > 0:
+            insert_evap_record(evap_conn, evap_record)
         evap_payload = build_evap_status_payload(evap_record, timestamp, plot_settings)
         atomic_write(status_base / "status_evaporator.json", evap_payload)
     else:
