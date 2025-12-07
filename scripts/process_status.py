@@ -159,7 +159,7 @@ def atomic_write(path: Path, payload: Dict) -> None:
 # ---- Evaporator flow helpers ----
 
 PRUNE_MARKER_FILENAME = "last_server_prune.txt"
-DEFAULT_PRUNE_INTERVAL_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_RETENTION_CHECK_SECONDS = 24 * 60 * 60
 DEFAULT_EMPTYING_THRESHOLD = -2.5
 ZERO_FLOW_TOLERANCE = 2.5
 PUMP_LOW_THRESHOLD = 5.0
@@ -209,11 +209,15 @@ def parse_retention_days(env: Dict[str, str]) -> Optional[float]:
     return to_float(env.get("DB_RETENTION_DAYS"))
 
 
-def prune_interval_seconds(env: Dict[str, str]) -> float:
+def retention_check_interval_seconds(env: Dict[str, str]) -> float:
+    interval_days = to_float(env.get("DB_RETENTION_CHECK_TIME"))
+    if interval_days is not None and interval_days > 0:
+        return max(float(interval_days) * 24 * 60 * 60, 60.0)
+    # Backward compatibility with earlier interval setting
     interval = to_float(env.get("DB_PRUNE_INTERVAL_SECONDS"))
-    if interval is None or interval <= 0:
-        return float(DEFAULT_PRUNE_INTERVAL_SECONDS)
-    return max(float(interval), 60.0)
+    if interval is not None and interval > 0:
+        return max(float(interval), 60.0)
+    return float(DEFAULT_RETENTION_CHECK_SECONDS)
 
 
 def should_run_prune(marker_path: Path, interval_seconds: float, now: datetime) -> bool:
@@ -251,7 +255,7 @@ def prune_server_databases(
     retention_days = parse_retention_days(env)
     if retention_days is None or retention_days <= 0:
         return
-    interval_seconds = prune_interval_seconds(env)
+    interval_seconds = retention_check_interval_seconds(env)
     now = datetime.now(timezone.utc)
     log_dir = repo_path_from_config(env.get("LOG_DIR", "data/logs"))
     marker_path = log_dir / PRUNE_MARKER_FILENAME
