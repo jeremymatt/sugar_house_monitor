@@ -21,7 +21,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 from urllib import error, parse, request
@@ -53,6 +53,7 @@ ERROR_UPLOAD_INTERVAL_SECONDS = 30
 ERROR_LOG_PATH = repo_path_from_config("web/tank_error_log.txt")
 CALIBRATION_PATH = repo_path_from_config("scripts/vacuum_cal.csv")
 DEBUG_SIGNAL_LOG = False
+DEFAULT_PRUNE_INTERVAL_SECONDS = 7 * 24 * 60 * 60
 
 
 def iso_now() -> str:
@@ -279,6 +280,24 @@ class PumpDatabase:
                 """,
                 [(row_id,) for row_id in ids],
             )
+
+    def prune_acknowledged(self, retention_days: float) -> int:
+        """Delete acked rows older than the retention window. Returns rows deleted."""
+        if not retention_days or retention_days <= 0:
+            return 0
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+        deleted = 0
+        with self.lock, self.conn:
+            for table in ("pump_events", "vacuum_readings", "error_logs"):
+                cur = self.conn.execute(
+                    f"""
+                    DELETE FROM {table}
+                    WHERE acked_by_server = 1 AND received_at < ?
+                    """,
+                    (cutoff,),
+                )
+                deleted += cur.rowcount if cur.rowcount is not None else 0
+        return deleted
 
 
 class LocalErrorWriter:
@@ -805,18 +824,41 @@ class UploadWorker:
         self.error_batch = env_int(env, "ERROR_UPLOAD_BATCH_SIZE", ERROR_UPLOAD_BATCH_SIZE)
         self.error_interval = env_int(env, "ERROR_UPLOAD_INTERVAL_SECONDS", ERROR_UPLOAD_INTERVAL_SECONDS)
         self.handshake_interval = env_int(env, "HANDSHAKE_INTERVAL_SECONDS", HANDSHAKE_INTERVAL_SECONDS)
+        self.retention_days = env_float(env, "DB_RETENTION_DAYS", 0.0)
+        default_prune_interval = env_float(
+            env, "DB_PRUNE_INTERVAL_SECONDS", float(DEFAULT_PRUNE_INTERVAL_SECONDS)
+        )
+        self.prune_interval = max(default_prune_interval, 60.0) if self.retention_days > 0 else 0.0
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True)
         now = time.monotonic()
         self._last_pump_handshake = now
+        self._next_prune = now if self.retention_days > 0 and self.prune_interval > 0 else None
 
     def start(self) -> None:
         self.flush_once(label="startup")
+        self._prune_if_due(force=True)
         self.thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
         self.thread.join(timeout=2)
+
+    def _prune_if_due(self, force: bool = False) -> None:
+        if not self.retention_days or self.retention_days <= 0 or not self.prune_interval:
+            return
+        now = time.monotonic()
+        if not force and self._next_prune is not None and now < self._next_prune:
+            return
+        try:
+            pruned = self.db.prune_acknowledged(self.retention_days)
+            if pruned:
+                LOGGER.info(
+                    "Pruned %s acked pump records older than %s days", pruned, self.retention_days
+                )
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.warning("Database prune failed: %s", exc)
+        self._next_prune = now + self.prune_interval
 
     def _run(self) -> None:
         next_pump = time.monotonic()
@@ -838,6 +880,7 @@ class UploadWorker:
             if now >= next_error:
                 self._upload_errors()
                 next_error = now + self.error_interval
+            self._prune_if_due()
 
     def flush_once(self, label: str = "manual") -> None:
         try:

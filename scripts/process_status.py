@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -158,7 +158,9 @@ def atomic_write(path: Path, payload: Dict) -> None:
 
 # ---- Evaporator flow helpers ----
 
-NEG_FLOW_THRESHOLD = -2.5
+PRUNE_MARKER_FILENAME = "last_server_prune.txt"
+DEFAULT_PRUNE_INTERVAL_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_EMPTYING_THRESHOLD = -2.5
 ZERO_FLOW_TOLERANCE = 2.5
 PUMP_LOW_THRESHOLD = 5.0
 PUMP_MATCH_TOLERANCE = 0.5
@@ -201,6 +203,82 @@ def to_float(val: object) -> Optional[float]:
         return float(val)
     except (TypeError, ValueError):
         return None
+
+
+def parse_retention_days(env: Dict[str, str]) -> Optional[float]:
+    return to_float(env.get("DB_RETENTION_DAYS"))
+
+
+def prune_interval_seconds(env: Dict[str, str]) -> float:
+    interval = to_float(env.get("DB_PRUNE_INTERVAL_SECONDS"))
+    if interval is None or interval <= 0:
+        return float(DEFAULT_PRUNE_INTERVAL_SECONDS)
+    return max(float(interval), 60.0)
+
+
+def should_run_prune(marker_path: Path, interval_seconds: float, now: datetime) -> bool:
+    if not marker_path.exists():
+        return True
+    try:
+        raw = marker_path.read_text().strip()
+        last = datetime.fromisoformat(raw) if raw else None
+    except Exception:
+        return True
+    if last is None:
+        return True
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return (now - last) >= timedelta(seconds=interval_seconds)
+
+
+def prune_table_if_exists(
+    conn: sqlite3.Connection, table: str, ts_column: str, cutoff_iso: str
+) -> int:
+    if not table_exists(conn, table):
+        return 0
+    with conn:
+        cur = conn.execute(f"DELETE FROM {table} WHERE {ts_column} < ?", (cutoff_iso,))
+    return cur.rowcount if cur.rowcount is not None else 0
+
+
+def prune_server_databases(
+    env: Dict[str, str],
+    tank_conn: sqlite3.Connection,
+    pump_conn: sqlite3.Connection,
+    vacuum_conn: sqlite3.Connection,
+    evap_conn: sqlite3.Connection,
+) -> None:
+    retention_days = parse_retention_days(env)
+    if retention_days is None or retention_days <= 0:
+        return
+    interval_seconds = prune_interval_seconds(env)
+    now = datetime.now(timezone.utc)
+    log_dir = repo_path_from_config(env.get("LOG_DIR", "data/logs"))
+    marker_path = log_dir / PRUNE_MARKER_FILENAME
+    if not should_run_prune(marker_path, interval_seconds, now):
+        return
+    log_dir.mkdir(parents=True, exist_ok=True)
+    cutoff = (now - timedelta(days=retention_days)).isoformat()
+    deleted = 0
+    deleted += prune_table_if_exists(tank_conn, "tank_readings", "source_timestamp", cutoff)
+    deleted += prune_table_if_exists(pump_conn, "pump_events", "source_timestamp", cutoff)
+    deleted += prune_table_if_exists(vacuum_conn, "vacuum_readings", "source_timestamp", cutoff)
+    deleted += prune_table_if_exists(evap_conn, "evaporator_flow", "sample_timestamp", cutoff)
+    try:
+        marker_path.write_text(now.isoformat())
+    except Exception:
+        pass
+    if deleted:
+        print(f"Pruned {deleted} rows older than {retention_days} days")
+
+
+def resolve_emptying_threshold(env: Dict[str, str]) -> float:
+    for key in ("tanks_emptying_threshold", "TANKS_EMPTYING_THRESHOLD"):
+        val = env.get(key)
+        numeric = to_float(val) if val is not None else None
+        if numeric is not None:
+            return float(numeric)
+    return float(DEFAULT_EMPTYING_THRESHOLD)
 
 
 def ensure_evap_tables(conn: sqlite3.Connection) -> None:
@@ -264,11 +342,12 @@ def pick_draw_off(
     brookside_flow: Optional[float],
     roadside_flow: Optional[float],
     prev_draw_off: Optional[str],
+    emptying_threshold: float,
 ) -> str:
     candidates = []
-    if brookside_flow is not None and brookside_flow < NEG_FLOW_THRESHOLD:
+    if brookside_flow is not None and brookside_flow < emptying_threshold:
         candidates.append(("brookside", brookside_flow))
-    if roadside_flow is not None and roadside_flow < NEG_FLOW_THRESHOLD:
+    if roadside_flow is not None and roadside_flow < emptying_threshold:
         candidates.append(("roadside", roadside_flow))
     if not candidates:
         return NO_TANK
@@ -311,31 +390,30 @@ def pick_pump_in(
 def compute_evaporator_flow(
     draw_off: str,
     pump_in: str,
-    draw_off_flow: Optional[float],
     brookside_flow: Optional[float],
     roadside_flow: Optional[float],
     pump_flow: Optional[float],
+    emptying_threshold: float,
 ) -> Optional[float]:
     if brookside_flow is None and roadside_flow is None:
         return None
-    if (
-        (brookside_flow is None or brookside_flow >= NEG_FLOW_THRESHOLD)
-        and (roadside_flow is None or roadside_flow >= NEG_FLOW_THRESHOLD)
-    ):
+    negative_flows = []
+    for flow in (brookside_flow, roadside_flow):
+        if flow is not None and flow < emptying_threshold:
+            negative_flows.append(abs(flow))
+    if not negative_flows:
         return 0.0
-    if draw_off not in {"brookside", "roadside"}:
-        return 0.0
-    if draw_off_flow is None:
-        return None
-    if pump_in == draw_off:
-        return abs(draw_off_flow) + max(pump_flow or 0.0, 0.0)
-    return abs(draw_off_flow)
+    total_flow = sum(negative_flows)
+    if pump_in == draw_off and pump_flow is not None:
+        total_flow += max(pump_flow, 0.0)
+    return total_flow
 
 
 def build_evap_record(
     tank_rows: Dict[str, sqlite3.Row],
     pump_row: Optional[sqlite3.Row],
     prev_row: Optional[sqlite3.Row],
+    emptying_threshold: float,
 ) -> Optional[Dict[str, object]]:
     brook_row = tank_rows.get("brookside")
     road_row = tank_rows.get("roadside")
@@ -346,7 +424,7 @@ def build_evap_record(
     draw_off_prev = (prev_row["draw_off_tank"] if prev_row else None) or NO_TANK
     pump_in_prev = (prev_row["pump_in_tank"] if prev_row else None) or NO_TANK
 
-    draw_off = pick_draw_off(brook_flow, road_flow, draw_off_prev)
+    draw_off = pick_draw_off(brook_flow, road_flow, draw_off_prev, emptying_threshold)
     other_flow = None
     if draw_off == "brookside":
         other_flow = road_flow
@@ -371,7 +449,7 @@ def build_evap_record(
         return None
 
     evap_flow = compute_evaporator_flow(
-        draw_off, pump_in, draw_off_flow, brook_flow, road_flow, pump_flow
+        draw_off, pump_in, brook_flow, road_flow, pump_flow, emptying_threshold
     )
 
     return {
@@ -444,6 +522,7 @@ def main() -> None:
         "brookside": float(env["TANK_CAPACITY_BROOKSIDE"]),
         "roadside": float(env["TANK_CAPACITY_ROADSIDE"]),
     }
+    emptying_threshold = resolve_emptying_threshold(env)
 
     tank_conn = open_db(repo_path_from_config(env["TANK_DB_PATH"]))
     pump_conn = open_db(repo_path_from_config(env["PUMP_DB_PATH"]))
@@ -452,6 +531,7 @@ def main() -> None:
     vacuum_db_path = repo_path_from_config(env.get("VACUUM_DB_PATH", env["PUMP_DB_PATH"]))
     vacuum_conn = open_db(vacuum_db_path)
     ensure_evap_tables(evap_conn)
+    prune_server_databases(env, tank_conn, pump_conn, vacuum_conn, evap_conn)
     plot_settings = load_plot_settings(evap_conn)
 
     status_base = repo_path_from_config(env["STATUS_JSON_PATH"]).parent
@@ -532,7 +612,7 @@ def main() -> None:
             atomic_write(vac_path, vacuum_payload)
 
     evap_prev = latest_evap_row(evap_conn)
-    evap_record = build_evap_record(tank_rows, pump_row, evap_prev)
+    evap_record = build_evap_record(tank_rows, pump_row, evap_prev, emptying_threshold)
     if evap_record:
         evap_flow = evap_record.get("evaporator_flow_gph")
         if evap_flow is None or evap_flow > 0:

@@ -38,6 +38,7 @@ LOGGER = logging.getLogger("tank_pi")
 ERROR_UPLOAD_BATCH_SIZE = 8
 ERROR_UPLOAD_INTERVAL_SECONDS = 30
 ERROR_LOG_PATH = repo_path_from_config("web/tank_error_log.txt")
+DEFAULT_PRUNE_INTERVAL_SECONDS = 7 * 24 * 60 * 60
 
 
 def iso_now() -> str:
@@ -458,19 +459,6 @@ class TankDatabase:
     def count_unsent_errors(self) -> int:
         return self._count_unsent("error_logs")
 
-
-class LocalErrorWriter:
-    def __init__(self, path: Path):
-        self.path = path
-        self.lock = threading.Lock()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-
-    def append(self, message: str, source: str = "tank_pi") -> None:
-        line = f"[{iso_now()}] {source}: {message}\n"
-        with self.lock:
-            with self.path.open("a", encoding="utf-8") as fp:
-                fp.write(line)
-
     def prune_acknowledged(self, retention_days: float) -> int:
         """Delete acked rows older than the retention window. Returns rows deleted."""
         if not retention_days or retention_days <= 0:
@@ -488,6 +476,19 @@ class LocalErrorWriter:
                 )
                 deleted += cur.rowcount if cur.rowcount is not None else 0
         return deleted
+
+
+class LocalErrorWriter:
+    def __init__(self, path: Path):
+        self.path = path
+        self.lock = threading.Lock()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def append(self, message: str, source: str = "tank_pi") -> None:
+        line = f"[{iso_now()}] {source}: {message}\n"
+        with self.lock:
+            with self.path.open("a", encoding="utf-8") as fp:
+                fp.write(line)
 
 
 class UploadWorker:
@@ -510,7 +511,10 @@ class UploadWorker:
         self.vacuum_interval = int(env.get("VACUUM_UPLOAD_INTERVAL_SECONDS", "30"))
         self.heartbeat_interval = float(env.get("UPLOAD_HEARTBEAT_SECONDS", "120"))
         self.retention_days = float_or_none(env.get("DB_RETENTION_DAYS"))
-        self.prune_interval = float(env.get("DB_PRUNE_INTERVAL_SECONDS", "3600"))
+        default_prune_interval = float(
+            env.get("DB_PRUNE_INTERVAL_SECONDS", str(DEFAULT_PRUNE_INTERVAL_SECONDS))
+        )
+        self.prune_interval = max(default_prune_interval, 60.0)
         self.speed_factor = max(speed_factor, 1.0)
         if self.speed_factor > 1.0:
             # Speed up uploads when the synthetic clock is running faster than real time.
@@ -527,17 +531,32 @@ class UploadWorker:
         self._last_tank_handshake = now
         self._last_pump_handshake = now
         self._next_heartbeat = now + self.heartbeat_interval
-        self._next_prune = (
-            now + self.prune_interval if self.retention_days and self.prune_interval > 0 else None
-        )
+        self._next_prune = now if self.retention_days and self.prune_interval > 0 else None
         self._next_error_upload = time.monotonic()
 
     def start(self) -> None:
+        self._prune_if_due(force=True)
         self.thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
         self.thread.join(timeout=2)
+
+    def _prune_if_due(self, force: bool = False) -> None:
+        if not self.retention_days or self.retention_days <= 0 or not self.prune_interval:
+            return
+        now = time.monotonic()
+        if not force and self._next_prune is not None and now < self._next_prune:
+            return
+        try:
+            pruned = self.db.prune_acknowledged(self.retention_days)
+            if pruned:
+                LOGGER.info(
+                    "Pruned %s acked records older than %s days", pruned, self.retention_days
+                )
+        except Exception:
+            LOGGER.exception("Database prune failed")
+        self._next_prune = now + self.prune_interval
 
     def _run(self) -> None:
         next_tank = time.monotonic()
@@ -569,11 +588,7 @@ class UploadWorker:
                 if now >= next_error:
                     self._upload_errors()
                     next_error = now + self.error_interval
-                if self._next_prune and now >= self._next_prune:
-                    pruned = self.db.prune_acknowledged(self.retention_days)
-                    if pruned:
-                        LOGGER.info("Pruned %s acked records older than %s days", pruned, self.retention_days)
-                    self._next_prune = now + self.prune_interval
+                self._prune_if_due()
                 if self.heartbeat_interval > 0 and now >= self._next_heartbeat:
                     self._log_heartbeat()
                     self._next_heartbeat = now + self.heartbeat_interval
@@ -823,6 +838,8 @@ def start_static_server(web_root: Path, host: str, port: int) -> ThreadingHTTPSe
                 path = stripped if stripped.startswith("/") else f"/{stripped}"
                 if path == "/":
                     path = "/index.html"
+                elif path.rstrip("/") == "/vacuum":
+                    path = "/vacuum/index.html"
             return super().translate_path(path)
 
     server = ThreadingHTTPServer((host, port), Handler)
