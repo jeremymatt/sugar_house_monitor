@@ -1,4 +1,21 @@
 Time,Pump Event,Pump Run Time,Pump Interval,Gallons Per Hour
+2025-04-04-08:49:51,Pump Stop,45.14,16.77,45.62
+2025-04-04-09:06:10,Auto Pump Start,,,
+2025-04-04-09:06:56,Pump Stop,45.54,17.08,44.76
+2025-04-04-09:22:21,Auto Pump Start,,,
+2025-04-04-09:23:06,Pump Stop,45.23,16.17,47.4
+2025-04-04-09:38:29,Auto Pump Start,,,
+2025-04-04-09:39:15,Pump Stop,45.49,16.14,47.5
+2025-04-04-09:54:29,Auto Pump Start,,,
+2025-04-04-09:55:15,Pump Stop,45.15,16,47.93
+2025-04-04-10:10:03,Auto Pump Start,,,
+2025-04-04-10:10:49,Pump Stop,45.24,15.57,49.33
+2025-04-04-10:25:06,Auto Pump Start,,,
+2025-04-04-10:25:52,Pump Stop,45.8,15.05,51.16
+2025-04-04-10:40:04,Auto Pump Start,,,
+2025-04-04-10:40:50,Pump Stop,45.59,14.97,51.44
+2025-04-04-10:55:02,Auto Pump Start,,,
+2025-04-04-10:55:48,Pump Stop,46.14,14.98,51.41
 2025-04-04-11:09:17,Auto Pump Start,,,
 2025-04-04-11:10:04,Pump Stop,46.33,14.25,54.21
 2025-04-04-11:23:09,Auto Pump Start,,,
@@ -24,7 +41,7 @@ Time,Pump Event,Pump Run Time,Pump Interval,Gallons Per Hour
 2025-04-04-13:28:31,Auto Pump Start,,,
 2025-04-04-13:29:16,Pump Stop,45.63,11.77,66.39
 2025-04-04-13:40:29,Auto Pump Start,,,
-2025-04-04-13:41:14,Pump Stop,45.0,11.96,65.21
+2025-04-04-13:41:14,Pump Stop,45,11.96,65.21
 2025-04-04-13:52:14,Auto Pump Start,,,
 2025-04-04-13:53:00,Pump Stop,45.69,11.77,66.37
 2025-04-04-14:04:09,Auto Pump Start,,,
@@ -38,13 +55,13 @@ Time,Pump Event,Pump Run Time,Pump Interval,Gallons Per Hour
 2025-04-04-14:50:52,Auto Pump Start,,,
 2025-04-04-14:51:39,Pump Stop,46.54,11.19,70.16
 2025-04-04-15:02:51,Auto Pump Start,,,
-2025-04-04-15:03:39,Pump Stop,47.14,12.0,65.19
+2025-04-04-15:03:39,Pump Stop,47.14,12,65.19
 2025-04-04-15:14:14,Auto Pump Start,,,
 2025-04-04-15:15:00,Pump Stop,45.83,11.35,69.03
 2025-04-04-15:26:16,Auto Pump Start,,,
 2025-04-04-15:27:02,Pump Stop,46.33,12.04,64.83
 2025-04-04-15:38:15,Auto Pump Start,,,
-2025-04-04-15:39:02,Pump Stop,47.21,12.0,65.2
+2025-04-04-15:39:02,Pump Stop,47.21,12,65.2
 2025-04-04-15:49:05,Auto Pump Start,,,
 2025-04-04-15:49:52,Pump Stop,46.09,10.83,72.65
 2025-04-04-16:00:59,Auto Pump Start,,,
@@ -76,7 +93,7 @@ Time,Pump Event,Pump Run Time,Pump Interval,Gallons Per Hour
 2025-04-04-19:03:52,Auto Pump Start,,,
 2025-04-04-19:04:38,Pump Stop,46.23,18.16,42.03
 2025-04-04-19:22:28,Auto Pump Start,,,
-2025-04-04-19:23:14,Pump Stop,46.03,18.59,41.0
+2025-04-04-19:23:14,Pump Stop,46.03,18.59,41
 2025-04-04-19:41:51,Auto Pump Start,,,
 2025-04-04-19:42:37,Pump Stop,45.82,19.39,39.24
 2025-04-04-20:04:02,Auto Pump Start,,,
