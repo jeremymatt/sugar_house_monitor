@@ -299,6 +299,14 @@ class PumpDatabase:
                 deleted += cur.rowcount if cur.rowcount is not None else 0
         return deleted
 
+    def vacuum(self) -> None:
+        """Reclaim free space after pruning."""
+        with self.lock:
+            try:
+                self.conn.execute("VACUUM")
+            except Exception:
+                LOGGER.exception("VACUUM failed for pump DB")
+
 
 class LocalErrorWriter:
     def __init__(self, path: Path):
@@ -856,6 +864,10 @@ class UploadWorker:
                 LOGGER.info(
                     "Pruned %s acked pump records older than %s days", pruned, self.retention_days
                 )
+                try:
+                    self.db.vacuum()
+                except Exception as exc:  # pragma: no cover - defensive
+                    LOGGER.warning("VACUUM failed after prune: %s", exc)
         except Exception as exc:  # pragma: no cover - defensive
             LOGGER.warning("Database prune failed: %s", exc)
         self._next_prune = now + self.prune_interval
