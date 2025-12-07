@@ -160,6 +160,7 @@ def atomic_write(path: Path, payload: Dict) -> None:
 
 PRUNE_MARKER_FILENAME = "last_server_prune.txt"
 DEFAULT_RETENTION_CHECK_SECONDS = 24 * 60 * 60
+EST_TZ = timezone(timedelta(hours=-5))  # Fixed offset; aligns with EST
 DEFAULT_EMPTYING_THRESHOLD = -2.5
 ZERO_FLOW_TOLERANCE = 2.5
 PUMP_LOW_THRESHOLD = 5.0
@@ -209,8 +210,12 @@ def parse_retention_days(env: Dict[str, str]) -> Optional[float]:
     return to_float(env.get("DB_RETENTION_DAYS"))
 
 
+def retention_check_days(env: Dict[str, str]) -> Optional[float]:
+    return to_float(env.get("DB_RETENTION_CHECK_TIME"))
+
+
 def retention_check_interval_seconds(env: Dict[str, str]) -> float:
-    interval_days = to_float(env.get("DB_RETENTION_CHECK_TIME"))
+    interval_days = retention_check_days(env)
     if interval_days is not None and interval_days > 0:
         return max(float(interval_days) * 24 * 60 * 60, 60.0)
     # Backward compatibility with earlier interval setting
@@ -255,25 +260,40 @@ def prune_server_databases(
     retention_days = parse_retention_days(env)
     if retention_days is None or retention_days <= 0:
         return
+    interval_days = retention_check_days(env) or 0.0
     interval_seconds = retention_check_interval_seconds(env)
     now = datetime.now(timezone.utc)
+    if interval_days >= 1.0:
+        # Run only during a quiet window (2 AM EST)
+        est_now = now.astimezone(EST_TZ)
+        if est_now.hour != 2:
+            return
     log_dir = repo_path_from_config(env.get("LOG_DIR", "data/logs"))
     marker_path = log_dir / PRUNE_MARKER_FILENAME
     if not should_run_prune(marker_path, interval_seconds, now):
         return
     log_dir.mkdir(parents=True, exist_ok=True)
     cutoff = (now - timedelta(days=retention_days)).isoformat()
-    deleted = 0
-    deleted += prune_table_if_exists(tank_conn, "tank_readings", "source_timestamp", cutoff)
-    deleted += prune_table_if_exists(pump_conn, "pump_events", "source_timestamp", cutoff)
-    deleted += prune_table_if_exists(vacuum_conn, "vacuum_readings", "source_timestamp", cutoff)
-    deleted += prune_table_if_exists(evap_conn, "evaporator_flow", "sample_timestamp", cutoff)
+    deletions = {
+        "tank": prune_table_if_exists(tank_conn, "tank_readings", "source_timestamp", cutoff),
+        "pump": prune_table_if_exists(pump_conn, "pump_events", "source_timestamp", cutoff),
+        "vacuum": prune_table_if_exists(vacuum_conn, "vacuum_readings", "source_timestamp", cutoff),
+        "evap": prune_table_if_exists(evap_conn, "evaporator_flow", "sample_timestamp", cutoff),
+    }
     try:
         marker_path.write_text(now.isoformat())
     except Exception:
         pass
-    if deleted:
-        print(f"Pruned {deleted} rows older than {retention_days} days")
+    total_deleted = sum(deletions.values())
+    if total_deleted:
+        print(f"Pruned {total_deleted} rows older than {retention_days} days")
+        for label, conn in (("tank", tank_conn), ("pump", pump_conn), ("vacuum", vacuum_conn), ("evap", evap_conn)):
+            if deletions.get(label, 0) <= 0:
+                continue
+            try:
+                conn.execute("VACUUM")
+            except Exception as exc:
+                print(f"VACUUM failed for {label} DB: {exc}")
 
 
 def resolve_emptying_threshold(env: Dict[str, str]) -> float:
