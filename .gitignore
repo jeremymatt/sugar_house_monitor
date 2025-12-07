@@ -5,6 +5,7 @@ config/*.ini
 config/*.json
 config/*.key
 log.txt
+*error_log*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
