@@ -278,6 +278,8 @@ def init_display():
 
 
 def run_lcd_screen(lcd, queue_dict):  # pragma: no cover - hardware specific
+    # Restore default SIGTERM handling so parent terminate() works.
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     lcd.clear()
     lcd.message = "HELLO"
@@ -356,6 +358,8 @@ def run_tank_controller(
     loop_gap_seconds: float = 10.0,
 ):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    # Ensure SIGTERM follows default behavior so parent terminate()/kill() works.
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
     (
         num_to_average,
         delay,
