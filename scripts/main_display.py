@@ -23,6 +23,7 @@ import requests
 
 
 # ---- CONFIG ----
+DEBUG = os.environ.get("DISPLAY_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
 
 # Base API endpoint (ending in /api)
 API_BASE = os.environ.get(
@@ -75,6 +76,13 @@ except Exception:
 
 # Cache fonts so we do not recreate them every frame.
 _FONT_CACHE = {}
+_WARN_NO_FONT = False
+_WARN_RENDER_FAIL = False
+
+
+def debug_log(message: str) -> None:
+    if DEBUG:
+        print(f"[display debug] {message}", file=sys.stderr, flush=True)
 
 
 @dataclass
@@ -209,6 +217,7 @@ def fetch_state(preferred_window_sec: Optional[int]) -> Tuple[PlotSettings, List
 
 
 def draw_text(surface, text, pos, size=20, color=TEXT_MAIN, bold=False):
+    global _WARN_NO_FONT, _WARN_RENDER_FAIL
     key = (size, bool(bold))
     font_obj = _FONT_CACHE.get(key)
 
@@ -216,22 +225,28 @@ def draw_text(surface, text, pos, size=20, color=TEXT_MAIN, bold=False):
         try:
             pg_font.init()
             font_obj = pg_font.SysFont(None, size, bold=bold) or pg_font.Font(None, size)
-        except Exception:
+        except Exception as exc:
+            debug_log(f"SysFont failed for size={size} bold={bold}: {exc}")
             try:
                 font_obj = pg_font.Font(None, size)
-            except Exception:
+            except Exception as exc_font:
+                debug_log(f"Font(None) failed for size={size}: {exc_font}")
                 font_obj = None
 
     if not font_obj and HAS_FREETYPE:
         try:
             pg_ft.init()
             font_obj = pg_ft.SysFont(None, size, bold=bold)
-        except Exception:
+        except Exception as exc:
+            debug_log(f"FreeType SysFont failed for size={size} bold={bold}: {exc}")
             font_obj = None
 
     if font_obj:
         _FONT_CACHE[key] = font_obj
     else:
+        if not _WARN_NO_FONT:
+            debug_log("No usable font available; text will not render.")
+            _WARN_NO_FONT = True
         return
 
     try:
@@ -240,7 +255,10 @@ def draw_text(surface, text, pos, size=20, color=TEXT_MAIN, bold=False):
         else:
             render = font_obj.render(text, True, color)
             surface.blit(render, pos)
-    except Exception:
+    except Exception as exc:
+        if not _WARN_RENDER_FAIL:
+            debug_log(f"Font render failed for text '{text}' at {pos}: {exc}")
+            _WARN_RENDER_FAIL = True
         return
 
 
@@ -365,6 +383,10 @@ def disable_screen_blanking():
 def main():
     if not os.environ.get("DISPLAY"):
         os.environ["DISPLAY"] = ":0"
+    debug_log(
+        f"Init display with HAS_FONT={HAS_FONT} HAS_FREETYPE={HAS_FREETYPE} "
+        f"API_BASE={API_BASE} STATUS_URL={STATUS_URL}"
+    )
     pygame.init()
     disable_screen_blanking()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN)
@@ -386,9 +408,12 @@ def main():
 
         now = time.time()
         if now - last_fetch >= REFRESH_SEC:
-            fetched = fetch_state(settings.window_sec if settings else None)
-            if fetched:
-                settings, points, status = fetched
+            try:
+                fetched = fetch_state(settings.window_sec if settings else None)
+                if fetched:
+                    settings, points, status = fetched
+            except Exception as exc:
+                debug_log(f"fetch_state error: {exc}")
             last_fetch = now
 
         screen.fill(BACKGROUND)
