@@ -73,6 +73,9 @@ try:
 except Exception:
     HAS_FONT = False
 
+# Cache fonts so we do not recreate them every frame.
+_FONT_CACHE = {}
+
 
 @dataclass
 class PlotSettings:
@@ -206,26 +209,39 @@ def fetch_state(preferred_window_sec: Optional[int]) -> Tuple[PlotSettings, List
 
 
 def draw_text(surface, text, pos, size=20, color=TEXT_MAIN, bold=False):
-    if HAS_FREETYPE:
+    key = (size, bool(bold))
+    font_obj = _FONT_CACHE.get(key)
+
+    if not font_obj and HAS_FONT:
         try:
-            font_obj = pg_ft.SysFont("arial", size, bold=bold)
-            font_obj.render_to(surface, pos, text, color)
-            return
-        except Exception:
-            pass
-    if HAS_FONT:
-        try:
-            font_obj = pg_font.SysFont("arial", size, bold=bold)
+            pg_font.init()
+            font_obj = pg_font.SysFont(None, size, bold=bold) or pg_font.Font(None, size)
         except Exception:
             try:
                 font_obj = pg_font.Font(None, size)
             except Exception:
-                return
+                font_obj = None
+
+    if not font_obj and HAS_FREETYPE:
         try:
+            pg_ft.init()
+            font_obj = pg_ft.SysFont(None, size, bold=bold)
+        except Exception:
+            font_obj = None
+
+    if font_obj:
+        _FONT_CACHE[key] = font_obj
+    else:
+        return
+
+    try:
+        if hasattr(font_obj, "render_to"):
+            font_obj.render_to(surface, pos, text, color)
+        else:
             render = font_obj.render(text, True, color)
             surface.blit(render, pos)
-        except Exception:
-            return
+    except Exception:
+        return
 
 
 def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
