@@ -36,7 +36,8 @@ if ($type === 'brookside' || $type === 'roadside') {
     $tankId = $type;
     $conn = connect_sqlite($tankDbPath);
     $stmt = $conn->prepare(
-        'SELECT source_timestamp, surf_dist, depth, volume_gal
+        'SELECT source_timestamp, surf_dist, depth, volume_gal,
+                instant_gph, filtered_gph, is_valid, fault_code, pump_event_flag
          FROM tank_readings
          WHERE tank_id = :tank
          ORDER BY source_timestamp'
@@ -45,7 +46,27 @@ if ($type === 'brookside' || $type === 'roadside') {
 
     send_csv_headers("{$tankId}.csv");
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['Unnamed: 0','timestamp','yr','mo','day','hr','m','s','surf_dist','depth','gal']);
+    fputcsv(
+        $out,
+        [
+            'Unnamed: 0',
+            'timestamp',
+            'yr',
+            'mo',
+            'day',
+            'hr',
+            'm',
+            's',
+            'surf_dist',
+            'depth',
+            'gal',
+            'instant_gph',
+            'filtered_gph',
+            'is_valid',
+            'fault_code',
+            'pump_event_flag',
+        ]
+    );
     $idx = 0;
     foreach ($stmt as $row) {
         $parts = dt_parts($row['source_timestamp']);
@@ -61,6 +82,11 @@ if ($type === 'brookside' || $type === 'roadside') {
             $row['surf_dist'],
             $row['depth'],
             $row['volume_gal'],
+            $row['instant_gph'],
+            $row['filtered_gph'],
+            $row['is_valid'],
+            $row['fault_code'],
+            $row['pump_event_flag'],
         ]);
     }
     fclose($out);

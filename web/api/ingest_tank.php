@@ -36,6 +36,11 @@ $db->exec(
         max_volume_gal REAL,
         level_percent REAL,
         flow_gph REAL,
+        instant_gph REAL,
+        filtered_gph REAL,
+        is_valid INTEGER,
+        fault_code TEXT,
+        pump_event_flag INTEGER,
         eta_full TEXT,
         eta_empty TEXT,
         time_to_full_min REAL,
@@ -47,15 +52,22 @@ $db->exec(
 );
 ensure_column($db, 'tank_readings', 'max_volume_gal', 'REAL');
 ensure_column($db, 'tank_readings', 'level_percent', 'REAL');
+ensure_column($db, 'tank_readings', 'instant_gph', 'REAL');
+ensure_column($db, 'tank_readings', 'filtered_gph', 'REAL');
+ensure_column($db, 'tank_readings', 'is_valid', 'INTEGER');
+ensure_column($db, 'tank_readings', 'fault_code', 'TEXT');
+ensure_column($db, 'tank_readings', 'pump_event_flag', 'INTEGER');
 
 $insert = $db->prepare(
     'INSERT INTO tank_readings (
         tank_id, source_timestamp, surf_dist, depth, volume_gal, max_volume_gal,
-        level_percent, flow_gph, eta_full, eta_empty, time_to_full_min,
+        level_percent, flow_gph, instant_gph, filtered_gph, is_valid, fault_code,
+        pump_event_flag, eta_full, eta_empty, time_to_full_min,
         time_to_empty_min, raw_payload, received_at
     ) VALUES (
         :tank_id, :source_timestamp, :surf_dist, :depth, :volume_gal, :max_volume_gal,
-        :level_percent, :flow_gph, :eta_full, :eta_empty, :time_to_full_min,
+        :level_percent, :flow_gph, :instant_gph, :filtered_gph, :is_valid, :fault_code,
+        :pump_event_flag, :eta_full, :eta_empty, :time_to_full_min,
         :time_to_empty_min, :raw_payload, :received_at
     )
     ON CONFLICT(tank_id, source_timestamp) DO UPDATE SET
@@ -65,6 +77,11 @@ $insert = $db->prepare(
         max_volume_gal=excluded.max_volume_gal,
         level_percent=excluded.level_percent,
         flow_gph=excluded.flow_gph,
+        instant_gph=excluded.instant_gph,
+        filtered_gph=excluded.filtered_gph,
+        is_valid=excluded.is_valid,
+        fault_code=excluded.fault_code,
+        pump_event_flag=excluded.pump_event_flag,
         eta_full=excluded.eta_full,
         eta_empty=excluded.eta_empty,
         time_to_full_min=excluded.time_to_full_min,
@@ -95,6 +112,11 @@ foreach ($records as $record) {
         ':max_volume_gal' => $record['max_volume_gal'] ?? null,
         ':level_percent' => $record['level_percent'] ?? null,
         ':flow_gph' => $record['flow_gph'] ?? null,
+        ':instant_gph' => $record['instant_gph'] ?? null,
+        ':filtered_gph' => $record['filtered_gph'] ?? null,
+        ':is_valid' => $record['is_valid'] ?? null,
+        ':fault_code' => $record['fault_code'] ?? null,
+        ':pump_event_flag' => $record['pump_event_flag'] ?? null,
         ':eta_full' => $record['eta_full'] ?? null,
         ':eta_empty' => $record['eta_empty'] ?? null,
         ':time_to_full_min' => $record['time_to_full_min'] ?? null,

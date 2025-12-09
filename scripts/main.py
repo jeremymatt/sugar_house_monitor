@@ -132,6 +132,11 @@ class TankDatabase:
                     max_volume_gal REAL,
                     level_percent REAL,
                     flow_gph REAL,
+                    instant_gph REAL,
+                    filtered_gph REAL,
+                    is_valid INTEGER,
+                    fault_code TEXT,
+                    pump_event_flag INTEGER,
                     eta_full TEXT,
                     eta_empty TEXT,
                     time_to_full_min REAL,
@@ -145,6 +150,11 @@ class TankDatabase:
             )
             self._ensure_column("tank_readings", "max_volume_gal", "REAL")
             self._ensure_column("tank_readings", "level_percent", "REAL")
+            self._ensure_column("tank_readings", "instant_gph", "REAL")
+            self._ensure_column("tank_readings", "filtered_gph", "REAL")
+            self._ensure_column("tank_readings", "is_valid", "INTEGER")
+            self._ensure_column("tank_readings", "fault_code", "TEXT")
+            self._ensure_column("tank_readings", "pump_event_flag", "INTEGER")
             self.conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS pump_events (
@@ -210,9 +220,14 @@ class TankDatabase:
             "surf_dist": float_or_none(record.get("surf_dist")),
             "depth": float_or_none(record.get("depth")),
             "volume_gal": float_or_none(record.get("volume_gal")),
-             "max_volume_gal": float_or_none(record.get("max_volume_gal")),
-             "level_percent": float_or_none(record.get("level_percent")),
+            "max_volume_gal": float_or_none(record.get("max_volume_gal")),
+            "level_percent": float_or_none(record.get("level_percent")),
             "flow_gph": float_or_none(record.get("flow_gph")),
+            "instant_gph": float_or_none(record.get("instant_gph")),
+            "filtered_gph": float_or_none(record.get("filtered_gph")),
+            "is_valid": int(record.get("is_valid")) if record.get("is_valid") is not None else None,
+            "fault_code": record.get("fault_code"),
+            "pump_event_flag": int(record.get("pump_event_flag")) if record.get("pump_event_flag") is not None else None,
             "eta_full": record.get("eta_full"),
             "eta_empty": record.get("eta_empty"),
             "time_to_full_min": float_or_none(record.get("time_to_full_min")),
@@ -224,11 +239,13 @@ class TankDatabase:
                 """
                 INSERT OR IGNORE INTO tank_readings (
                     tank_id, source_timestamp, surf_dist, depth, volume_gal, max_volume_gal,
-                    level_percent, flow_gph, eta_full, eta_empty, time_to_full_min,
+                    level_percent, flow_gph, instant_gph, filtered_gph, is_valid, fault_code,
+                    pump_event_flag, eta_full, eta_empty, time_to_full_min,
                     time_to_empty_min, received_at
                 ) VALUES (
                     :tank_id, :source_timestamp, :surf_dist, :depth, :volume_gal,
-                    :max_volume_gal, :level_percent, :flow_gph, :eta_full, :eta_empty,
+                    :max_volume_gal, :level_percent, :flow_gph, :instant_gph, :filtered_gph,
+                    :is_valid, :fault_code, :pump_event_flag, :eta_full, :eta_empty,
                     :time_to_full_min, :time_to_empty_min, :received_at
                 )
                 """,
@@ -633,6 +650,11 @@ class UploadWorker:
                 "max_volume_gal": row["max_volume_gal"],
                 "level_percent": row["level_percent"],
                 "flow_gph": row["flow_gph"],
+                "instant_gph": row["instant_gph"],
+                "filtered_gph": row["filtered_gph"],
+                "is_valid": row["is_valid"],
+                "fault_code": row["fault_code"],
+                "pump_event_flag": row["pump_event_flag"],
                 "eta_full": row["eta_full"],
                 "eta_empty": row["eta_empty"],
                 "time_to_full_min": row["time_to_full_min"],
@@ -934,13 +956,32 @@ class TankPiApp:
         LOGGER.error("Remote reset failed after retries; continuing with local reset")
 
     def _build_measurement_params(self):
-        return (
-            int(self.env.get("TANK_NUM_TO_AVERAGE", "8")),
-            float(self.env.get("TANK_MEAS_DELAY", "0.25")),
-            float(self.env.get("TANK_READINGS_PER_MIN", "4")),
-            int(self.env.get("TANK_FILTER_WINDOW", "50")),
-            float(self.env.get("TANK_FILTER_SIGMA", "0.25")),
-            int(self.env.get("TANK_RATE_UPDATE_SECONDS", "15")),
+        # Env-driven measurement + flow configuration.
+        fill_threshold = float(self.env.get("TANK_FILL_THRESHOLD_GPH", self.env.get("tanks_filling_threshold", "5")))
+        empty_threshold = float(
+            self.env.get("TANK_EMPTY_THRESHOLD_GPH", self.env.get("tanks_emptying_threshold", "-10"))
+        )
+        return TVF.TankComputationConfig(
+            num_to_average=int(self.env.get("TANK_NUM_TO_AVERAGE", "8")),
+            meas_delay=float(self.env.get("TANK_MEAS_DELAY", "0.25")),
+            readings_per_min=float(self.env.get("TANK_READINGS_PER_MIN", "4")),
+            rate_update_seconds=int(self.env.get("TANK_RATE_UPDATE_SECONDS", "15")),
+            fill_threshold_gph=fill_threshold,
+            empty_threshold_gph=empty_threshold,
+            guard_max_in_gph=float(self.env.get("TANK_GUARD_MAX_IN_GPH", "30000")),
+            guard_max_out_gph=float(self.env.get("TANK_GUARD_MAX_OUT_GPH", "1000")),
+            empty_gal_floor=float(self.env.get("TANK_EMPTY_GAL_FLOOR", "10")),
+            near_empty_gal=float(self.env.get("TANK_NEAR_EMPTY_GAL", "100")),
+            near_empty_window_min=float(self.env.get("TANK_NEAR_EMPTY_WINDOW_MIN", "30")),
+            fill_window_min=float(self.env.get("TANK_FILL_WINDOW_MIN_MINUTES", "15")),
+            fill_window_max=float(self.env.get("TANK_FILL_WINDOW_MAX_MINUTES", "240")),
+            draw_window_min=float(self.env.get("TANK_DRAW_WINDOW_MIN_MINUTES", "5")),
+            draw_window_max=float(self.env.get("TANK_DRAW_WINDOW_MAX_MINUTES", "60")),
+            transfer_tank_gal=float(self.env.get("TANK_TRANSFER_TANK_GAL", "18")),
+            pump_spike_min_gph=float(self.env.get("TANK_PUMP_SPIKE_MIN_GPH", "1000")),
+            pump_spike_max_gph=float(self.env.get("TANK_PUMP_SPIKE_MAX_GPH", "30000")),
+            pump_end_tolerance_gph=float(self.env.get("TANK_PUMP_END_TOLERANCE_GPH", "200")),
+            pump_end_consecutive=int(self.env.get("TANK_PUMP_END_CONSECUTIVE", "3")),
         )
 
     def _prepare_debug_inputs(self):

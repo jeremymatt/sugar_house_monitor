@@ -10,7 +10,6 @@ from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-from hampel import hampel
 
 try:
     import adafruit_character_lcd.character_lcd_rgb_i2c as character_lcd
@@ -46,7 +45,36 @@ df_col_order = [
     "surf_dist",
     "depth",
     "gal",
+    "instant_gph",
+    "filtered_gph",
+    "is_valid",
+    "fault_code",
+    "pump_event_flag",
 ]
+
+
+@dataclass
+class TankComputationConfig:
+    num_to_average: int
+    meas_delay: float
+    readings_per_min: float
+    rate_update_seconds: int
+    fill_threshold_gph: float
+    empty_threshold_gph: float
+    guard_max_in_gph: float
+    guard_max_out_gph: float
+    empty_gal_floor: float
+    near_empty_gal: float
+    near_empty_window_min: float
+    fill_window_min: float
+    fill_window_max: float
+    draw_window_min: float
+    draw_window_max: float
+    transfer_tank_gal: float
+    pump_spike_min_gph: float
+    pump_spike_max_gph: float
+    pump_end_tolerance_gph: float
+    pump_end_consecutive: int
 
 tank_names = ["brookside", "roadside"]
 SERIAL_PORTS = {
@@ -347,7 +375,7 @@ def _clock_now(clock):
 def run_tank_controller(
     tank_name,
     queue_dict,
-    measurement_rate_params,
+    measurement_config: TankComputationConfig,
     *,
     clock=None,
     debug_records: Optional[Sequence[DebugSample]] = None,
@@ -360,15 +388,7 @@ def run_tank_controller(
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     # Ensure SIGTERM follows default behavior so parent terminate()/kill() works.
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
-    (
-        num_to_average,
-        delay,
-        readings_per_min,
-        window_size,
-        n_sigma,
-        rate_update_dt,
-    ) = measurement_rate_params
-    reading_wait_time = dt.timedelta(seconds=60 / readings_per_min)
+    reading_wait_time = dt.timedelta(seconds=60 / measurement_config.readings_per_min)
     command_queue = queue_dict[tank_name]["command"]
     response_queue = queue_dict[tank_name]["response"]
     screen_response_queue = queue_dict[tank_name]["screen_response"]
@@ -389,11 +409,7 @@ def run_tank_controller(
     tank = TANK(
         tank_name,
         uart,
-        num_to_average,
-        delay,
-        window_size,
-        n_sigma,
-        rate_update_dt,
+        measurement_config,
         tank_dims_dict=tank_dims_dict,
         clock=clock,
         debug_feed=debug_feed,
@@ -448,11 +464,7 @@ class TANK:
         self,
         tank_name,
         uart,
-        num_to_average,
-        delay,
-        window_size,
-        n_sigma,
-        rate_update_dt,
+        config: TankComputationConfig,
         tank_dims_dict=tank_dims_dict,
         clock=None,
         debug_feed: Optional[DebugTankFeed] = None,
@@ -469,11 +481,27 @@ class TANK:
         self.history_hours = history_hours
         self.status_writer = TankStatusFileWriter(status_dir, tank_name)
         self.error_queue = error_queue
-        self.num_to_average = num_to_average
-        self.delay = delay
-        self.window_size = window_size
-        self.n_sigma = n_sigma
-        self.rate_update_dt = dt.timedelta(seconds=rate_update_dt)
+        self.config = config
+        self.num_to_average = config.num_to_average
+        self.delay = config.meas_delay
+        self.readings_per_min = config.readings_per_min
+        self.rate_update_dt = dt.timedelta(seconds=config.rate_update_seconds)
+        self.fill_threshold = config.fill_threshold_gph
+        self.empty_threshold = config.empty_threshold_gph
+        self.guard_max_in_gph = config.guard_max_in_gph
+        self.guard_max_out_gph = config.guard_max_out_gph
+        self.empty_gal_floor = config.empty_gal_floor
+        self.near_empty_gal = config.near_empty_gal
+        self.near_empty_window_min = config.near_empty_window_min
+        self.fill_window_min = config.fill_window_min
+        self.fill_window_max = config.fill_window_max
+        self.draw_window_min = config.draw_window_min
+        self.draw_window_max = config.draw_window_max
+        self.transfer_tank_gal = config.transfer_tank_gal
+        self.pump_spike_min_gph = config.pump_spike_min_gph
+        self.pump_spike_max_gph = config.pump_spike_max_gph
+        self.pump_end_tolerance_gph = config.pump_end_tolerance_gph
+        self.pump_end_consecutive = config.pump_end_consecutive
         self.next_rate_update = self._now() - dt.timedelta(days=1)
         self.next_prune_time = self._now()
         self.uart_trigger = 0x55
@@ -484,11 +512,20 @@ class TANK:
         self.radius = dims["radius"]
         self.dim_df = dims["dim_df"]
         self.bottom_dist = dims["bottom_dist"]
-        self.mins_back = 30
+        self.mins_back = config.fill_window_min
         self.filling = False
         self.emptying = False
         self.remaining_time = None
-
+        self.filtered_flow = None
+        self.current_window_minutes = config.fill_window_min
+        self.last_filtered_timestamp = None
+        self.pending_pump_correction = 0.0
+        self.pump_event_active = False
+        self.pump_spike_streak = 0
+        self.pump_end_streak = 0
+        self.pump_start_volume = None
+        self.pre_event_flow = None
+        self.last_status_payload = None
         self.max_vol = int(round(max(self.dim_df.gals_interp), 0))
         self.history_df = self._load_recent_history()
         self.dist_to_surf = None
@@ -540,7 +577,8 @@ class TANK:
         try:
             cur = conn.execute(
                 """
-                SELECT source_timestamp, surf_dist, depth, volume_gal
+                SELECT source_timestamp, surf_dist, depth, volume_gal,
+                       instant_gph, filtered_gph, is_valid, fault_code, pump_event_flag
                 FROM tank_readings
                 WHERE tank_id = ? AND source_timestamp >= ?
                 ORDER BY source_timestamp
@@ -572,11 +610,25 @@ class TANK:
                 "surf_dist": row["surf_dist"],
                 "depth": row["depth"],
                 "gal": row["volume_gal"],
+                "instant_gph": row["instant_gph"] if "instant_gph" in row.keys() else None,
+                "filtered_gph": row["filtered_gph"] if "filtered_gph" in row.keys() else None,
+                "is_valid": row["is_valid"] if "is_valid" in row.keys() else 1,
+                "fault_code": row["fault_code"] if "fault_code" in row.keys() else None,
+                "pump_event_flag": row["pump_event_flag"] if "pump_event_flag" in row.keys() else 0,
             }
             records.append(record)
         if not records:
             return df
         history_df = pd.DataFrame(records)
+        for col, default in (
+            ("instant_gph", None),
+            ("filtered_gph", None),
+            ("is_valid", 1),
+            ("fault_code", None),
+            ("pump_event_flag", 0),
+        ):
+            if col not in history_df:
+                history_df[col] = default
         return history_df[df_col_order]
 
     def read_distance(self):
@@ -633,16 +685,25 @@ class TANK:
             return None
 
         self.get_gal_in_tank()
-        self._append_history(measurement_time)
-        self._prune_history_if_needed(measurement_time)
-        self.get_tank_rate(measurement_time)
-        payload = self._build_payload(measurement_time)
-        self.status_writer.write(payload)
-        return payload
-
-    def _append_history(self, measurement_time):
         ts = ensure_utc(measurement_time)
-        row = {
+        flow_fields = self._process_flow(ts)
+        row = self._build_history_row(ts, flow_fields)
+        self._append_history(row)
+        self._prune_history_if_needed(ts)
+        self._update_remaining_time(ts, flow_fields)
+
+        db_payload = self._build_payload(ts, flow_fields, include_extended=True)
+        if flow_fields["is_valid"] and not flow_fields["fault_code"]:
+            status_payload = self._build_payload(ts, flow_fields, include_extended=False)
+            self.status_writer.write(status_payload)
+            self.last_status_payload = status_payload
+        elif self.last_status_payload:
+            # Leave the on-disk status at the last good measurement.
+            pass
+        return db_payload
+
+    def _build_history_row(self, ts: dt.datetime, flow_fields: Dict[str, object]) -> Dict[str, object]:
+        return {
             "datetime": ts,
             "timestamp": ts.isoformat(),
             "yr": ts.year,
@@ -654,10 +715,17 @@ class TANK:
             "surf_dist": self.dist_to_surf,
             "depth": self.depth,
             "gal": self.current_gallons,
+            "instant_gph": flow_fields.get("instant_gph"),
+            "filtered_gph": flow_fields.get("filtered_gph"),
+            "is_valid": 1 if flow_fields.get("is_valid") else 0,
+            "fault_code": flow_fields.get("fault_code"),
+            "pump_event_flag": 1 if flow_fields.get("pump_event_flag") else 0,
         }
+
+    def _append_history(self, row: Dict[str, object]):
         self.history_df = pd.concat([self.history_df, pd.DataFrame([row])], ignore_index=True)
 
-    def _prune_history_if_needed(self, now):
+    def _prune_history_if_needed(self, now: dt.datetime):
         if now < self.next_prune_time:
             return
         cutoff = now - dt.timedelta(hours=self.history_hours)
@@ -667,78 +735,279 @@ class TANK:
 
     def update_mins_back(self, mins_back):
         self.mins_back += mins_back
-        self.mins_back = max([5, self.mins_back])
-        self.mins_back = min([240, self.mins_back])
+        self.mins_back = max([self.draw_window_min, self.mins_back])
+        self.mins_back = min([self.fill_window_max, self.mins_back])
+        self.current_window_minutes = self.mins_back
+
+    def _latest_good_row(self, include_pump: bool = False) -> Optional[pd.Series]:
+        if self.history_df.empty:
+            return None
+        mask = self.history_df["is_valid"] == 1
+        if not include_pump:
+            mask &= self.history_df["pump_event_flag"] == 0
+        good = self.history_df.loc[mask]
+        if good.empty:
+            return None
+        return good.iloc[-1]
+
+    def _median_good_gallons(self, n: int = 10) -> Optional[float]:
+        if self.history_df.empty:
+            return None
+        mask = self.history_df["is_valid"] == 1
+        good = self.history_df.loc[mask]
+        if good.empty:
+            return None
+        return float(good.tail(n)["gal"].median())
+
+    def _compute_instant_flow(
+        self, ts: dt.datetime, apply_pending_correction: bool = True
+    ) -> Dict[str, object]:
+        last_good = self._latest_good_row()
+        if last_good is None:
+            return {"instant_gph": None, "dt_seconds": None, "reference_row": None}
+
+        dt_seconds = (ts - ensure_utc(last_good["datetime"])).total_seconds()
+        if dt_seconds <= 0:
+            return {"instant_gph": None, "dt_seconds": dt_seconds, "reference_row": last_good}
+
+        correction = self.pending_pump_correction if apply_pending_correction else 0.0
+        effective_current = (self.current_gallons or 0) - correction
+        delta_gal = effective_current - (last_good["gal"] or 0)
+        instant_gph = (delta_gal / dt_seconds) * 3600
+
+        if apply_pending_correction and correction:
+            # Apply the correction only once, on the first post-event valid reading.
+            self.pending_pump_correction = 0.0
+
+        if min(self.current_gallons or 0, last_good["gal"] or 0) < self.empty_gal_floor and instant_gph < 0:
+            instant_gph = 0.0
+
+        return {
+            "instant_gph": instant_gph,
+            "dt_seconds": dt_seconds,
+            "reference_row": last_good,
+            "effective_current": effective_current,
+        }
+
+    def _apply_guardrails(
+        self, instant_gph: Optional[float], dt_seconds: Optional[float], effective_current: Optional[float]
+    ) -> Dict[str, object]:
+        if instant_gph is None or dt_seconds is None or dt_seconds <= 0:
+            return {"is_valid": True, "fault_code": None}
+
+        fault_code = None
+        if instant_gph > self.guard_max_in_gph or instant_gph < -self.guard_max_out_gph:
+            fault_code = "flow_bounds"
+        else:
+            median_gal = self._median_good_gallons(10)
+            if median_gal is not None:
+                rate_vs_median = ((effective_current or 0) - median_gal) / (dt_seconds / 3600)
+                if rate_vs_median > self.guard_max_in_gph or rate_vs_median < -self.guard_max_out_gph:
+                    fault_code = "median_flow_bounds"
+
+        return {"is_valid": fault_code is None, "fault_code": fault_code}
+
+    def _detect_pump_event(self, instant_gph: Optional[float]) -> Dict[str, object]:
+        pump_event_flag = False
+        pump_ended = False
+        pump_volume_added = 0.0
+
+        if instant_gph is None:
+            self.pump_spike_streak = 0
+            if not self.pump_event_active:
+                self.pump_end_streak = 0
+            return {
+                "pump_event_flag": pump_event_flag,
+                "pump_ended": pump_ended,
+                "pump_volume_added": pump_volume_added,
+            }
+
+        if self.pump_event_active:
+            pump_event_flag = True
+            if abs(instant_gph - (self.pre_event_flow or 0)) <= self.pump_end_tolerance_gph:
+                self.pump_end_streak += 1
+            else:
+                self.pump_end_streak = 0
+
+            if self.pump_end_streak >= self.pump_end_consecutive:
+                pump_ended = True
+                pump_event_flag = True
+                self.pump_event_active = False
+                self.pump_end_streak = 0
+                self.pump_spike_streak = 0
+                if self.pump_start_volume is not None and self.current_gallons is not None:
+                    pump_volume_added = max((self.current_gallons or 0) - (self.pump_start_volume or 0), 0)
+                self.pump_start_volume = None
+        else:
+            if self.pump_spike_min_gph <= instant_gph <= self.pump_spike_max_gph:
+                self.pump_spike_streak += 1
+            else:
+                self.pump_spike_streak = 0
+
+            if self.pump_spike_streak >= 2:
+                self.pump_event_active = True
+                self.pump_start_volume = self.current_gallons
+                self.pre_event_flow = self.filtered_flow if self.filtered_flow is not None else instant_gph
+                pump_event_flag = True
+                self.pump_end_streak = 0
+        return {
+            "pump_event_flag": pump_event_flag,
+            "pump_ended": pump_ended,
+            "pump_volume_added": pump_volume_added,
+        }
+
+    def _update_filter_window(self, instant_gph: Optional[float], ts: dt.datetime) -> None:
+        if instant_gph is None:
+            return
+        dt_seconds = (
+            (ts - self.last_filtered_timestamp).total_seconds()
+            if self.last_filtered_timestamp
+            else 0
+        )
+        if self.pump_event_active:
+            return
+
+        target_window = self.current_window_minutes
+        if instant_gph < self.empty_threshold:
+            # Shrink quickly toward the draw-off target.
+            target_window = max(self.draw_window_min, min(self.current_window_minutes, self.draw_window_max))
+            if self.current_window_minutes > self.draw_window_min:
+                decay = min(1.0, dt_seconds / 90.0) if dt_seconds else 1.0
+                self.current_window_minutes = max(
+                    self.draw_window_min,
+                    self.current_window_minutes - (self.current_window_minutes - self.draw_window_min) * decay,
+                )
+        elif instant_gph > self.fill_threshold:
+            # Grow slowly toward the estimated pump interval.
+            estimated_minutes = (self.transfer_tank_gal / max(instant_gph, 0.001)) * 60
+            target_window = max(self.fill_window_min, min(estimated_minutes, self.fill_window_max))
+            step = 0.1 * (target_window - self.current_window_minutes)
+            self.current_window_minutes = max(
+                self.fill_window_min, min(self.fill_window_max, self.current_window_minutes + step)
+            )
+        else:
+            # Idle/steady: drift toward a moderate window.
+            target_window = max(self.fill_window_min, min(self.current_window_minutes, self.fill_window_max))
+
+        if (self.current_gallons or 0) < self.near_empty_gal and instant_gph >= self.empty_threshold:
+            self.current_window_minutes = max(self.current_window_minutes, self.near_empty_window_min)
+        self.current_window_minutes = max(self.draw_window_min, min(self.current_window_minutes, self.fill_window_max))
+        self.mins_back = self.current_window_minutes
+
+    def _update_filtered_flow(
+        self,
+        instant_gph: Optional[float],
+        ts: dt.datetime,
+        *,
+        is_valid: bool,
+        pump_event_flag: bool,
+    ) -> Optional[float]:
+        if not is_valid or pump_event_flag or instant_gph is None:
+            return self.filtered_flow
+
+        if self.last_filtered_timestamp is None:
+            self.filtered_flow = instant_gph
+            self.last_filtered_timestamp = ts
+            return self.filtered_flow
+
+        dt_seconds = (ts - self.last_filtered_timestamp).total_seconds()
+        if dt_seconds <= 0:
+            return self.filtered_flow
+
+        window_seconds = max(self.current_window_minutes * 60, 1)
+        alpha = min(1.0, dt_seconds / window_seconds)
+        self.filtered_flow = self.filtered_flow + alpha * (instant_gph - self.filtered_flow)
+        self.last_filtered_timestamp = ts
+        return self.filtered_flow
+
+    def _process_flow(self, ts: dt.datetime) -> Dict[str, object]:
+        apply_pending = not self.pump_event_active
+        base_flow = self._compute_instant_flow(ts, apply_pending_correction=apply_pending)
+        instant_gph = base_flow.get("instant_gph")
+        dt_seconds = base_flow.get("dt_seconds")
+        effective_current = base_flow.get("effective_current")
+
+        guardrail = self._apply_guardrails(instant_gph, dt_seconds, effective_current)
+        is_valid = guardrail["is_valid"]
+        fault_code = guardrail["fault_code"]
+
+        pump_state = self._detect_pump_event(instant_gph if is_valid else None)
+        pump_event_flag = pump_state["pump_event_flag"]
+        if pump_state["pump_ended"] and pump_state["pump_volume_added"] > 0:
+            self.pending_pump_correction += pump_state["pump_volume_added"]
+        if pump_event_flag:
+            self.filtered_flow = self.filtered_flow  # keep previous
+
+        self._update_filter_window(instant_gph, ts)
+        filtered = self._update_filtered_flow(
+            instant_gph, ts, is_valid=is_valid, pump_event_flag=pump_event_flag
+        )
+
+        self.tank_rate = None
+        self.filling = False
+        self.emptying = False
+        if filtered is not None and is_valid and not pump_event_flag:
+            self.tank_rate = float(np.round(filtered, 1))
+            if self.tank_rate > self.fill_threshold:
+                self.filling = True
+            elif self.tank_rate < self.empty_threshold:
+                self.emptying = True
+
+        if fault_code:
+            error_msg = (
+                f"Reading rejected ({fault_code}); dist={self.dist_to_surf}, "
+                f"depth={self.depth}, gallons={self.current_gallons}, "
+                f"instant_gph={instant_gph}"
+            )
+            self._emit_error(error_msg, ts)
+
+        return {
+            "instant_gph": instant_gph,
+            "filtered_gph": self.tank_rate if self.tank_rate is not None else filtered,
+            "is_valid": is_valid,
+            "fault_code": fault_code,
+            "pump_event_flag": pump_event_flag,
+        }
+
+    def _update_remaining_time(self, now: dt.datetime, flow_fields: Dict[str, object]) -> None:
+        if now > self.next_rate_update:
+            self.next_rate_update = now + self.rate_update_dt
+
+        if not flow_fields.get("is_valid") or flow_fields.get("pump_event_flag"):
+            return
+        self.remaining_time = None
+        self.eta_full = None
+        self.eta_empty = None
+        self.time_to_full_min = None
+        self.time_to_empty_min = None
+        if self.filling and self.tank_rate:
+            gallons_remaining = max(self.max_vol - (self.current_gallons or 0), 0)
+            if self.tank_rate > 0:
+                hours = gallons_remaining / self.tank_rate
+                self.remaining_time = dt.timedelta(hours=hours)
+                eta = now + self.remaining_time
+                self.eta_full = eta.isoformat()
+                self.time_to_full_min = hours * 60
+        if self.emptying and self.tank_rate:
+            gallons_remaining = max(self.current_gallons or 0, 0)
+            if self.tank_rate < 0:
+                hours = gallons_remaining / abs(self.tank_rate)
+                self.remaining_time = dt.timedelta(hours=hours)
+                eta = now + self.remaining_time
+                self.eta_empty = eta.isoformat()
+                self.time_to_empty_min = hours * 60
 
     def get_tank_rate(self, current_time=None):
         now = ensure_utc(current_time or self._now())
-        if now > self.next_rate_update:
-            self.next_rate_update = now + self.rate_update_dt
-            hampel_unfiltered = int(self.window_size / 2) + 1
-
-            if len(self.history_df) < hampel_unfiltered + 10:
-                self.filling = False
-                self.emptying = False
-                self.remaining_time = None
-                self.tank_rate = None
-            else:
-                result = hampel(
-                    self.history_df.gal,
-                    window_size=self.window_size,
-                    n_sigma=float(self.n_sigma),
-                )
-                self.history_df["gal_filter"] = result.filtered_data
-                temp_df = self.history_df[:-hampel_unfiltered].copy()
-                rate_window_lim = temp_df.loc[temp_df.index[-1], "datetime"] - dt.timedelta(
-                    minutes=self.mins_back
-                )
-                rate_window = temp_df.loc[temp_df.datetime > rate_window_lim]
-
-                if len(rate_window) < 5:
-                    self.tank_rate = None
-                    self.filling = False
-                    self.emptying = False
-                    self.remaining_time = None
-                else:
-                    timedelta_vals = rate_window.datetime.diff()
-                    d_hrs = [val.total_seconds() / 3600 for val in timedelta_vals[timedelta_vals.index[1:]]]
-                    d_hrs.insert(0, 0)
-                    poly = np.polyfit(np.cumsum(d_hrs), rate_window.gal_filter, 1)
-
-                    self.filling = False
-                    self.emptying = False
-                    if np.isnan(poly[0]):
-                        self.tank_rate = None
-                        print(rate_window)
-                        print(d_hrs)
-                    else:
-                        self.tank_rate = float(np.round(poly[0], 1))
-                        if self.tank_rate > 5:
-                            self.filling = True
-                        elif self.tank_rate < -5:
-                            self.emptying = True
-
-                    self.remaining_time = None
-                    self.eta_full = None
-                    self.eta_empty = None
-                    self.time_to_full_min = None
-                    self.time_to_empty_min = None
-                    if self.filling and self.tank_rate:
-                        gallons_remaining = max(self.max_vol - (self.current_gallons or 0), 0)
-                        if self.tank_rate > 0:
-                            hours = gallons_remaining / self.tank_rate
-                            self.remaining_time = dt.timedelta(hours=hours)
-                            eta = now + self.remaining_time
-                            self.eta_full = eta.isoformat()
-                            self.time_to_full_min = hours * 60
-                    if self.emptying and self.tank_rate:
-                        gallons_remaining = max(self.current_gallons or 0, 0)
-                        if self.tank_rate < 0:
-                            hours = gallons_remaining / abs(self.tank_rate)
-                            self.remaining_time = dt.timedelta(hours=hours)
-                            eta = now + self.remaining_time
-                            self.eta_empty = eta.isoformat()
-                            self.time_to_empty_min = hours * 60
+        flow_fields = {
+            "is_valid": True,
+            "fault_code": None,
+            "pump_event_flag": False,
+            "instant_gph": None,
+            "filtered_gph": self.tank_rate if self.tank_rate is not None else self.filtered_flow,
+        }
+        self._update_remaining_time(now, flow_fields)
+        return self.tank_rate
 
     def return_screen_data(self):
         state = {}
@@ -792,21 +1061,26 @@ class TANK:
         state["mins_back"] = self.mins_back
         return state
 
-    def _build_payload(self, measurement_time: dt.datetime) -> Dict[str, Optional[float]]:
+    def _build_payload(
+        self, measurement_time: dt.datetime, flow_fields: Dict[str, object], *, include_extended: bool
+    ) -> Dict[str, Optional[float]]:
         percent_full = None
         if self.current_gallons is not None and self.max_vol:
             percent_full = max(
                 0.0,
                 min(100.0, (float(self.current_gallons) / float(self.max_vol)) * 100.0),
             )
-        return {
+        flow_value = (
+            self.tank_rate if flow_fields.get("is_valid") and not flow_fields.get("pump_event_flag") else None
+        )
+        payload = {
             "generated_at": ensure_utc(self._now()).isoformat(),
             "tank_id": self.name,
             "source_timestamp": ensure_utc(measurement_time).isoformat(),
             "surf_dist": self.dist_to_surf,
             "depth": self.depth,
             "volume_gal": self.current_gallons,
-            "flow_gph": self.tank_rate,
+            "flow_gph": flow_value,
             "eta_full": self.eta_full,
             "eta_empty": self.eta_empty,
             "time_to_full_min": self.time_to_full_min,
@@ -814,6 +1088,17 @@ class TANK:
             "level_percent": percent_full,
             "max_volume_gal": self.max_vol,
         }
+        if include_extended:
+            payload.update(
+                {
+                    "instant_gph": flow_fields.get("instant_gph"),
+                    "filtered_gph": flow_fields.get("filtered_gph"),
+                    "is_valid": 1 if flow_fields.get("is_valid") else 0,
+                    "fault_code": flow_fields.get("fault_code"),
+                    "pump_event_flag": 1 if flow_fields.get("pump_event_flag") else 0,
+                }
+            )
+        return payload
 
     def get_gal_in_tank(self):
         depth = self.bottom_dist - (self.dist_to_surf or 0)
