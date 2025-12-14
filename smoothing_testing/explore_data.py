@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""Explore historical tank readings and plot raw values + diffs.
+
+Steps:
+- Load all CSVs in the dataset directory (optionally filter by tank).
+- Recompute sap depth and gallons using the same geometry in scripts/tank_vol_fcns.py.
+- Calculate raw flow rate (gallons per hour) between readings.
+- Save scatter plots (raw + point-to-point diff) for depth, gallons, and flow.
+"""
+
+import argparse
+from pathlib import Path
+import sys
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+import tank_vol_fcns  # noqa: E402  # isort:skip
+
+DATASET_DIR = Path(__file__).resolve().parent / "dataset"
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "plots"
+
+# Flow rate bounds (gallons per hour). Points outside this window are dropped.
+FLOW_BOUNDS_GPH = {
+    "lower": 1000.0,
+    "upper": 30000.0,
+}
+
+
+def calc_depth_and_gallons(tank_name: str, surf_dist: float):
+    """Replicate tank_vol_fcns get_gal_in_tank math for a single reading."""
+    dims = tank_vol_fcns.tank_dims_dict[tank_name]
+    dim_df = dims["dim_df"]
+    length = dims["length"]
+    bottom_dist = dims["bottom_dist"]
+
+    if pd.isna(surf_dist):
+        return np.nan, np.nan
+
+    raw_depth = bottom_dist - surf_dist
+    depth = max(0.0, min(raw_depth, dim_df["depths"].max()))
+
+    ind = dim_df.loc[dim_df["depths"] <= depth].index[-1]
+    bottom_depth = dim_df.loc[ind, "depths"]
+    gallons = dim_df.loc[ind, "gals_interp"]
+
+    if depth > bottom_depth:
+        bottom_width = dim_df.loc[ind, "widths"]
+        top_width = np.interp(depth, dim_df["depths"], dim_df["widths"])
+        vol = length * (depth - bottom_depth) * (bottom_width + top_width) / 2
+        gallons += vol / 231.0
+
+    return depth, np.round(gallons, 2)
+
+
+def load_all_data(dataset_dir: Path, tank_filter=None) -> pd.DataFrame:
+    dataset_dir = Path(dataset_dir)
+    frames = []
+    tank_filter = set(tank_filter) if tank_filter else None
+
+    for path in tqdm(sorted(dataset_dir.glob("*.csv")), desc="Loading CSVs"):
+        tank_name = path.stem.split("_")[0]
+        if tank_filter and tank_name not in tank_filter:
+            continue
+        if tank_name not in tank_vol_fcns.tank_dims_dict:
+            continue
+        df = pd.read_csv(path)
+        df = df.loc[:, ~df.columns.str.contains(r"^Unnamed")]
+        df["tank"] = tank_name
+        frames.append(df)
+
+    if not frames:
+        raise FileNotFoundError(
+            f"No CSV files found in {dataset_dir} matching tanks "
+            f"{sorted(tank_filter) if tank_filter else list(tank_vol_fcns.tank_dims_dict.keys())}"
+        )
+
+    data = pd.concat(frames, ignore_index=True)
+    data["timestamp"] = pd.to_datetime(data["timestamp"])
+    data["surf_dist"] = pd.to_numeric(data["surf_dist"], errors="coerce")
+    data = data.sort_values(["tank", "timestamp"]).reset_index(drop=True)
+    return data
+
+
+def compute_depth_volume(data: pd.DataFrame) -> pd.DataFrame:
+    data = data.copy()
+    for tank_name, tank_df in tqdm(list(data.groupby("tank")), desc="Computing depth/volume"):
+        results = tank_df["surf_dist"].apply(lambda val: calc_depth_and_gallons(tank_name, val))
+        depths, gallons = zip(*results) if len(results) else ([], [])
+        data.loc[tank_df.index, "calc_depth_in"] = depths
+        data.loc[tank_df.index, "calc_gallons"] = gallons
+    return data
+
+
+def compute_flow_and_diffs(data: pd.DataFrame) -> pd.DataFrame:
+    data = data.copy()
+    time_delta_hours = data.groupby("tank")["timestamp"].diff().dt.total_seconds() / 3600.0
+    gallon_delta = data.groupby("tank")["calc_gallons"].diff()
+
+    data["calc_flow_gph"] = gallon_delta / time_delta_hours
+    data.loc[time_delta_hours <= 0, "calc_flow_gph"] = np.nan
+
+    lower = FLOW_BOUNDS_GPH["lower"]
+    upper = FLOW_BOUNDS_GPH["upper"]
+    valid_mask = time_delta_hours > 0
+    out_of_bounds = valid_mask & ((data["calc_flow_gph"] < lower) | (data["calc_flow_gph"] > upper))
+    data.loc[out_of_bounds, "calc_flow_gph"] = np.nan
+
+    for col in ["calc_depth_in", "calc_gallons", "calc_flow_gph"]:
+        data[f"{col}_diff"] = data.groupby("tank")[col].diff()
+
+    total_candidates = int(valid_mask.sum())
+    dropped = int(out_of_bounds.sum())
+    drop_fraction = dropped / total_candidates if total_candidates else 0
+    drop_stats = {
+        "total_candidates": total_candidates,
+        "dropped": dropped,
+        "drop_fraction": drop_fraction,
+    }
+
+    return data, drop_stats
+
+
+def plot_depth_and_gallons(df: pd.DataFrame, tank_name: str, output_dir: Path):
+    tank_df = df[df["tank"] == tank_name]
+    if tank_df.empty:
+        return None
+
+    fig, ax1 = plt.subplots(figsize=(15, 6))
+    depth_scatter = ax1.scatter(
+        tank_df["timestamp"],
+        tank_df["calc_depth_in"],
+        s=6,
+        alpha=0.6,
+        label="sap depth (in)",
+        color="C0",
+    )
+    ax1.set_ylabel("sap depth (in)")
+    ax1.set_title(f"{tank_name} depth and gallons")
+
+    ax2 = ax1.twinx()
+    gallons_scatter = ax2.scatter(
+        tank_df["timestamp"],
+        tank_df["calc_gallons"],
+        s=6,
+        alpha=0.6,
+        label="volume (gal)",
+        color="C1",
+    )
+    ax2.set_ylabel("volume (gal)")
+
+    fig.autofmt_xdate()
+    fig.tight_layout()
+
+    # Combine legends from both axes.
+    handles = [depth_scatter, gallons_scatter]
+    labels = [h.get_label() for h in handles]
+    ax1.legend(handles, labels, loc="upper left")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"{tank_name}_depth_gallons.png"
+    fig.savefig(out_path, bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    return out_path
+
+
+def plot_depth_and_flow(df: pd.DataFrame, tank_name: str, output_dir: Path):
+    tank_df = df[df["tank"] == tank_name]
+    if tank_df.empty:
+        return None
+
+    fig, axes = plt.subplots(
+        3,
+        1,
+        figsize=(15, 9),
+        sharex=True,
+        gridspec_kw={"height_ratios": [1, 1, 1]},
+    )
+
+    axes[0].scatter(tank_df["timestamp"], tank_df["calc_depth_in"], s=6, alpha=0.6, color="C0")
+    axes[0].set_ylabel("sap depth (in)")
+    axes[0].set_title(f"{tank_name} depth and flow")
+
+    flow_ax = axes[1]
+    flow_ax.set_yscale("log")
+    flow_ax.scatter(tank_df["timestamp"], tank_df["calc_flow_gph"], s=6, alpha=0.6, color="C1", label="flow (gph)")
+
+    flow_diff_ax = axes[2]
+    flow_diff_ax.scatter(tank_df["timestamp"], tank_df["calc_flow_gph_diff"], s=6, alpha=0.6, color="C2")
+
+    flow_ax.set_ylabel("flow (gph, log scale)")
+    flow_ax.axhline(FLOW_BOUNDS_GPH["lower"], color="gray", linestyle="--", linewidth=0.8, label="bounds")
+    flow_ax.axhline(FLOW_BOUNDS_GPH["upper"], color="gray", linestyle="--", linewidth=0.8)
+    flow_ax.legend(loc="upper left")
+
+    flow_diff_ax.set_ylabel("flow diff (gph)")
+    flow_diff_ax.axhline(0, color="gray", linestyle="--", linewidth=0.8)
+    flow_diff_ax.set_xlabel("timestamp")
+
+    fig.autofmt_xdate()
+    fig.tight_layout()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"{tank_name}_depth_flow.png"
+    fig.savefig(out_path, bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    return out_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Explore historical tank readings.")
+    parser.add_argument(
+        "--dataset-dir",
+        type=Path,
+        default=DATASET_DIR,
+        help="Directory containing {tank}_{yyyy}_{mm}_{dd}.csv files",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help="Directory to write plots",
+    )
+    parser.add_argument(
+        "--tanks",
+        nargs="*",
+        default=None,
+        help="Optional list of tank names to include (default both)",
+    )
+    args = parser.parse_args()
+
+    data = load_all_data(args.dataset_dir, args.tanks)
+    data = compute_depth_volume(data)
+    data, drop_stats = compute_flow_and_diffs(data)
+
+    saved = []
+    for tank_name in tqdm(sorted(data["tank"].unique()), desc="Plotting"):
+        if tank_name not in data["tank"].unique():
+            continue
+        path1 = plot_depth_and_gallons(data, tank_name, args.output_dir)
+        path2 = plot_depth_and_flow(data, tank_name, args.output_dir)
+        for path in (path1, path2):
+            if path:
+                saved.append(path)
+
+    print(f"Loaded {len(data)} rows from {args.dataset_dir}")
+    print("Plots saved:")
+    for path in saved:
+        print(f" - {path}")
+    print(
+        f"Flow points dropped by bounds: {drop_stats['dropped']} / {drop_stats['total_candidates']} "
+        f"({drop_stats['drop_fraction']:.2%})"
+    )
+
+
+if __name__ == "__main__":
+    main()
