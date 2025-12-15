@@ -29,9 +29,10 @@ DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "plots"
 
 # Flow rate bounds (gallons per hour). Points outside this window are dropped.
 FLOW_BOUNDS_GPH = {
-    "lower": 1000.0,
-    "upper": 30000.0,
+    "lower": -1000.0,
+    "upper": 10000.0,
 }
+FLOW_SMOOTH_WINDOW = 32  # window size for moving mean/median on flow plots
 
 
 def calc_depth_and_gallons(tank_name: str, surf_dist: float):
@@ -91,7 +92,7 @@ def load_all_data(dataset_dir: Path, tank_filter=None) -> pd.DataFrame:
 
 def compute_depth_volume(data: pd.DataFrame) -> pd.DataFrame:
     data = data.copy()
-    for tank_name, tank_df in tqdm(list(data.groupby("tank")), desc="Computing depth/volume"):
+    for tank_name, tank_df in data.groupby("tank"):
         results = tank_df["surf_dist"].apply(lambda val: calc_depth_and_gallons(tank_name, val))
         depths, gallons = zip(*results) if len(results) else ([], [])
         data.loc[tank_df.index, "calc_depth_in"] = depths
@@ -101,23 +102,50 @@ def compute_depth_volume(data: pd.DataFrame) -> pd.DataFrame:
 
 def compute_flow_and_diffs(data: pd.DataFrame) -> pd.DataFrame:
     data = data.copy()
-    time_delta_hours = data.groupby("tank")["timestamp"].diff().dt.total_seconds() / 3600.0
-    gallon_delta = data.groupby("tank")["calc_gallons"].diff()
-
-    data["calc_flow_gph"] = gallon_delta / time_delta_hours
-    data.loc[time_delta_hours <= 0, "calc_flow_gph"] = np.nan
+    data["calc_flow_gph"] = np.nan
+    data["flow_dropped"] = False
 
     lower = FLOW_BOUNDS_GPH["lower"]
     upper = FLOW_BOUNDS_GPH["upper"]
-    valid_mask = time_delta_hours > 0
-    out_of_bounds = valid_mask & ((data["calc_flow_gph"] < lower) | (data["calc_flow_gph"] > upper))
-    data.loc[out_of_bounds, "calc_flow_gph"] = np.nan
+    total_candidates = 0
+    dropped = 0
+
+    for tank_name, tank_df in data.groupby("tank"):
+        last_good_idx = None
+        prev_idx = None
+        for idx in tqdm(tank_df.index, desc=str(tank_name)):
+            if prev_idx is None:
+                prev_idx = idx
+                continue
+
+            ref_idx = last_good_idx if last_good_idx is not None else prev_idx
+            dt_hours = (data.loc[idx, "timestamp"] - data.loc[ref_idx, "timestamp"]).total_seconds() / 3600.0
+            if dt_hours <= 0:
+                print("WARNING: non-positive timedelta={}hrs for tank {}".format(dt_hours,tank_name))
+                print('  Timestamp1: {}'.format(data.loc[ref_idx, "timestamp"]))
+                print('  Timestamp2: {}'.format(data.loc[idx, "timestamp"]))
+                prev_idx = idx
+                continue
+
+            gal_current = data.loc[idx, "calc_gallons"]
+            gal_ref = data.loc[ref_idx, "calc_gallons"]
+            if pd.isna(gal_current) or pd.isna(gal_ref):
+                prev_idx = idx
+                continue
+
+            total_candidates += 1
+            flow = (gal_current - gal_ref) / dt_hours
+            if lower <= flow <= upper:
+                data.loc[idx, "calc_flow_gph"] = flow
+                last_good_idx = idx
+            else:
+                data.loc[idx, "flow_dropped"] = True
+                dropped += 1
+            prev_idx = idx
 
     for col in ["calc_depth_in", "calc_gallons", "calc_flow_gph"]:
         data[f"{col}_diff"] = data.groupby("tank")[col].diff()
 
-    total_candidates = int(valid_mask.sum())
-    dropped = int(out_of_bounds.sum())
     drop_fraction = dropped / total_candidates if total_candidates else 0
     drop_stats = {
         "total_candidates": total_candidates,
@@ -176,6 +204,9 @@ def plot_depth_and_flow(df: pd.DataFrame, tank_name: str, output_dir: Path):
     if tank_df.empty:
         return None
 
+    flow_mean = tank_df["calc_flow_gph"].rolling(FLOW_SMOOTH_WINDOW, min_periods=1).mean()
+    flow_median = tank_df["calc_flow_gph"].rolling(FLOW_SMOOTH_WINDOW, min_periods=1).median()
+
     fig, axes = plt.subplots(
         3,
         1,
@@ -184,20 +215,28 @@ def plot_depth_and_flow(df: pd.DataFrame, tank_name: str, output_dir: Path):
         gridspec_kw={"height_ratios": [1, 1, 1]},
     )
 
-    axes[0].scatter(tank_df["timestamp"], tank_df["calc_depth_in"], s=6, alpha=0.6, color="C0")
+    depth_colors = np.where(tank_df["flow_dropped"], "red", "blue")
+    axes[0].scatter(
+        tank_df["timestamp"],
+        tank_df["calc_depth_in"],
+        s=6,
+        alpha=0.6,
+        color=depth_colors,
+    )
     axes[0].set_ylabel("sap depth (in)")
     axes[0].set_title(f"{tank_name} depth and flow")
 
     flow_ax = axes[1]
-    flow_ax.set_yscale("log")
     flow_ax.scatter(tank_df["timestamp"], tank_df["calc_flow_gph"], s=6, alpha=0.6, color="C1", label="flow (gph)")
+    flow_ax.plot(tank_df["timestamp"], flow_mean, color="C4", linewidth=1.0, label=f"mean (w={FLOW_SMOOTH_WINDOW})")
+    flow_ax.plot(
+        tank_df["timestamp"], flow_median, color="C5", linewidth=1.0, linestyle="--", label=f"median (w={FLOW_SMOOTH_WINDOW})"
+    )
 
     flow_diff_ax = axes[2]
     flow_diff_ax.scatter(tank_df["timestamp"], tank_df["calc_flow_gph_diff"], s=6, alpha=0.6, color="C2")
 
-    flow_ax.set_ylabel("flow (gph, log scale)")
-    flow_ax.axhline(FLOW_BOUNDS_GPH["lower"], color="gray", linestyle="--", linewidth=0.8, label="bounds")
-    flow_ax.axhline(FLOW_BOUNDS_GPH["upper"], color="gray", linestyle="--", linewidth=0.8)
+    flow_ax.set_ylabel("flow (gph)")
     flow_ax.legend(loc="upper left")
 
     flow_diff_ax.set_ylabel("flow diff (gph)")
