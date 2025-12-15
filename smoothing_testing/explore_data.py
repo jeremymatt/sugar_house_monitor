@@ -34,7 +34,7 @@ FLOW_BOUNDS_GPH = {
     "lower": -1000.0,
     "upper": 10000.0,
 }
-FLOW_SMOOTH_WINDOW = 8  # span for exponential moving average on flow plots
+FLOW_SMOOTH_WINDOW = 50  # span for exponential moving average on flow plots
 
 # Hampel + moving-average parameters for alternate filtering
 HAMP_WINDOW_SIZE = 50
