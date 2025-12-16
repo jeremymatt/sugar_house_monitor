@@ -10,6 +10,7 @@ $tankDbPath = resolve_repo_path($env['TANK_DB_PATH'] ?? '');
 $pumpDbPath = resolve_repo_path($env['PUMP_DB_PATH'] ?? '');
 $evapDbPath = resolve_repo_path($env['EVAPORATOR_DB_PATH'] ?? 'data/evaporator.db');
 $vacDbPath  = resolve_repo_path($env['VACUUM_DB_PATH'] ?? $pumpDbPath);
+$stackDbPath = resolve_repo_path($env['STACK_TEMP_DB_PATH'] ?? $vacDbPath);
 
 $type = $_GET['type'] ?? '';
 $type = strtolower($type);
@@ -61,6 +62,37 @@ if ($type === 'brookside' || $type === 'roadside') {
             $row['surf_dist'],
             $row['depth'],
             $row['volume_gal'],
+        ]);
+    }
+    fclose($out);
+    exit;
+}
+
+if ($type === 'stack' || $type === 'stacktemp' || $type === 'stacktemps') {
+    $conn = connect_sqlite($stackDbPath);
+    $conn->exec(
+        'CREATE TABLE IF NOT EXISTS stack_temperatures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stack_temp_f REAL,
+            ambient_temp_f REAL,
+            source_timestamp TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            UNIQUE(source_timestamp)
+        )'
+    );
+    $stmt = $conn->query(
+        'SELECT source_timestamp, stack_temp_f, ambient_temp_f
+         FROM stack_temperatures
+         ORDER BY source_timestamp'
+    );
+    send_csv_headers('stack_temperatures.csv');
+    $out = fopen('php://output', 'w');
+    fputcsv($out, ['timestamp','Stack Temp (F)','Ambient Temp (F)']);
+    foreach ($stmt as $row) {
+        fputcsv($out, [
+            $row['source_timestamp'],
+            $row['stack_temp_f'],
+            $row['ambient_temp_f'],
         ]);
     }
     fclose($out);

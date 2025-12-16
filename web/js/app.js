@@ -19,6 +19,7 @@ const TANK_STATUS_FILES = {
 const PUMP_STATUS_FILE = "status_pump.json";
 const EVAP_STATUS_FILE = "status_evaporator.json";
 const VACUUM_STATUS_FILE = "status_vacuum.json";
+const STACK_STATUS_FILE = "status_stack.json";
 const MONITOR_STATUS_FILE = "status_monitor.json";
 const FLOW_HISTORY_ENDPOINT =
   window.location.pathname.includes("/sugar_house_monitor") ||
@@ -73,6 +74,7 @@ const STALE_THRESHOLDS = {
 };
 
 const MONITOR_STALE_SECONDS = 150; // 2.5 minutes
+const STACK_STALE_SECONDS = 120;   // stack/ambient readings should be frequent
 
 // How often to refetch status files (in ms)
 const FETCH_INTERVAL_MS = 1_000; // 15s
@@ -90,6 +92,7 @@ let latestTanks = { brookside: null, roadside: null };
 let latestPump = null;
 let latestEvaporator = null;
 let latestVacuum = null;
+let latestStackTemps = null;
 let latestMonitor = null;
 let lastGeneratedAt = null;
 let lastFetchError = false;
@@ -154,6 +157,12 @@ function formatVolumeGal(val) {
   const num = toNumber(val);
   if (num == null) return "–";
   return `${Math.round(num)} gal`;
+}
+
+function formatTempF(val) {
+  const num = toNumber(val);
+  if (num == null) return "–";
+  return `${num.toFixed(1)} F`;
 }
 
 function formatPercent(val) {
@@ -635,6 +644,33 @@ function updateOverviewCard(summary, vacuumData) {
   }
 }
 
+function updateStackTemps(stackData, staleSec, thresholdSec) {
+  const stackValElem = document.getElementById("stack-temp-value");
+  const ambientValElem = document.getElementById("ambient-temp-value");
+  const stackNoteElem = document.getElementById("stack-temp-note");
+  const ambientNoteElem = document.getElementById("ambient-temp-note");
+
+  const stackVal = toNumber(stackData?.stack_temp_f);
+  const ambientVal = toNumber(stackData?.ambient_temp_f);
+
+  if (stackValElem) stackValElem.textContent = formatTempF(stackVal);
+  if (ambientValElem) ambientValElem.textContent = formatTempF(ambientVal);
+
+  let noteText = "Awaiting data";
+  if (stackData) {
+    if (staleSec == null) {
+      noteText = "Timestamp unavailable";
+    } else {
+      const rel = formatRelativeSeconds(staleSec);
+      const freshness = thresholdSec && staleSec > thresholdSec ? "Stale" : "Updated";
+      noteText = rel ? `${freshness} \u2022 ${rel}` : freshness;
+    }
+  }
+
+  if (stackNoteElem) stackNoteElem.textContent = noteText;
+  if (ambientNoteElem) ambientNoteElem.textContent = noteText;
+}
+
 function updateMonitorCard(data) {
   const tankStatusElem = document.getElementById("monitor-tank-status");
   const tankNoteElem = document.getElementById("monitor-tank-note");
@@ -1090,7 +1126,7 @@ function updateGlobalStatus(staleInfo) {
   const gen  = document.getElementById("generated-at");
 
   const anyError = staleInfo.error;
-  const anyStale = staleInfo.tanksStale || staleInfo.pumpStale;
+  const anyStale = staleInfo.tanksStale || staleInfo.pumpStale || staleInfo.stackStale;
 
   if (anyError) {
     if (dot) dot.classList.add("stale");
@@ -1117,11 +1153,13 @@ function recomputeStalenessAndRender() {
   const brookside = latestTanks.brookside;
   const roadside  = latestTanks.roadside;
   const pump      = latestPump;
+  const stack     = latestStackTemps;
   const monitor   = latestMonitor;
 
   const brooksideSec = brookside ? secondsSinceLast(brookside.last_received_at || brookside.last_sample_timestamp) : null;
   const roadsideSec  = roadside  ? secondsSinceLast(roadside.last_received_at  || roadside.last_sample_timestamp)  : null;
   const pumpSec      = pump      ? secondsSinceLast(pump.last_received_at      || pump.last_event_timestamp)      : null;
+  const stackSec     = stack     ? secondsSinceLast(stack.last_received_at     || stack.source_timestamp)         : null;
   const tankMonitorSec = monitor?.tank_monitor_last_received_at ? secondsSinceLast(monitor.tank_monitor_last_received_at) : null;
   const pumpMonitorSec = monitor?.pump_monitor_last_received_at ? secondsSinceLast(monitor.pump_monitor_last_received_at) : null;
   const pumpFatal = monitor?.pump_fatal === true;
@@ -1129,10 +1167,12 @@ function recomputeStalenessAndRender() {
   const brooksideThresh = STALE_THRESHOLDS.tank_brookside;
   const roadsideThresh  = STALE_THRESHOLDS.tank_roadside;
   const pumpThresh      = STALE_THRESHOLDS.pump;
+  const stackThresh     = STACK_STALE_SECONDS;
 
   const brooksideStale = brooksideSec != null && brooksideSec > brooksideThresh;
   const roadsideStale  = roadsideSec  != null && roadsideSec  > roadsideThresh;
   const pumpStale      = pumpSec      != null && pumpSec      > pumpThresh;
+  const stackStale     = stackSec     != null && stackSec     > stackThresh;
 
   const overview = computeOverviewSummary();
   const pumpFlowVal = toNumber(pump?.gallons_per_hour ?? pump?.flow_gph);
@@ -1145,6 +1185,7 @@ function recomputeStalenessAndRender() {
   updateTankCard("roadside",  roadside,  roadsideSec,  roadsideThresh);
   updatePumpCard(pump, pumpSec, pumpThresh);
   updateOverviewCard(overview, latestVacuum);
+  updateStackTemps(stack, stackSec, stackThresh);
   updateBoilingCard(latestEvaporator, overview);
   updateMonitorCard({
     tankSec: tankMonitorSec,
@@ -1186,7 +1227,8 @@ function recomputeStalenessAndRender() {
   updateGlobalStatus({
     error: errorState,
     tanksStale: brooksideStale || roadsideStale,
-    pumpStale: pumpStale
+    pumpStale: pumpStale,
+    stackStale: stackStale
   });
 }
 
@@ -1208,6 +1250,7 @@ async function fetchStatusOnce() {
       fetchStatusFile(TANK_STATUS_FILES.roadside),
       fetchStatusFile(PUMP_STATUS_FILE),
       fetchStatusFile(VACUUM_STATUS_FILE),
+      fetchStatusFile(STACK_STATUS_FILE),
       fetchStatusFile(MONITOR_STATUS_FILE),
       fetchStatusFile(EVAP_STATUS_FILE),
     ]);
@@ -1216,8 +1259,9 @@ async function fetchStatusOnce() {
     const roadside = getVal(1);
     const pumpRaw = getVal(2);
     const vacuum = getVal(3);
-    const monitor = getVal(4);
-    const evapStatus = getVal(5);
+    const stackTemps = getVal(4);
+    const monitor = getVal(5);
+    const evapStatus = getVal(6);
     let pump = pumpRaw;
     if (pump && pump.gallons_per_hour == null && lastPumpFlow != null) {
       pump = { ...pump, gallons_per_hour: lastPumpFlow };
@@ -1228,6 +1272,7 @@ async function fetchStatusOnce() {
     latestTanks = { brookside, roadside };
     latestPump = pump;
     latestVacuum = vacuum;
+    latestStackTemps = stackTemps;
     latestMonitor = monitor;
     latestEvaporator = evapStatus || latestEvaporator;
     if (evapSettingsPending && evapStatus?.plot_settings) {
@@ -1242,7 +1287,7 @@ async function fetchStatusOnce() {
     }
     syncEvapControls();
     syncPumpControls();
-    lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump, vacuum, monitor, latestEvaporator]);
+    lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump, vacuum, stackTemps, monitor, latestEvaporator]);
     recomputeStalenessAndRender();
   } catch (err) {
     lastFetchError = true;

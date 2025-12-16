@@ -126,6 +126,20 @@ def get_latest_vacuum_row(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
     return cur.fetchone()
 
 
+def get_latest_stack_temp_row(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    if not table_exists(conn, "stack_temperatures"):
+        return None
+    cur = conn.execute(
+        """
+        SELECT *
+        FROM stack_temperatures
+        ORDER BY received_at DESC
+        LIMIT 1
+        """
+    )
+    return cur.fetchone()
+
+
 def get_latest_monitor_ts(conn: sqlite3.Connection, stream: str) -> Optional[str]:
     if not table_exists(conn, "monitor_heartbeats"):
         return None
@@ -255,6 +269,7 @@ def prune_server_databases(
     tank_conn: sqlite3.Connection,
     pump_conn: sqlite3.Connection,
     vacuum_conn: sqlite3.Connection,
+    stack_conn: sqlite3.Connection,
     evap_conn: sqlite3.Connection,
 ) -> None:
     retention_days = parse_retention_days(env)
@@ -278,6 +293,7 @@ def prune_server_databases(
         "tank": prune_table_if_exists(tank_conn, "tank_readings", "source_timestamp", cutoff),
         "pump": prune_table_if_exists(pump_conn, "pump_events", "source_timestamp", cutoff),
         "vacuum": prune_table_if_exists(vacuum_conn, "vacuum_readings", "source_timestamp", cutoff),
+        "stack": prune_table_if_exists(stack_conn, "stack_temperatures", "source_timestamp", cutoff),
         "evap": prune_table_if_exists(evap_conn, "evaporator_flow", "sample_timestamp", cutoff),
     }
     try:
@@ -287,7 +303,13 @@ def prune_server_databases(
     total_deleted = sum(deletions.values())
     if total_deleted:
         print(f"Pruned {total_deleted} rows older than {retention_days} days")
-        for label, conn in (("tank", tank_conn), ("pump", pump_conn), ("vacuum", vacuum_conn), ("evap", evap_conn)):
+        for label, conn in (
+            ("tank", tank_conn),
+            ("pump", pump_conn),
+            ("vacuum", vacuum_conn),
+            ("stack", stack_conn),
+            ("evap", evap_conn),
+        ):
             if deletions.get(label, 0) <= 0:
                 continue
             try:
@@ -554,8 +576,10 @@ def main() -> None:
     evap_conn = open_db(repo_path_from_config(evap_path_cfg))
     vacuum_db_path = repo_path_from_config(env.get("VACUUM_DB_PATH", env["PUMP_DB_PATH"]))
     vacuum_conn = open_db(vacuum_db_path)
+    stack_db_path = repo_path_from_config(env.get("STACK_TEMP_DB_PATH", env.get("VACUUM_DB_PATH", env["PUMP_DB_PATH"])))
+    stack_conn = vacuum_conn if stack_db_path == vacuum_db_path else open_db(stack_db_path)
     ensure_evap_tables(evap_conn)
-    prune_server_databases(env, tank_conn, pump_conn, vacuum_conn, evap_conn)
+    prune_server_databases(env, tank_conn, pump_conn, vacuum_conn, stack_conn, evap_conn)
     plot_settings = load_plot_settings(evap_conn)
 
     status_base = repo_path_from_config(env["STATUS_JSON_PATH"]).parent
@@ -634,6 +658,19 @@ def main() -> None:
         vac_path = status_base / "status_vacuum.json"
         if should_update_status(vac_path, vacuum_payload["source_timestamp"]):
             atomic_write(vac_path, vacuum_payload)
+
+    stack_row = get_latest_stack_temp_row(stack_conn)
+    if stack_row:
+        stack_payload = {
+            "generated_at": timestamp,
+            "stack_temp_f": stack_row["stack_temp_f"],
+            "ambient_temp_f": stack_row["ambient_temp_f"],
+            "source_timestamp": stack_row["source_timestamp"],
+            "last_received_at": stack_row["received_at"],
+        }
+        stack_path = status_base / "status_stack.json"
+        if should_update_status(stack_path, stack_payload["source_timestamp"]):
+            atomic_write(stack_path, stack_payload)
 
     evap_prev = latest_evap_row(evap_conn)
     evap_record = build_evap_record(tank_rows, pump_row, evap_prev, emptying_threshold)
