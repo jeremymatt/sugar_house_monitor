@@ -30,6 +30,9 @@
 #ifndef SHM_USE_TLS
 #define SHM_USE_TLS 1  // set to 0 to force HTTP on port 80
 #endif
+#ifndef SHM_TLS_INSECURE
+#define SHM_TLS_INSECURE 1  // for self-signed/unknown certs; set to 0 to require valid cert
+#endif
 #ifndef SHM_WIFI_RETRY_MS
 #define SHM_WIFI_RETRY_MS 500UL
 #endif
@@ -127,6 +130,12 @@ bool sendTemps(float stackF, float ambientF) {
   }
   payload += "}]}";
 
+  Serial.print("POST ");
+  Serial.print(API_HOST);
+  Serial.print(':');
+  Serial.print(API_PORT);
+  Serial.println(API_PATH);
+
   httpClient.beginRequest();
   httpClient.post(API_PATH);
   httpClient.sendHeader("Content-Type", "application/json");
@@ -141,6 +150,9 @@ bool sendTemps(float stackF, float ambientF) {
   httpClient.stop();
 
   if (status < 200 || status >= 300) {
+    if (status < 0) {
+      Serial.println("No HTTP response (connection/TLS issue?)");
+    }
     Serial.print("Upload failed (HTTP ");
     Serial.print(status);
     Serial.println(")");
@@ -161,6 +173,13 @@ void setup()
     delay(10);
   }
   Serial.println("MCP9600 HW test");
+
+#if SHM_USE_TLS
+  if (SHM_TLS_INSECURE) {
+    netClient.setInsecure();  // trust all certs; useful if TLS fails with unknown root
+  }
+#endif
+  netClient.setTimeout(15000);
 
    /* Initialise the driver with I2C_ADDRESS and the default I2C bus. */
   if (! mcp.begin(I2C_ADDRESS)) {
