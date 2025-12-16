@@ -30,9 +30,6 @@
 #ifndef SHM_USE_TLS
 #define SHM_USE_TLS 1  // set to 0 to force HTTP on port 80
 #endif
-#ifndef SHM_TLS_INSECURE
-#define SHM_TLS_INSECURE 1  // for self-signed/unknown certs; set to 0 to require valid cert
-#endif
 #ifndef SHM_WIFI_RETRY_MS
 #define SHM_WIFI_RETRY_MS 500UL
 #endif
@@ -119,25 +116,35 @@ bool sendTemps(float stackF, float ambientF) {
   }
 
   String ts = isoTimestamp();
-  String payload = "{\"readings\":[{\"stack_temp_f\":";
+  String payload = "{\"api_key\":\"";
+  payload += API_KEY;
+  payload += "\",\"readings\":[{\"stack_temp_f\":";
   payload += String(stackF, 1);
   payload += ",\"ambient_temp_f\":";
   payload += String(ambientF, 1);
   if (ts.length()) {
     payload += ",\"source_timestamp\":\"";
-    payload += ts;
-    payload += '"';
+  payload += ts;
+  payload += '"';
   }
   payload += "}]}";
+
+  String path = String(API_PATH);
+  // Also pass api_key as query param in case headers are stripped by proxies.
+  if (path.indexOf("api_key=") < 0) {
+    path += path.indexOf('?') >= 0 ? "&" : "?";
+    path += "api_key=";
+    path += API_KEY;
+  }
 
   Serial.print("POST ");
   Serial.print(API_HOST);
   Serial.print(':');
   Serial.print(API_PORT);
-  Serial.println(API_PATH);
+  Serial.println(path);
 
   httpClient.beginRequest();
-  httpClient.post(API_PATH);
+  httpClient.post(path);
   httpClient.sendHeader("Content-Type", "application/json");
   httpClient.sendHeader("X-API-Key", API_KEY);
   httpClient.sendHeader("Content-Length", payload.length());
@@ -174,11 +181,6 @@ void setup()
   }
   Serial.println("MCP9600 HW test");
 
-#if SHM_USE_TLS
-  if (SHM_TLS_INSECURE) {
-    netClient.setInsecure();  // trust all certs; useful if TLS fails with unknown root
-  }
-#endif
   netClient.setTimeout(15000);
 
    /* Initialise the driver with I2C_ADDRESS and the default I2C bus. */
