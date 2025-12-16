@@ -89,7 +89,7 @@ bool connectWifi() {
   WiFi.disconnect();
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   for (int attempt = 0; attempt < WIFI_ATTEMPTS; attempt++) {
-    wl_status_t status = WiFi.status();
+    int status = WiFi.status();
     if (status == WL_CONNECTED) {
       Serial.print("WiFi connected, IP: ");
       Serial.println(WiFi.localIP());
