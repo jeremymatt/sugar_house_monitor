@@ -49,6 +49,8 @@ const unsigned long WIFI_RETRY_DELAY_MS = SHM_WIFI_RETRY_MS;
 const int WIFI_ATTEMPTS = SHM_WIFI_MAX_ATTEMPTS;
 const int SENSOR_FAILURE_THRESHOLD = 5;
 const unsigned long SENSOR_RECOVERY_COOLDOWN_MS = 30000UL;
+const int HTTP_FAILURE_THRESHOLD = 3;
+const unsigned long WIFI_RECOVERY_COOLDOWN_MS = 30000UL;
 
 #if SHM_USE_TLS
 WiFiSSLClient netClient;
@@ -65,6 +67,8 @@ Ambient_Resolution ambientRes = RES_ZERO_POINT_0625;
 unsigned long lastSampleMs = 0;
 int sensorFailureCount = 0;
 unsigned long lastRecoveryMs = 0;
+int httpFailureCount = 0;
+unsigned long lastWifiRecoveryMs = 0;
 
 inline float C_to_F(float c) {
   return c * 9.0 / 5.0 + 32.0;
@@ -252,9 +256,25 @@ bool sendTemps(float stackF, float ambientF) {
     Serial.print(status);
     Serial.println(")");
     Serial.println(resp);
+
+    // Attempt WiFi recovery after repeated HTTP/TLS failures.
+    httpFailureCount += 1;
+    if (status < 0) {
+      unsigned long now = millis();
+      if (httpFailureCount >= HTTP_FAILURE_THRESHOLD && (now - lastWifiRecoveryMs) >= WIFI_RECOVERY_COOLDOWN_MS) {
+        Serial.println("Resetting WiFi after repeated HTTP failures...");
+        netClient.stop();
+        WiFi.disconnect();
+        delay(250);
+        connectWifi();
+        lastWifiRecoveryMs = now;
+        httpFailureCount = 0;
+      }
+    }
     return false;
   }
 
+  httpFailureCount = 0;
   Serial.print("Upload ok (HTTP ");
   Serial.print(status);
   Serial.println(")");
