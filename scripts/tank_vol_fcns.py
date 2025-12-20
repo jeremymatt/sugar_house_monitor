@@ -607,7 +607,7 @@ class TANK:
                 distance = np.round(distance, 2)
                 cur_readings.append(distance)
             time.sleep(self.delay)
-        self.dist_to_surf = np.mean(cur_readings) if cur_readings else None
+        self.dist_to_surf = np.median(cur_readings) if cur_readings else None
 
     def _next_debug_distance(self):
         if not self.debug_feed:
