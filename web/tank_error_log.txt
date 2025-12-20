@@ -1,2 +1,8 @@
 [2025-12-06T15:56:27.187511+00:00] tank_pi: brookside: No distance measurement
 [2025-12-07T21:36:16.254439+00:00] pump_pi: WARNING:tank full & started pumping but no pump_end_time
+[2025-12-19T06:57:21.882359+00:00] tank_pi: brookside: No distance measurement
+[2025-12-19T06:58:21.953988+00:00] tank_pi: brookside: No distance measurement
+[2025-12-19T06:59:22.186506+00:00] tank_pi: brookside: No distance measurement
+[2025-12-19T07:00:22.407629+00:00] tank_pi: brookside: No distance measurement
+[2025-12-19T07:01:25.075300+00:00] tank_pi: brookside: No distance measurement
+[2025-12-19T12:13:58.884117+00:00] tank_pi: roadside: No distance measurement

@@ -51,6 +51,7 @@ const int SENSOR_FAILURE_THRESHOLD = 5;
 const unsigned long SENSOR_RECOVERY_COOLDOWN_MS = 30000UL;
 const int HTTP_FAILURE_THRESHOLD = 3;
 const unsigned long WIFI_RECOVERY_COOLDOWN_MS = 30000UL;
+const int MCP_REINIT_RETRIES = 3;
 
 #if SHM_USE_TLS
 WiFiSSLClient netClient;
@@ -166,13 +167,25 @@ bool recoverMcp() {
   }
   lastRecoveryMs = now;
   Serial.println("Reinitializing MCP9600...");
+  Wire.end();
+  delay(5);
   Wire.begin();
-  if (!initMcp(false)) {
-    Serial.println("MCP9600 reinit failed");
-    return false;
+  Wire.setClock(100000);  // slow down I2C for stability
+#ifdef WIRE_HAS_TIMEOUT
+  Wire.setWireTimeout(2500, true);
+#endif
+  for (int attempt = 1; attempt <= MCP_REINIT_RETRIES; attempt++) {
+    if (initMcp(false)) {
+      Serial.println("MCP9600 reinit ok");
+      return true;
+    }
+    Serial.print("Reinit attempt ");
+    Serial.print(attempt);
+    Serial.println(" failed");
+    delay(50);
   }
-  Serial.println("MCP9600 reinit ok");
-  return true;
+  Serial.println("MCP9600 reinit failed");
+  return false;
 }
 
 bool connectWifi() {
@@ -290,6 +303,11 @@ void setup()
   Serial.println("MCP9600 HW test");
 
   netClient.setTimeout(15000);
+  Wire.begin();
+  Wire.setClock(100000);
+#ifdef WIRE_HAS_TIMEOUT
+  Wire.setWireTimeout(2500, true);
+#endif
 
   /* Initialise the driver with I2C_ADDRESS and the default I2C bus. */
   if (!initMcp(true)) {
