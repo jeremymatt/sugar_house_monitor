@@ -443,13 +443,14 @@ def compute_evaporator_flow(
 ) -> Optional[float]:
     if brookside_flow is None and roadside_flow is None:
         return None
-    negative_flows = []
+    most_negative_flow = None
     for flow in (brookside_flow, roadside_flow):
         if flow is not None and flow < emptying_threshold:
-            negative_flows.append(abs(flow))
-    if not negative_flows:
+            if most_negative_flow is None or flow < most_negative_flow:
+                most_negative_flow = flow
+    if most_negative_flow is None:
         return 0.0
-    total_flow = sum(negative_flows)
+    total_flow = abs(most_negative_flow)
     if pump_in == draw_off and pump_flow is not None:
         total_flow += max(pump_flow, 0.0)
     return total_flow
