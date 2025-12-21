@@ -40,7 +40,7 @@ FLOW_SMOOTH_WINDOW = 50  # span for exponential moving average on flow plots
 # Hampel + moving-average parameters for alternate filtering
 HAMP_WINDOW_SIZE = 50
 HAMP_N_SIGMA = 0.25
-HAMP_MOVING_WINDOW = 200  # moving average window after hampel filtering
+HAMP_MOVING_WINDOW = 12  # moving average window after hampel filtering
 
 
 def calc_depth_and_gallons(tank_name: str, surf_dist: float):
@@ -189,8 +189,12 @@ def compute_hampel_flow(data: pd.DataFrame) -> pd.DataFrame:
     data = data.copy()
     data["hampel_depth_in"] = np.nan
     data["hampel_gallons"] = np.nan
-    data["hampel_ma_gallons"] = np.nan
-    data["hampel_flow_gph"] = np.nan
+    data["hampel_ma_gallons"] = np.nan  # SMA (legacy)
+    data["hampel_flow_gph"] = np.nan    # SMA flow (legacy)
+    data["hampel_flow_gph_diff"] = np.nan
+    data["hampel_ema_gallons"] = np.nan
+    data["hampel_ema_flow_gph"] = np.nan
+    data["hampel_ema_flow_gph_diff"] = np.nan
     data["hampel_outlier"] = False
 
     for tank_name, tank_df in data.groupby("tank"):
@@ -209,15 +213,26 @@ def compute_hampel_flow(data: pd.DataFrame) -> pd.DataFrame:
         if hasattr(res, "outlier_indices") and res.outlier_indices is not None:
             data.loc[tank_df.index[res.outlier_indices], "hampel_outlier"] = True
 
-        ma = data.loc[tank_df.index, "hampel_gallons"].rolling(HAMP_MOVING_WINDOW, min_periods=1).mean()
-        data.loc[tank_df.index, "hampel_ma_gallons"] = ma
+        # Simple moving average (legacy)
+        sma = data.loc[tank_df.index, "hampel_gallons"].rolling(HAMP_MOVING_WINDOW, min_periods=1).mean()
+        data.loc[tank_df.index, "hampel_ma_gallons"] = sma
+        # Exponential moving average
+        ema = (
+            data.loc[tank_df.index, "hampel_gallons"]
+            .ewm(span=HAMP_MOVING_WINDOW, adjust=False, min_periods=1)
+            .mean()
+        )
+        data.loc[tank_df.index, "hampel_ema_gallons"] = ema
 
         dt_hours = tank_df["timestamp"].diff().dt.total_seconds() / 3600.0
         dt_hours.loc[dt_hours <= 0] = np.nan
-        flow = ma.diff() / dt_hours
-        data.loc[tank_df.index, "hampel_flow_gph"] = flow
+        sma_flow = sma.diff() / dt_hours
+        ema_flow = ema.diff() / dt_hours
+        data.loc[tank_df.index, "hampel_flow_gph"] = sma_flow
+        data.loc[tank_df.index, "hampel_ema_flow_gph"] = ema_flow
 
     data["hampel_flow_gph_diff"] = data.groupby("tank")["hampel_flow_gph"].diff()
+    data["hampel_ema_flow_gph_diff"] = data.groupby("tank")["hampel_ema_flow_gph"].diff()
     return data
 
 
@@ -430,6 +445,58 @@ def plot_depth_and_flow_hampel(df: pd.DataFrame, tank_name: str, output_dir: Pat
     return out_path
 
 
+def plot_depth_and_flow_hampel_ema(df: pd.DataFrame, tank_name: str, output_dir: Path):
+    tank_df = df[df["tank"] == tank_name]
+    if tank_df.empty:
+        return None
+
+    hampel_flow_valid = tank_df["hampel_ema_flow_gph"].where(~tank_df["hampel_outlier"])
+
+    fig, axes = plt.subplots(
+        3,
+        1,
+        figsize=(15, 9),
+        sharex=True,
+        gridspec_kw={"height_ratios": [1, 1, 1]},
+    )
+
+    depth_colors = np.where(tank_df["hampel_outlier"], "red", "C0")
+    axes[0].scatter(tank_df["timestamp"], tank_df["calc_depth_in"], s=6, alpha=0.6, color=depth_colors)
+    axes[0].set_ylabel("sap depth (in)")
+    axes[0].set_title(f"{tank_name} depth and flow (Hampel + EMA)")
+    axes[0].grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+
+    flow_colors = np.where(tank_df["hampel_outlier"], "red", "C1")
+    axes[1].scatter(
+        tank_df["timestamp"],
+        hampel_flow_valid,
+        s=6,
+        alpha=0.6,
+        color=flow_colors,
+        label="flow (gph, hampel+EMA)",
+    )
+    axes[1].set_ylim(-500, 500)
+    axes[1].grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    axes[1].set_ylabel("flow (gph)")
+    axes[1].legend(loc="upper left")
+
+    axes[2].scatter(tank_df["timestamp"], hampel_flow_valid.diff(), s=6, alpha=0.6, color="C2")
+    axes[2].set_ylim(-500, 500)
+    axes[2].grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    axes[2].axhline(0, color="gray", linestyle="--", linewidth=0.8)
+    axes[2].set_ylabel("flow diff (gph)")
+    axes[2].set_xlabel("timestamp")
+
+    fig.autofmt_xdate()
+    fig.tight_layout()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"{tank_name}_depth_flow_hampel_ema.png"
+    fig.savefig(out_path, bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    return out_path
+
+
 def plot_depth_and_flow_savgol(df: pd.DataFrame, tank_name: str, output_dir: Path):
     tank_df = df[df["tank"] == tank_name]
     if tank_df.empty:
@@ -528,8 +595,9 @@ def main():
         path1 = plot_depth_and_gallons(data, tank_name, args.output_dir)
         path2 = plot_depth_and_flow(data, tank_name, args.output_dir)
         path3 = plot_depth_and_flow_hampel(data, tank_name, args.output_dir)
-        path4 = plot_depth_and_flow_savgol(data, tank_name, args.output_dir)
-        for path in (path1, path2, path3, path4):
+        path4 = plot_depth_and_flow_hampel_ema(data, tank_name, args.output_dir)
+        path5 = plot_depth_and_flow_savgol(data, tank_name, args.output_dir)
+        for path in (path1, path2, path3, path4, path5):
             if path:
                 saved.append(path)
 
