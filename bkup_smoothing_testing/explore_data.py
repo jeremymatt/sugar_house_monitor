@@ -40,7 +40,14 @@ FLOW_SMOOTH_WINDOW = 50  # span for exponential moving average on flow plots
 # Hampel + moving-average parameters for alternate filtering
 HAMP_WINDOW_SIZE = 50
 HAMP_N_SIGMA = 0.25
-HAMP_MOVING_WINDOW = 12  # moving average window after hampel filtering
+HAMP_MOVING_WINDOW = 400  # moving average window after hampel filtering
+ADAPT_SHORT_WINDOW_MIN = 5  # minutes for short-term flow calc
+ADAPT_NEG_WINDOW_MIN = 10  # minutes when flow is negative
+ADAPT_POS_MAX_WINDOW_MIN = 120  # maximum minutes for positive-flow window
+ADAPT_STEP = 0.05  # fraction to move window toward target each step
+ADAPT_INIT_WINDOW_MIN = 30  # starting window minutes for adaptive MA
+NEAR_EMPTY_GAL = 25
+NEAR_FULL_BUFFER_GAL = 25
 
 
 def calc_depth_and_gallons(tank_name: str, surf_dist: float):
@@ -213,23 +220,90 @@ def compute_hampel_flow(data: pd.DataFrame) -> pd.DataFrame:
         if hasattr(res, "outlier_indices") and res.outlier_indices is not None:
             data.loc[tank_df.index[res.outlier_indices], "hampel_outlier"] = True
 
-        # Simple moving average (legacy)
-        sma = data.loc[tank_df.index, "hampel_gallons"].rolling(HAMP_MOVING_WINDOW, min_periods=1).mean()
-        data.loc[tank_df.index, "hampel_ma_gallons"] = sma
-        # Exponential moving average
+        indices = list(tank_df.index)
+        timestamps = pd.to_datetime(tank_df["timestamp"])
+        dt_hours = timestamps.diff().dt.total_seconds() / 3600.0
+        dt_hours.loc[dt_hours <= 0] = np.nan
+        max_gal = tank_vol_fcns.tank_dims_dict[tank_name]["dim_df"]["gals_interp"].max()
+
+        # Adaptive SMA-like smoothing using Hampel gallons
+        window_min = max(ADAPT_INIT_WINDOW_MIN, ADAPT_NEG_WINDOW_MIN)
+        prev_smoothed = None
+        prev_raw_gal = None
+        prev_ts = None
+        sma_vals = []
+        sma_flow_vals = []
+
+        for idx in indices:
+            gal_raw = data.loc[idx, "hampel_gallons"]
+            ts = timestamps.loc[idx]
+
+            dt_min = None
+            if prev_ts is not None:
+                dt_min = (ts - prev_ts).total_seconds() / 60.0
+
+            short_flow = np.nan
+            if prev_raw_gal is not None and dt_min is not None and dt_min > 0 and dt_min <= ADAPT_SHORT_WINDOW_MIN:
+                short_flow = (gal_raw - prev_raw_gal) / (dt_min / 60.0)
+
+            target_window = None
+            if not pd.isna(short_flow):
+                if short_flow < 0:
+                    target_window = ADAPT_NEG_WINDOW_MIN
+                elif short_flow > 0:
+                    target_window = min(ADAPT_POS_MAX_WINDOW_MIN, 2*1200.0 / max(short_flow, 1e-6))
+            if target_window is not None:
+                window_min = window_min + (target_window - window_min) * ADAPT_STEP
+                window_min = max(window_min, ADAPT_NEG_WINDOW_MIN)
+
+            if prev_smoothed is None or dt_min is None or window_min <= 0:
+                smoothed = gal_raw
+            else:
+                alpha = min(1.0, dt_min / window_min)
+                smoothed = prev_smoothed + alpha * (gal_raw - prev_smoothed)
+
+            flow_val = np.nan
+            dt_hr = dt_hours.loc[idx]
+            if prev_smoothed is not None and dt_hr and dt_hr > 0:
+                flow_val = (smoothed - prev_smoothed) / dt_hr
+
+            # Apply near-empty/full rules
+            if not pd.isna(flow_val):
+                if smoothed < NEAR_EMPTY_GAL:
+                    flow_val = max(flow_val, 0)
+                if smoothed > max_gal - NEAR_FULL_BUFFER_GAL:
+                    flow_val = min(flow_val, 0)
+
+            sma_vals.append(smoothed)
+            sma_flow_vals.append(flow_val)
+
+            prev_smoothed = smoothed
+            prev_raw_gal = gal_raw
+            prev_ts = ts
+
+        data.loc[indices, "hampel_ma_gallons"] = sma_vals
+        data.loc[indices, "hampel_flow_gph"] = sma_flow_vals
+
+        # Fixed EMA path for comparison/plotting
         ema = (
             data.loc[tank_df.index, "hampel_gallons"]
             .ewm(span=HAMP_MOVING_WINDOW, adjust=False, min_periods=1)
             .mean()
         )
         data.loc[tank_df.index, "hampel_ema_gallons"] = ema
-
-        dt_hours = tank_df["timestamp"].diff().dt.total_seconds() / 3600.0
-        dt_hours.loc[dt_hours <= 0] = np.nan
-        sma_flow = sma.diff() / dt_hours
         ema_flow = ema.diff() / dt_hours
-        data.loc[tank_df.index, "hampel_flow_gph"] = sma_flow
-        data.loc[tank_df.index, "hampel_ema_flow_gph"] = ema_flow
+        # Apply near-empty/full rules to EMA flow based on EMA gallons
+        ema_flow_adjusted = []
+        for idx, val in ema_flow.items():
+            adj = val
+            gal_val = ema.loc[idx]
+            if not pd.isna(adj):
+                if gal_val < NEAR_EMPTY_GAL:
+                    adj = max(adj, 0)
+                if gal_val > max_gal - NEAR_FULL_BUFFER_GAL:
+                    adj = min(adj, 0)
+            ema_flow_adjusted.append(adj)
+        data.loc[tank_df.index, "hampel_ema_flow_gph"] = ema_flow_adjusted
 
     data["hampel_flow_gph_diff"] = data.groupby("tank")["hampel_flow_gph"].diff()
     data["hampel_ema_flow_gph_diff"] = data.groupby("tank")["hampel_ema_flow_gph"].diff()

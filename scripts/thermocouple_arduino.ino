@@ -58,7 +58,6 @@ WiFiSSLClient netClient;
 #else
 WiFiClient netClient;
 #endif
-HttpClient httpClient = HttpClient(netClient, API_HOST, API_PORT);
 
 Adafruit_MCP9600 mcp;
 
@@ -73,6 +72,11 @@ unsigned long lastWifiRecoveryMs = 0;
 
 inline float C_to_F(float c) {
   return c * 9.0 / 5.0 + 32.0;
+}
+
+bool hasValidLocalIp(const IPAddress &ip) {
+  // Treat 0.0.0.0 as "not really connected" so we wait for DHCP to finish.
+  return ip != IPAddress(0, 0, 0, 0);
 }
 
 String isoTimestamp() {
@@ -192,26 +196,48 @@ bool connectWifi() {
   Serial.print("Connecting to WiFi SSID ");
   Serial.println(WIFI_SSID);
   WiFi.disconnect();
+  WiFi.end();
+  delay(100);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   for (int attempt = 0; attempt < WIFI_ATTEMPTS; attempt++) {
     int status = WiFi.status();
-    if (status == WL_CONNECTED) {
+    IPAddress ip = WiFi.localIP();
+    if (status == WL_CONNECTED && hasValidLocalIp(ip)) {
       Serial.print("WiFi connected, IP: ");
-      Serial.println(WiFi.localIP());
+      Serial.println(ip);
       return true;
+    }
+    if (status == WL_CONNECTED) {
+      Serial.print("WiFi connected but waiting for DHCP lease");
     }
     delay(WIFI_RETRY_DELAY_MS);
     Serial.print('.');
   }
-  Serial.println("\nWiFi connection failed");
+  Serial.print("\nWiFi connection failed; status=");
+  Serial.println(WiFi.status());
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
   return false;
 }
 
 bool ensureWifi() {
-  if (WiFi.status() == WL_CONNECTED) {
+  int status = WiFi.status();
+  IPAddress ip = WiFi.localIP();
+  if (status == WL_CONNECTED && hasValidLocalIp(ip)) {
     return true;
   }
+  if (status == WL_CONNECTED) {
+    Serial.println("WiFi connected but missing IP lease; reconnecting...");
+  }
   return connectWifi();
+}
+
+void resetWifiClient() {
+  netClient.stop();
+  WiFi.disconnect();
+  WiFi.end();
+  delay(250);
+  connectWifi();
 }
 
 bool sendTemps(float stackF, float ambientF) {
@@ -248,6 +274,7 @@ bool sendTemps(float stackF, float ambientF) {
   Serial.print(API_PORT);
   Serial.println(path);
 
+  HttpClient httpClient(netClient, API_HOST, API_PORT);
   httpClient.beginRequest();
   httpClient.post(path);
   httpClient.sendHeader("Content-Type", "application/json");
@@ -276,10 +303,7 @@ bool sendTemps(float stackF, float ambientF) {
       unsigned long now = millis();
       if (httpFailureCount >= HTTP_FAILURE_THRESHOLD && (now - lastWifiRecoveryMs) >= WIFI_RECOVERY_COOLDOWN_MS) {
         Serial.println("Resetting WiFi after repeated HTTP failures...");
-        netClient.stop();
-        WiFi.disconnect();
-        delay(250);
-        connectWifi();
+        resetWifiClient();
         lastWifiRecoveryMs = now;
         httpFailureCount = 0;
       }
