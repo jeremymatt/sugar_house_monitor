@@ -35,16 +35,17 @@ import tank_vol_fcns as TVF  # noqa: E402
 # ------------------
 # Config parameters.
 # ------------------
-FLOW_WINDOW_MINUTES = 6  # initial symmetric window used for per-point slope (gal/hour)
+FLOW_WINDOW_MINUTES = 6  # initial trailing window used for per-point slope (gal/hour)
 HAMP_WINDOW_SIZE = 50  # points in Hampel window for depth filtering
-HAMP_N_SIGMA = 1.5
+HAMP_N_SIGMA = 0.25
 # Adaptive moving window config
-ADAPT_SHORT_FLOW_WINDOW_MIN = 5  # window to compute short-term flow used to steer the MA window
-ADAPT_NEG_WINDOW_MIN = 12  # target window (minutes) when recent flows are all negative
-ADAPT_POS_MAX_WINDOW_MIN = 160  # cap for target window when filling
+ADAPT_SHORT_FLOW_WINDOW_MIN = 3  # window to compute short-term flow used to steer the MA window
+ADAPT_NEG_WINDOW_MIN = 15  # target window (minutes) when recent flows are all negative
+ADAPT_POS_MAX_WINDOW_MIN = 100  # cap for target window when filling
 ADAPT_WINDOW_UPDATE_DELAY = 2  # number of recent flow estimates to consider for targeting
 ADAPT_STEP = 1 / 10  # fraction to move the window toward target each update
-LOW_FLOW_THRESHOLD = 20  # gph threshold to consider flows ~zero 
+LOW_FLOW_THRESHOLD = 20  # gph threshold to consider flows ~zero
+LARGE_NEG_FLOW_GPH = 100  # gph magnitude to freeze back-expansion until window passes this point
 
 DATASET_DIR = Path(__file__).resolve().parent / "dataset"
 PLOT_DIR = Path(__file__).resolve().parent / "plots"
@@ -163,9 +164,12 @@ def compute_flow(df: pd.DataFrame) -> pd.DataFrame:
     if df["timestamp"].isnull().all():
         return df
 
-    short_half_window = pd.Timedelta(minutes=ADAPT_SHORT_FLOW_WINDOW_MIN / 2)
+    short_window = pd.Timedelta(minutes=ADAPT_SHORT_FLOW_WINDOW_MIN)
     flow_history = deque(maxlen=ADAPT_WINDOW_UPDATE_DELAY)
     current_window_min = FLOW_WINDOW_MINUTES
+    prev_window_min = current_window_min
+    last_large_neg_flow_ts = None
+    last_large_neg_flow_window = None
 
     for idx, row in tqdm(df.iterrows(), total=len(df), desc=f"Flow fit {tank_label}"):
         if row["is_outlier"] or pd.isna(row["gallons"]):
@@ -176,8 +180,8 @@ def compute_flow(df: pd.DataFrame) -> pd.DataFrame:
         short_mask = (
             (~df["is_outlier"])
             & (~df["gallons"].isna())
-            & (df["timestamp"] >= ts - short_half_window)
-            & (df["timestamp"] <= ts + short_half_window)
+            & (df["timestamp"] >= ts - short_window)
+            & (df["timestamp"] <= ts)
         )
         short_df = df.loc[short_mask, ["timestamp", "gallons"]]
         short_flow = np.nan
@@ -210,13 +214,25 @@ def compute_flow(df: pd.DataFrame) -> pd.DataFrame:
         current_window_min = current_window_min + (target_window - current_window_min) * ADAPT_STEP
         current_window_min = max(current_window_min, 0.1)  # avoid zero/negative
 
-        # Compute flow using adaptive window.
-        half_window = pd.Timedelta(minutes=current_window_min / 2)
+        # Compute flow using trailing adaptive window, with guard against expanding past last large negative flow.
+        proposed_window_min = current_window_min
+        trailing_window_min = proposed_window_min
+        if (
+            last_large_neg_flow_ts is not None
+            and proposed_window_min > prev_window_min
+            and (ts - pd.Timedelta(minutes=proposed_window_min)) < last_large_neg_flow_ts
+        ):
+            delta_minutes = max(0.0, (ts - last_large_neg_flow_ts).total_seconds() / 60.0)
+            guard_window = last_large_neg_flow_window if last_large_neg_flow_window is not None else 0.0
+            max_allowed = max(guard_window, delta_minutes)
+            trailing_window_min = min(proposed_window_min, max_allowed)
+
+        trailing_window = pd.Timedelta(minutes=trailing_window_min)
         window_mask = (
             (~df["is_outlier"])
             & (~df["gallons"].isna())
-            & (df["timestamp"] >= ts - half_window)
-            & (df["timestamp"] <= ts + half_window)
+            & (df["timestamp"] >= ts - trailing_window)
+            & (df["timestamp"] <= ts)
         )
         window_df = df.loc[window_mask, ["timestamp", "gallons"]]
         if len(window_df) < 2:
@@ -229,7 +245,13 @@ def compute_flow(df: pd.DataFrame) -> pd.DataFrame:
             continue
         slope, _ = np.polyfit(hours, window_df["gallons"], 1)
         df.at[idx, "flow_gph"] = float(slope)
-        df.at[idx, "flow_window_min"] = current_window_min
+        df.at[idx, "flow_window_min"] = trailing_window_min
+
+        if slope < -LARGE_NEG_FLOW_GPH:
+            last_large_neg_flow_ts = ts
+            last_large_neg_flow_window = trailing_window_min
+
+        prev_window_min = trailing_window_min
 
     return df
 
@@ -243,9 +265,9 @@ def plot_tank(df: pd.DataFrame, tank_name: str) -> Optional[Path]:
 
     fig, axes = plt.subplots(4, 1, figsize=(14, 12), sharex=True)
 
-    axes[0].scatter(inliers["timestamp"], inliers["depth"], s=4, color="C0", label="depth (inlier)")
+    axes[0].scatter(inliers["timestamp"], inliers["depth"], s=4, alpha=0.5, color="C0", label="depth (inlier)")
     if not outliers.empty:
-        axes[0].scatter(outliers["timestamp"], outliers["depth"], s=4, color="C3", label="Hampel outlier")
+        axes[0].scatter(outliers["timestamp"], outliers["depth"], s=4, alpha=0.5, color="C3", label="Hampel outlier")
     axes[0].set_ylabel("Depth (in)")
     axes[0].legend()
     axes[0].grid(True, linestyle="--", alpha=0.6)
@@ -260,7 +282,7 @@ def plot_tank(df: pd.DataFrame, tank_name: str) -> Optional[Path]:
         inliers["flow_gph"],
         color="C2",
         linestyle="-",
-        label=f"flow ({FLOW_WINDOW_MINUTES} min fit)",
+        label=f"flow (adaptive trailing window, init {FLOW_WINDOW_MINUTES} min)",
     )
     axes[2].set_ylabel("Flow (gal/hr)")
     axes[2].legend()
@@ -271,7 +293,7 @@ def plot_tank(df: pd.DataFrame, tank_name: str) -> Optional[Path]:
         inliers["flow_gph"],
         color="C2",
         linestyle="-",
-        label=f"flow ({FLOW_WINDOW_MINUTES} min fit, clipped)",
+        label=f"flow (adaptive trailing window, init {FLOW_WINDOW_MINUTES} min, clipped)",
     )
     axes[3].set_ylabel("Flow (gal/hr)")
     axes[3].set_xlabel("Timestamp")
