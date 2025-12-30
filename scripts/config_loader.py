@@ -45,6 +45,7 @@ def read_env_file(name: str) -> Dict[str, str]:
             continue
         if "=" not in line:
             raise ValueError(f"Invalid line in {path} (line {line_num}): {raw_line!r}")
+        line = line.split('#', 1)[0].strip()
         key, value = line.split("=", 1)
         entries[key.strip()] = value.strip()
     return entries

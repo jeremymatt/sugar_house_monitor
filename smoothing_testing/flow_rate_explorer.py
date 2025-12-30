@@ -50,6 +50,7 @@ LARGE_NEG_FLOW_GPH = 100  # gph magnitude to freeze back-expansion until window 
 DATASET_DIR = Path(__file__).resolve().parent / "dataset"
 PLOT_DIR = Path(__file__).resolve().parent / "plots"
 OUTPUT_CSV_DIR = Path(__file__).resolve().parent
+EVAP_OUTPUT_CSV = OUTPUT_CSV_DIR / "evaporator_flow.csv"
 
 
 def _make_tank_converter(tank_name: str) -> TVF.TANK:
@@ -325,16 +326,120 @@ def process_tank(tank_name: str) -> Tuple[pd.DataFrame, Optional[Path], Path]:
     return df, plot_path, output_path
 
 
+def compute_evaporator_flow(
+    roadside_df: pd.DataFrame, brookside_df: pd.DataFrame
+) -> pd.DataFrame:
+    """Derive evaporator flow from roadside/brookside flows following described rules."""
+    events = []
+    for tank_name, df in (("roadside", roadside_df), ("brookside", brookside_df)):
+        cur = df[(~df["is_outlier"]) & (~df["flow_gph"].isna())][["timestamp", "flow_gph"]]
+        for _, row in cur.iterrows():
+            events.append((row["timestamp"], tank_name, float(row["flow_gph"])))
+
+    events.sort(key=lambda x: x[0])
+    last_flow = {"roadside": None, "brookside": None}
+    records = []
+
+    for ts, tank, flow in events:
+        other = "brookside" if tank == "roadside" else "roadside"
+        other_flow = last_flow[other]
+        if other_flow is None:
+            last_flow[tank] = flow
+            continue
+
+        road_flow = flow if tank == "roadside" else other_flow
+        brook_flow = flow if tank == "brookside" else other_flow
+
+        if flow >= 0 and other_flow >= 0:
+            records.append(
+                {
+                    "timestamp": ts,
+                    "roadside_flow_gph": road_flow,
+                    "brookside_flow_gph": brook_flow,
+                    "evaporator_flow_gph": 0.0,
+                }
+            )
+        elif flow < other_flow:
+            records.append(
+                {
+                    "timestamp": ts,
+                    "roadside_flow_gph": road_flow,
+                    "brookside_flow_gph": brook_flow,
+                    "evaporator_flow_gph": -flow,
+                }
+            )
+
+        last_flow[tank] = flow
+
+    if not records:
+        return pd.DataFrame(columns=["timestamp", "roadside_flow_gph", "brookside_flow_gph", "evaporator_flow_gph"])
+
+    evap_df = pd.DataFrame(records).sort_values("timestamp").reset_index(drop=True)
+    return evap_df
+
+
+def plot_evaporator_summary(
+    roadside_df: pd.DataFrame, brookside_df: pd.DataFrame, evap_df: pd.DataFrame
+) -> Optional[Path]:
+    if roadside_df.empty and brookside_df.empty:
+        return None
+
+    fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+
+    rd = roadside_df[(~roadside_df["is_outlier"]) & (~roadside_df["flow_gph"].isna())]
+    bk = brookside_df[(~brookside_df["is_outlier"]) & (~brookside_df["flow_gph"].isna())]
+
+    if not rd.empty:
+        axes[0].plot(rd["timestamp"], rd["flow_gph"], color="C0", linestyle="-", label="roadside flow")
+    axes[0].set_ylabel("Flow (gal/hr)")
+    axes[0].legend()
+    axes[0].grid(True, linestyle="--", alpha=0.6)
+
+    if not bk.empty:
+        axes[1].plot(bk["timestamp"], bk["flow_gph"], color="C1", linestyle="-", label="brookside flow")
+    axes[1].set_ylabel("Flow (gal/hr)")
+    axes[1].legend()
+    axes[1].grid(True, linestyle="--", alpha=0.6)
+
+    if not evap_df.empty:
+        axes[2].plot(evap_df["timestamp"], evap_df["evaporator_flow_gph"], color="C2", linestyle="-", label="evaporator flow")
+    axes[2].set_ylabel("Flow (gal/hr)")
+    axes[2].set_xlabel("Timestamp")
+    axes[2].legend()
+    axes[2].grid(True, linestyle="--", alpha=0.6)
+
+    fig.suptitle("Flow summary (roadside, brookside, evaporator)", fontsize=14)
+    fig.autofmt_xdate()
+    fig.tight_layout(rect=[0, 0.03, 1, 0.97])
+
+    PLOT_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = PLOT_DIR / "evaporator_flow_summary.png"
+    fig.savefig(out_path, bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    return out_path
+
+
 def main() -> None:
+    results = {}
     for tank_name in tqdm(TVF.tank_names, desc="Processing tanks"):
         df, plot_path, csv_path = process_tank(tank_name)
         if df.empty:
             print(f"[{tank_name}] No data found in {DATASET_DIR}")
             continue
+        results[tank_name] = df
         print(f"[{tank_name}] rows: {len(df)}")
         if plot_path:
             print(f"[{tank_name}] plot saved to {plot_path}")
         print(f"[{tank_name}] data saved to {csv_path}")
+
+    if all(name in results for name in TVF.tank_names):
+        evap_df = compute_evaporator_flow(results["roadside"], results["brookside"])
+        evap_df.to_csv(EVAP_OUTPUT_CSV, index=False)
+        evap_plot = plot_evaporator_summary(results["roadside"], results["brookside"], evap_df)
+        print(f"[evaporator] rows: {len(evap_df)}")
+        print(f"[evaporator] data saved to {EVAP_OUTPUT_CSV}")
+        if evap_plot:
+            print(f"[evaporator] plot saved to {evap_plot}")
 
 
 if __name__ == "__main__":

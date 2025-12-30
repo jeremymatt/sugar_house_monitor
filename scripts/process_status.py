@@ -211,6 +211,19 @@ def average_timestamp_iso(ts_a: Optional[str], ts_b: Optional[str]) -> Optional[
     return None
 
 
+def latest_timestamp_iso(ts_a: Optional[str], ts_b: Optional[str]) -> Optional[str]:
+    dt_a = parse_iso(ts_a)
+    dt_b = parse_iso(ts_b)
+    if dt_a and dt_b:
+        newer = dt_a if dt_a > dt_b else dt_b
+        return newer.astimezone(timezone.utc).isoformat()
+    if dt_a:
+        return dt_a.astimezone(timezone.utc).isoformat()
+    if dt_b:
+        return dt_b.astimezone(timezone.utc).isoformat()
+    return None
+
+
 def to_float(val: object) -> Optional[float]:
     if val is None:
         return None
@@ -218,6 +231,15 @@ def to_float(val: object) -> Optional[float]:
         return float(val)
     except (TypeError, ValueError):
         return None
+
+
+def _flows_match(a: object, b: object, tolerance: float = 1e-6) -> bool:
+    """Return True when two flow values are effectively equal."""
+    fa = to_float(a)
+    fb = to_float(b)
+    if fa is None or fb is None:
+        return False
+    return abs(fa - fb) <= tolerance
 
 
 def parse_retention_days(env: Dict[str, str]) -> Optional[float]:
@@ -348,6 +370,12 @@ def ensure_evap_tables(conn: sqlite3.Connection) -> None:
         )
         conn.execute(
             """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_evap_sample_timestamp
+            ON evaporator_flow(sample_timestamp)
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS plot_settings (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 y_axis_min REAL NOT NULL,
@@ -456,6 +484,17 @@ def compute_evaporator_flow(
     return total_flow
 
 
+def is_duplicate_evap(prev_row: Optional[sqlite3.Row], record: Dict[str, object]) -> bool:
+    """Avoid inserting identical evaporator rows repeatedly."""
+    if not prev_row:
+        return False
+    same_ts = prev_row["sample_timestamp"] == record.get("sample_timestamp")
+    same_draw = (prev_row["draw_off_tank"] or NO_TANK) == (record.get("draw_off_tank") or NO_TANK)
+    same_pump = (prev_row["pump_in_tank"] or NO_TANK) == (record.get("pump_in_tank") or NO_TANK)
+    same_flow = _flows_match(prev_row["evaporator_flow_gph"], record.get("evaporator_flow_gph"))
+    return same_ts and same_draw and same_pump and same_flow
+
+
 def build_evap_record(
     tank_rows: Dict[str, sqlite3.Row],
     pump_row: Optional[sqlite3.Row],
@@ -488,16 +527,22 @@ def build_evap_record(
     else:
         pump_in_flow = None
 
-    sample_ts = average_timestamp_iso(
+    sample_ts = latest_timestamp_iso(
         brook_row["source_timestamp"] if brook_row else None,
         road_row["source_timestamp"] if road_row else None,
     )
     if sample_ts is None:
         return None
+    prev_sample_ts = parse_iso(prev_row["sample_timestamp"]) if prev_row else None
+    current_ts_dt = parse_iso(sample_ts)
+    if prev_sample_ts and current_ts_dt and current_ts_dt <= prev_sample_ts:
+        return None
 
     evap_flow = compute_evaporator_flow(
         draw_off, pump_in, brook_flow, road_flow, pump_flow, emptying_threshold
     )
+    if evap_flow is None:
+        return None
 
     return {
         "sample_timestamp": sample_ts,
@@ -526,6 +571,16 @@ def insert_evap_record(conn: sqlite3.Connection, record: Dict[str, object]) -> N
                 :pump_in_flow_gph, :pump_flow_gph, :brookside_flow_gph, :roadside_flow_gph,
                 :evaporator_flow_gph, :created_at
             )
+            ON CONFLICT(sample_timestamp) DO UPDATE SET
+                draw_off_tank=excluded.draw_off_tank,
+                pump_in_tank=excluded.pump_in_tank,
+                draw_off_flow_gph=excluded.draw_off_flow_gph,
+                pump_in_flow_gph=excluded.pump_in_flow_gph,
+                pump_flow_gph=excluded.pump_flow_gph,
+                brookside_flow_gph=excluded.brookside_flow_gph,
+                roadside_flow_gph=excluded.roadside_flow_gph,
+                evaporator_flow_gph=excluded.evaporator_flow_gph,
+                created_at=excluded.created_at
             """,
             record,
         )
@@ -677,8 +732,9 @@ def main() -> None:
     evap_record = build_evap_record(tank_rows, pump_row, evap_prev, emptying_threshold)
     if evap_record:
         evap_flow = evap_record.get("evaporator_flow_gph")
-        if evap_flow is None or evap_flow > 0:
+        if evap_flow is not None and not is_duplicate_evap(evap_prev, evap_record):
             insert_evap_record(evap_conn, evap_record)
+            evap_prev = evap_record
         evap_payload = build_evap_status_payload(evap_record, timestamp, plot_settings)
         atomic_write(status_base / "status_evaporator.json", evap_payload)
     else:

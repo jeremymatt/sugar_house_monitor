@@ -885,6 +885,7 @@ class TankPiApp:
         self.pump_status_path = self.status_dir / "status_pump.json"
         self.vacuum_status_path = self.status_dir / "status_vacuum.json"
         self.measurement_params = self._build_measurement_params()
+        self.flow_settings = self._build_flow_settings()
         self.debug_clock: Optional[SyntheticClock] = None
         self.debug_records: Dict[str, List[TVF.DebugSample]] = {}
         self.tank_processes: Dict[str, Process] = {}
@@ -894,8 +895,11 @@ class TankPiApp:
         self.vacuum_thread: Optional[threading.Thread] = None
         self.http_server: Optional[ThreadingHTTPServer] = None
         self.stop_event = threading.Event()
-        self.last_tank_update: Dict[str, float] = {name: 0.0 for name in TVF.tank_names}
+        now_ts = time.time()
+        self.last_tank_update: Dict[str, float] = {name: now_ts for name in TVF.tank_names}
+        self._tank_health_grace_until: Dict[str, float] = {name: 0.0 for name in TVF.tank_names}
         self._last_measurement_params = None
+        self._last_flow_settings = None
         self._last_clock = None
         self._last_tank_records: Dict[str, List[TVF.DebugSample]] = {}
         self._last_error_seen: Dict[tuple, float] = {}
@@ -941,6 +945,73 @@ class TankPiApp:
             int(self.env.get("TANK_FILTER_WINDOW", "50")),
             float(self.env.get("TANK_FILTER_SIGMA", "0.25")),
             int(self.env.get("TANK_RATE_UPDATE_SECONDS", "15")),
+        )
+
+    def _build_flow_settings(self) -> TVF.FlowSettings:
+        defaults = TVF.FlowSettings()
+
+        def _cast(val, target_type, default):
+            try:
+                return target_type(val)
+            except Exception:
+                return default
+
+        # Hampel window/sigma fall back to the primary filter if dedicated flow vars are absent.
+        hampel_window_raw = self.env.get("TANK_HAMPEL_WINDOW")
+        filter_window_raw = self.env.get("TANK_FILTER_WINDOW")
+        hampel_window_size = defaults.hampel_window_size
+        if hampel_window_raw is not None and hampel_window_raw != "":
+            hampel_window_size = _cast(hampel_window_raw, int, defaults.hampel_window_size)
+        elif filter_window_raw:
+            hampel_window_size = _cast(filter_window_raw, int, defaults.hampel_window_size)
+
+        hampel_sigma_raw = self.env.get("TANK_HAMPEL_SIGMA")
+        filter_sigma_raw = self.env.get("TANK_FILTER_SIGMA")
+        hampel_n_sigma = defaults.hampel_n_sigma
+        if hampel_sigma_raw is not None and hampel_sigma_raw != "":
+            hampel_n_sigma = _cast(hampel_sigma_raw, float, defaults.hampel_n_sigma)
+        elif filter_sigma_raw:
+            hampel_n_sigma = _cast(filter_sigma_raw, float, defaults.hampel_n_sigma)
+
+        return TVF.FlowSettings(
+            flow_window_minutes=_cast(self.env.get("TANK_FLOW_WINDOW_MINUTES", defaults.flow_window_minutes), float, defaults.flow_window_minutes),
+            hampel_window_size=hampel_window_size,
+            hampel_n_sigma=hampel_n_sigma,
+            adapt_short_flow_window_min=_cast(
+                self.env.get("TANK_ADAPT_SHORT_FLOW_WINDOW_MIN", defaults.adapt_short_flow_window_min),
+                float,
+                defaults.adapt_short_flow_window_min,
+            ),
+            adapt_neg_window_min=_cast(
+                self.env.get("TANK_ADAPT_NEG_WINDOW_MIN", defaults.adapt_neg_window_min),
+                float,
+                defaults.adapt_neg_window_min,
+            ),
+            adapt_pos_max_window_min=_cast(
+                self.env.get("TANK_ADAPT_POS_MAX_WINDOW_MIN", defaults.adapt_pos_max_window_min),
+                float,
+                defaults.adapt_pos_max_window_min,
+            ),
+            adapt_window_update_delay=_cast(
+                self.env.get("TANK_ADAPT_WINDOW_UPDATE_DELAY", defaults.adapt_window_update_delay),
+                int,
+                defaults.adapt_window_update_delay,
+            ),
+            adapt_step=_cast(
+                self.env.get("TANK_ADAPT_STEP", defaults.adapt_step),
+                float,
+                defaults.adapt_step,
+            ),
+            low_flow_threshold=_cast(
+                self.env.get("TANK_LOW_FLOW_THRESHOLD", defaults.low_flow_threshold),
+                float,
+                defaults.low_flow_threshold,
+            ),
+            large_neg_flow_gph=_cast(
+                self.env.get("TANK_LARGE_NEG_FLOW_GPH", defaults.large_neg_flow_gph),
+                float,
+                defaults.large_neg_flow_gph,
+            ),
         )
 
     def _prepare_debug_inputs(self):
@@ -1087,12 +1158,37 @@ class TankPiApp:
         except Exception:
             return {}
 
+    def _stale_threshold_seconds(self) -> int:
+        return 30 if self.debug_enabled else 120
+
+    def _set_tank_health_grace(
+        self,
+        tank_name: str,
+        clock: Optional[SyntheticClock],
+        tank_records: Optional[Dict[str, List[TVF.DebugSample]]],
+    ) -> None:
+        """Prime health-check timers so we do not restart before data should arrive."""
+        self.last_tank_update[tank_name] = time.time()
+        grace_until = 0.0
+        if clock and tank_records:
+            records = tank_records.get(tank_name) or []
+            if records:
+                first_ts = min((rec.timestamp for rec in records if rec and rec.timestamp), default=None)
+                if first_ts:
+                    gap_seconds = (first_ts - clock.start_timestamp).total_seconds()
+                    if gap_seconds > 0:
+                        multiplier = getattr(clock, "multiplier", 1.0) or 1.0
+                        real_gap = gap_seconds / max(multiplier, 1e-6)
+                        grace_until = time.time() + real_gap + self._stale_threshold_seconds()
+        self._tank_health_grace_until[tank_name] = grace_until
+
     def _start_tank_controller(
         self,
         tank_name: str,
         measurement_params,
         clock: Optional[SyntheticClock],
         tank_records: Optional[List[TVF.DebugSample]],
+        flow_settings: Optional[TVF.FlowSettings] = None,
     ) -> Process:
         history_path = self.db.path
         debug_tank = str_to_bool(self.env.get("DEBUG_TANK"), False)
@@ -1109,6 +1205,7 @@ class TankPiApp:
                 target=TVF.run_tank_controller,
                 args=(tank_name, TVF.queue_dict, measurement_params),
                 kwargs={
+                    "flow_settings": flow_settings or self.flow_settings,
                     "clock": process_clock,
                     "debug_records": records,
                     "history_db_path": history_path,
@@ -1138,6 +1235,7 @@ class TankPiApp:
                     "source_timestamp": iso_now(),
                 },
             )
+        self.last_tank_update[tank_name] = time.time()
         return proc
 
     def _restart_tank_controller(self, tank_name: str) -> None:
@@ -1148,6 +1246,11 @@ class TankPiApp:
                 proc.join(timeout=1)
             except Exception:
                 pass
+        self._set_tank_health_grace(
+            tank_name,
+            self._last_clock,
+            self._last_tank_records,
+        )
         self._start_tank_controller(
             tank_name,
             self._last_measurement_params,
@@ -1159,8 +1262,11 @@ class TankPiApp:
         if not self._last_measurement_params:
             return
         now = time.time()
-        stale_seconds = 30 if self.debug_enabled else 120
+        stale_seconds = self._stale_threshold_seconds()
         for name in TVF.tank_names:
+            grace_until = self._tank_health_grace_until.get(name, 0.0)
+            if grace_until and now < grace_until:
+                continue
             last_ts = self.last_tank_update.get(name, 0)
             proc = self.tank_processes.get(name)
             if proc and proc.is_alive():
@@ -1195,16 +1301,24 @@ class TankPiApp:
         measurement_params,
         clock: Optional[SyntheticClock],
         tank_records: Dict[str, List[TVF.DebugSample]],
+        flow_settings: Optional[TVF.FlowSettings],
     ) -> None:
         self._last_measurement_params = measurement_params
+        self._last_flow_settings = flow_settings
         self._last_clock = clock
         self._last_tank_records = tank_records or {}
         for tank_name in TVF.tank_names:
+            self._set_tank_health_grace(
+                tank_name,
+                clock,
+                tank_records,
+            )
             self._start_tank_controller(
                 tank_name,
                 measurement_params,
                 clock,
                 tank_records.get(tank_name) if tank_records else None,
+                flow_settings=flow_settings,
             )
 
     def _start_lcd_process(self) -> None:
@@ -1242,6 +1356,7 @@ class TankPiApp:
                     if payload:
                         self.handle_tank_measurement(payload, payload.get("source_timestamp"))
                         self.last_tank_update[name] = time.time()
+                        self._tank_health_grace_until[name] = 0.0
                         processed = True
                 if error_queues.get(name):
                     while True:
@@ -1489,7 +1604,7 @@ class TankPiApp:
             ):
                 LOGGER.error("Debug mode enabled but no CSV data was loaded.")
 
-        self._start_tank_processes(self.measurement_params, clock, tank_records)
+        self._start_tank_processes(self.measurement_params, clock, tank_records, self.flow_settings)
         self.debug_clock = clock
         self.debug_records = tank_records
         self._start_lcd_process()
