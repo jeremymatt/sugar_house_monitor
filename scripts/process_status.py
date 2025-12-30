@@ -242,6 +242,15 @@ def _flows_match(a: object, b: object, tolerance: float = 1e-6) -> bool:
     return abs(fa - fb) <= tolerance
 
 
+def _flows_close(a: object, b: object, tolerance: float = 1e-3) -> bool:
+    """True if both flows are finite and within tolerance."""
+    fa = to_float(a)
+    fb = to_float(b)
+    if fa is None or fb is None:
+        return False
+    return abs(fa - fb) <= tolerance
+
+
 def parse_retention_days(env: Dict[str, str]) -> Optional[float]:
     return to_float(env.get("DB_RETENTION_DAYS"))
 
@@ -488,11 +497,12 @@ def is_duplicate_evap(prev_row: Optional[sqlite3.Row], record: Dict[str, object]
     """Avoid inserting identical evaporator rows repeatedly."""
     if not prev_row:
         return False
-    same_ts = prev_row["sample_timestamp"] == record.get("sample_timestamp")
     same_draw = (prev_row["draw_off_tank"] or NO_TANK) == (record.get("draw_off_tank") or NO_TANK)
     same_pump = (prev_row["pump_in_tank"] or NO_TANK) == (record.get("pump_in_tank") or NO_TANK)
-    same_flow = _flows_match(prev_row["evaporator_flow_gph"], record.get("evaporator_flow_gph"))
-    return same_ts and same_draw and same_pump and same_flow
+    same_evap = _flows_close(prev_row["evaporator_flow_gph"], record.get("evaporator_flow_gph"))
+    same_draw_flow = _flows_close(prev_row["draw_off_flow_gph"], record.get("draw_off_flow_gph"))
+    same_pump_flow = _flows_close(prev_row["pump_in_flow_gph"], record.get("pump_in_flow_gph"))
+    return same_draw and same_pump and same_evap and same_draw_flow and same_pump_flow
 
 
 def build_evap_record(
@@ -543,8 +553,7 @@ def build_evap_record(
     )
     if evap_flow is None:
         return None
-
-    return {
+    record = {
         "sample_timestamp": sample_ts,
         "draw_off_tank": draw_off,
         "pump_in_tank": pump_in,
@@ -556,6 +565,9 @@ def build_evap_record(
         "evaporator_flow_gph": evap_flow,
         "created_at": iso_now(),
     }
+    if is_duplicate_evap(prev_row, record):
+        return None
+    return record
 
 
 def insert_evap_record(conn: sqlite3.Connection, record: Dict[str, object]) -> None:
@@ -731,15 +743,15 @@ def main() -> None:
     evap_prev = latest_evap_row(evap_conn)
     evap_record = build_evap_record(tank_rows, pump_row, evap_prev, emptying_threshold)
     if evap_record:
-        evap_flow = evap_record.get("evaporator_flow_gph")
-        if evap_flow is not None and not is_duplicate_evap(evap_prev, evap_record):
-            insert_evap_record(evap_conn, evap_record)
-            evap_prev = evap_record
+        insert_evap_record(evap_conn, evap_record)
+        evap_prev = evap_record
         evap_payload = build_evap_status_payload(evap_record, timestamp, plot_settings)
-        atomic_write(status_base / "status_evaporator.json", evap_payload)
+    elif evap_prev:
+        # No change worth recording; reuse previous row for status freshness.
+        evap_payload = build_evap_status_payload(dict(evap_prev), timestamp, plot_settings)
     else:
         # Ensure a placeholder exists so clients don't 404 while waiting for data.
-        placeholder = build_evap_status_payload(
+        evap_payload = build_evap_status_payload(
             {
                 "sample_timestamp": None,
                 "draw_off_tank": "---",
@@ -754,7 +766,7 @@ def main() -> None:
             timestamp,
             plot_settings,
         )
-        atomic_write(status_base / "status_evaporator.json", placeholder)
+    atomic_write(status_base / "status_evaporator.json", evap_payload)
 
     monitor_payload = {
         "generated_at": timestamp,
