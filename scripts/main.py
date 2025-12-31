@@ -632,6 +632,7 @@ class UploadWorker:
                 "source_timestamp": row["source_timestamp"],
                 "surf_dist": row["surf_dist"],
                 "depth": row["depth"],
+                "depth_outlier": row["depth_outlier"],
                 "volume_gal": row["volume_gal"],
                 "max_volume_gal": row["max_volume_gal"],
                 "level_percent": row["level_percent"],
