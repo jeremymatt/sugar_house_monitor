@@ -33,13 +33,15 @@ function dt_parts(string $iso): array {
     ];
 }
 
-function table_has_column(SQLite3 $conn, string $table, string $column): bool {
-    $stmt = $conn->prepare('PRAGMA table_info(' . $table . ')');
-    $res = $stmt->execute();
-    if ($res === false) {
+function table_has_column(PDO $conn, string $table, string $column): bool {
+    // Best-effort sanitation of table name since PRAGMA can't use bound params.
+    $table_safe = preg_replace('/[^A-Za-z0-9_]/', '', $table);
+    $stmt = $conn->query('PRAGMA table_info(' . $table_safe . ')');
+    if ($stmt === false) {
         return false;
     }
-    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as $row) {
         if (isset($row['name']) && strtolower($row['name']) === strtolower($column)) {
             return true;
         }
