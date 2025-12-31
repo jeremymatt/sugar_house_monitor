@@ -33,11 +33,33 @@ function dt_parts(string $iso): array {
     ];
 }
 
+function table_has_column(SQLite3 $conn, string $table, string $column): bool {
+    $stmt = $conn->prepare('PRAGMA table_info(' . $table . ')');
+    $res = $stmt->execute();
+    if ($res === false) {
+        return false;
+    }
+    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+        if (isset($row['name']) && strtolower($row['name']) === strtolower($column)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 if ($type === 'brookside' || $type === 'roadside') {
     $tankId = $type;
     $conn = connect_sqlite($tankDbPath);
+    $hasOutlier = table_has_column($conn, 'tank_readings', 'depth_outlier');
+    $selectCols = 'source_timestamp, surf_dist, depth';
+    if ($hasOutlier) {
+        $selectCols .= ', depth_outlier';
+    } else {
+        $selectCols .= ', NULL AS depth_outlier';
+    }
+    $selectCols .= ', volume_gal, flow_gph';
     $stmt = $conn->prepare(
-        'SELECT source_timestamp, surf_dist, depth, depth_outlier, volume_gal, flow_gph
+        'SELECT ' . $selectCols . '
          FROM tank_readings
          WHERE tank_id = :tank
          ORDER BY source_timestamp'
