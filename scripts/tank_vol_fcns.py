@@ -684,6 +684,7 @@ class TANK:
         self.time_to_full_min = None
         self.time_to_empty_min = None
         self.last_flow_window_min = None
+        self.last_depth_outlier = None
         self._last_error_message = None
         self._last_error_at = None
 
@@ -864,14 +865,6 @@ class TANK:
             self.next_rate_update = now + self.rate_update_dt
             min_points = max(5, int(self.flow_settings.hampel_window_size / 2) + 1)
 
-            if len(self.history_df) < min_points:
-                self.filling = False
-                self.emptying = False
-                self.remaining_time = None
-                self.tank_rate = None
-                self.last_flow_window_min = None
-                return
-
             depth_filtered, outliers = apply_hampel_depth(
                 self.history_df["depth"],
                 window_size=self.flow_settings.hampel_window_size,
@@ -879,21 +872,36 @@ class TANK:
             )
             self.history_df["depth_hampel"] = depth_filtered
             self.history_df["depth_outlier"] = outliers
+            self.last_depth_outlier = bool(outliers.iloc[-1]) if len(outliers) > 0 else None
 
-            gallons_filtered = depth_filtered.apply(lambda d: depth_to_gallons(self.name, d))
-            self.history_df["gal_filter"] = gallons_filtered
+            if len(self.history_df) < min_points:
+                last_idx = self.history_df.index[-1]
+                self.history_df.loc[last_idx, "flow_gph"] = np.nan
+                self.history_df.loc[last_idx, "flow_window_min"] = np.nan
+                self.filling = False
+                self.emptying = False
+                self.remaining_time = None
+                self.tank_rate = None
+                self.last_flow_window_min = None
+                return
+
+            gallons_for_flow = self.history_df["depth"].apply(lambda d: depth_to_gallons(self.name, d))
+            self.history_df["gal_filter"] = gallons_for_flow
 
             flows, windows_used = compute_adaptive_trailing_flow(
                 self.history_df["datetime"],
-                gallons_filtered,
+                gallons_for_flow,
                 outliers,
                 self.flow_settings,
             )
             self.history_df["flow_gph"] = flows
             self.history_df["flow_window_min"] = windows_used
 
-            valid_flows = flows.dropna()
-            if valid_flows.empty:
+            last_idx = self.history_df.index[-1]
+            last_flow = flows.loc[last_idx]
+            last_window = windows_used.loc[last_idx]
+
+            if pd.isna(last_flow):
                 self.tank_rate = None
                 self.filling = False
                 self.emptying = False
@@ -901,12 +909,8 @@ class TANK:
                 self.last_flow_window_min = None
                 return
 
-            last_idx = valid_flows.index[-1]
-            last_flow = float(valid_flows.iloc[-1])
-            last_window = float(windows_used.loc[last_idx] if pd.notna(windows_used.loc[last_idx]) else self.flow_settings.flow_window_minutes)
-
-            self.tank_rate = float(np.round(last_flow, 1))
-            self.last_flow_window_min = last_window
+            self.tank_rate = float(np.round(float(last_flow), 1))
+            self.last_flow_window_min = float(last_window) if pd.notna(last_window) else None
             self.filling = self.tank_rate > 5
             self.emptying = self.tank_rate < -5
 
@@ -1003,6 +1007,7 @@ class TANK:
             "source_timestamp": ensure_utc(measurement_time).isoformat(),
             "surf_dist": self.dist_to_surf,
             "depth": self.depth,
+            "depth_outlier": self.last_depth_outlier,
             "volume_gal": self.current_gallons,
             "flow_gph": self.tank_rate,
             "eta_full": self.eta_full,

@@ -128,6 +128,7 @@ class TankDatabase:
                     source_timestamp TEXT NOT NULL,
                     surf_dist REAL,
                     depth REAL,
+                    depth_outlier INTEGER,
                     volume_gal REAL,
                     max_volume_gal REAL,
                     level_percent REAL,
@@ -145,6 +146,7 @@ class TankDatabase:
             )
             self._ensure_column("tank_readings", "max_volume_gal", "REAL")
             self._ensure_column("tank_readings", "level_percent", "REAL")
+            self._ensure_column("tank_readings", "depth_outlier", "INTEGER")
             self.conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS pump_events (
@@ -209,6 +211,7 @@ class TankDatabase:
             "source_timestamp": record["source_timestamp"],
             "surf_dist": float_or_none(record.get("surf_dist")),
             "depth": float_or_none(record.get("depth")),
+            "depth_outlier": 1 if record.get("depth_outlier") else 0 if record.get("depth_outlier") is False else None,
             "volume_gal": float_or_none(record.get("volume_gal")),
              "max_volume_gal": float_or_none(record.get("max_volume_gal")),
              "level_percent": float_or_none(record.get("level_percent")),
@@ -223,11 +226,11 @@ class TankDatabase:
             self.conn.execute(
                 """
                 INSERT OR IGNORE INTO tank_readings (
-                    tank_id, source_timestamp, surf_dist, depth, volume_gal, max_volume_gal,
+                    tank_id, source_timestamp, surf_dist, depth, depth_outlier, volume_gal, max_volume_gal,
                     level_percent, flow_gph, eta_full, eta_empty, time_to_full_min,
                     time_to_empty_min, received_at
                 ) VALUES (
-                    :tank_id, :source_timestamp, :surf_dist, :depth, :volume_gal,
+                    :tank_id, :source_timestamp, :surf_dist, :depth, :depth_outlier, :volume_gal,
                     :max_volume_gal, :level_percent, :flow_gph, :eta_full, :eta_empty,
                     :time_to_full_min, :time_to_empty_min, :received_at
                 )

@@ -140,6 +140,32 @@ def get_latest_stack_temp_row(conn: sqlite3.Connection) -> Optional[sqlite3.Row]
     return cur.fetchone()
 
 
+def list_all_tank_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    if not table_exists(conn, "tank_readings"):
+        return []
+    cur = conn.execute(
+        """
+        SELECT *
+        FROM tank_readings
+        ORDER BY source_timestamp
+        """
+    )
+    return cur.fetchall()
+
+
+def list_all_pump_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    if not table_exists(conn, "pump_events"):
+        return []
+    cur = conn.execute(
+        """
+        SELECT *
+        FROM pump_events
+        ORDER BY source_timestamp
+        """
+    )
+    return cur.fetchall()
+
+
 def get_latest_monitor_ts(conn: sqlite3.Connection, stream: str) -> Optional[str]:
     if not table_exists(conn, "monitor_heartbeats"):
         return None
@@ -231,6 +257,21 @@ def to_float(val: object) -> Optional[float]:
         return float(val)
     except (TypeError, ValueError):
         return None
+
+
+def row_flow_value(row: Optional[sqlite3.Row]) -> Optional[float]:
+    if row is None:
+        return None
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    outlier_flag = None
+    if "depth_outlier" in keys:
+        try:
+            outlier_flag = row["depth_outlier"]
+        except Exception:
+            outlier_flag = None
+    if outlier_flag:
+        return None
+    return to_float(row["flow_gph"]) if "flow_gph" in keys else None
 
 
 def _flows_match(a: object, b: object, tolerance: float = 1e-6) -> bool:
@@ -505,6 +546,145 @@ def is_duplicate_evap(prev_row: Optional[sqlite3.Row], record: Dict[str, object]
     return same_draw and same_pump and same_evap and same_draw_flow and same_pump_flow
 
 
+def build_evap_record_from_state(
+    tank_state: Dict[str, Optional[sqlite3.Row]],
+    pump_row: Optional[sqlite3.Row],
+    draw_off_prev: str,
+    pump_in_prev: str,
+    emptying_threshold: float,
+    sample_dt: datetime,
+) -> Optional[Dict[str, object]]:
+    brook_row = tank_state.get("brookside")
+    road_row = tank_state.get("roadside")
+    brook_flow = row_flow_value(brook_row)
+    road_flow = row_flow_value(road_row)
+    pump_flow = to_float(pump_row["gallons_per_hour"]) if pump_row else None
+
+    if brook_flow is None and road_flow is None:
+        return None
+
+    draw_off = pick_draw_off(brook_flow, road_flow, draw_off_prev, emptying_threshold)
+    other_flow = None
+    if draw_off == "brookside":
+        other_flow = road_flow
+    elif draw_off == "roadside":
+        other_flow = brook_flow
+    pump_in = pick_pump_in(draw_off, pump_flow, other_flow, pump_in_prev)
+
+    draw_off_flow = brook_flow if draw_off == "brookside" else road_flow if draw_off == "roadside" else None
+    if pump_in == draw_off:
+        pump_in_flow = draw_off_flow
+    elif pump_in == "brookside":
+        pump_in_flow = brook_flow
+    elif pump_in == "roadside":
+        pump_in_flow = road_flow
+    else:
+        pump_in_flow = None
+
+    evap_flow = compute_evaporator_flow(draw_off, pump_in, brook_flow, road_flow, pump_flow, emptying_threshold)
+    if evap_flow is None:
+        return None
+
+    return {
+        "sample_timestamp": sample_dt.astimezone(timezone.utc).isoformat(),
+        "draw_off_tank": draw_off,
+        "pump_in_tank": pump_in,
+        "draw_off_flow_gph": draw_off_flow,
+        "pump_in_flow_gph": pump_in_flow,
+        "pump_flow_gph": pump_flow,
+        "brookside_flow_gph": brook_flow,
+        "roadside_flow_gph": road_flow,
+        "evaporator_flow_gph": evap_flow,
+        "created_at": iso_now(),
+    }
+
+
+def compute_evap_time_series(
+    tank_rows: list[sqlite3.Row],
+    pump_rows: list[sqlite3.Row],
+    emptying_threshold: float,
+) -> list[Dict[str, object]]:
+    if not tank_rows:
+        return []
+
+    # Sort defensively in case caller did not.
+    tank_rows_sorted = sorted(
+        [row for row in tank_rows if parse_iso(row["source_timestamp"])],
+        key=lambda r: parse_iso(r["source_timestamp"]),
+    )
+    pump_rows_sorted = sorted(
+        [row for row in pump_rows if parse_iso(row["source_timestamp"])],
+        key=lambda r: parse_iso(r["source_timestamp"]),
+    )
+
+    tank_state: Dict[str, Optional[sqlite3.Row]] = {"brookside": None, "roadside": None}
+    records: list[Dict[str, object]] = []
+    pump_idx = 0
+    pump_state: Optional[sqlite3.Row] = None
+    draw_off_prev = NO_TANK
+    pump_in_prev = NO_TANK
+
+    for row in tank_rows_sorted:
+        ts = parse_iso(row["source_timestamp"])
+        if ts is None:
+            continue
+
+        # Advance pump state to the latest event at or before this tank timestamp.
+        while pump_idx < len(pump_rows_sorted):
+            pump_ts = parse_iso(pump_rows_sorted[pump_idx]["source_timestamp"])
+            if pump_ts is None:
+                pump_idx += 1
+                continue
+            if pump_ts <= ts:
+                pump_state = pump_rows_sorted[pump_idx]
+                pump_idx += 1
+                continue
+            break
+
+        tank_id = row["tank_id"]
+        if tank_id not in tank_state:
+            continue
+
+        flow_val = row_flow_value(row)
+        tank_state[tank_id] = row if flow_val is not None else None
+
+        record = build_evap_record_from_state(
+            tank_state,
+            pump_state,
+            draw_off_prev,
+            pump_in_prev,
+            emptying_threshold,
+            ts,
+        )
+        if record:
+            draw_off_prev = record["draw_off_tank"] or NO_TANK
+            pump_in_prev = record["pump_in_tank"] or NO_TANK
+            records.append(record)
+
+    return records
+
+
+def replace_evap_flow(evap_conn: sqlite3.Connection, records: list[Dict[str, object]]) -> None:
+    with evap_conn:
+        evap_conn.execute("DELETE FROM evaporator_flow")
+        if not records:
+            return
+        evap_conn.executemany(
+            """
+            INSERT INTO evaporator_flow (
+                sample_timestamp, draw_off_tank, pump_in_tank, draw_off_flow_gph,
+                pump_in_flow_gph, pump_flow_gph, brookside_flow_gph, roadside_flow_gph,
+                evaporator_flow_gph, created_at
+            ) VALUES (
+                :sample_timestamp, :draw_off_tank, :pump_in_tank, :draw_off_flow_gph,
+                :pump_in_flow_gph, :pump_flow_gph, :brookside_flow_gph, :roadside_flow_gph,
+                :evaporator_flow_gph, :created_at
+            )
+            """,
+            records,
+        )
+
+
 def build_evap_record(
     tank_rows: Dict[str, sqlite3.Row],
     pump_row: Optional[sqlite3.Row],
@@ -649,6 +829,10 @@ def main() -> None:
     ensure_evap_tables(evap_conn)
     prune_server_databases(env, tank_conn, pump_conn, vacuum_conn, stack_conn, evap_conn)
     plot_settings = load_plot_settings(evap_conn)
+    tank_rows_all = list_all_tank_rows(tank_conn)
+    pump_rows_all = list_all_pump_rows(pump_conn)
+    evap_time_series = compute_evap_time_series(tank_rows_all, pump_rows_all, emptying_threshold)
+    replace_evap_flow(evap_conn, evap_time_series)
 
     status_base = repo_path_from_config(env["STATUS_JSON_PATH"]).parent
 
@@ -741,13 +925,7 @@ def main() -> None:
             atomic_write(stack_path, stack_payload)
 
     evap_prev = latest_evap_row(evap_conn)
-    evap_record = build_evap_record(tank_rows, pump_row, evap_prev, emptying_threshold)
-    if evap_record:
-        insert_evap_record(evap_conn, evap_record)
-        evap_prev = evap_record
-        evap_payload = build_evap_status_payload(evap_record, timestamp, plot_settings)
-    elif evap_prev:
-        # No change worth recording; reuse previous row for status freshness.
+    if evap_prev:
         evap_payload = build_evap_status_payload(dict(evap_prev), timestamp, plot_settings)
     else:
         # Ensure a placeholder exists so clients don't 404 while waiting for data.
