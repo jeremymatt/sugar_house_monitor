@@ -821,6 +821,7 @@ class TANK:
         self.get_gal_in_tank()
         self._append_history(measurement_time)
         self._prune_history_if_needed(measurement_time)
+        self._update_depth_outliers()
         self.get_tank_rate(measurement_time)
         payload = self._build_payload(measurement_time)
         self.status_writer.write(payload)
@@ -859,20 +860,27 @@ class TANK:
         self.mins_back = max([5, self.mins_back])
         self.mins_back = min([240, self.mins_back])
 
+    def _update_depth_outliers(self):
+        if self.history_df.empty:
+            self.last_depth_outlier = None
+            return None, pd.Series(dtype=bool)
+        depth_filtered, outliers = apply_hampel_depth(
+            self.history_df["depth"],
+            window_size=self.flow_settings.hampel_window_size,
+            n_sigma=self.flow_settings.hampel_n_sigma,
+        )
+        self.history_df["depth_hampel"] = depth_filtered
+        self.history_df["depth_outlier"] = outliers
+        self.last_depth_outlier = bool(outliers.iloc[-1]) if len(outliers) > 0 else None
+        return depth_filtered, outliers
+
     def get_tank_rate(self, current_time=None):
         now = ensure_utc(current_time or self._now())
         if now > self.next_rate_update:
             self.next_rate_update = now + self.rate_update_dt
             min_points = max(5, int(self.flow_settings.hampel_window_size / 2) + 1)
 
-            depth_filtered, outliers = apply_hampel_depth(
-                self.history_df["depth"],
-                window_size=self.flow_settings.hampel_window_size,
-                n_sigma=self.flow_settings.hampel_n_sigma,
-            )
-            self.history_df["depth_hampel"] = depth_filtered
-            self.history_df["depth_outlier"] = outliers
-            self.last_depth_outlier = bool(outliers.iloc[-1]) if len(outliers) > 0 else None
+            depth_filtered, outliers = self._update_depth_outliers()
 
             if len(self.history_df) < min_points:
                 last_idx = self.history_df.index[-1]
