@@ -32,6 +32,7 @@ $db->exec(
         source_timestamp TEXT NOT NULL,
         surf_dist REAL,
         depth REAL,
+        depth_outlier INTEGER,
         volume_gal REAL,
         max_volume_gal REAL,
         level_percent REAL,
@@ -47,20 +48,22 @@ $db->exec(
 );
 ensure_column($db, 'tank_readings', 'max_volume_gal', 'REAL');
 ensure_column($db, 'tank_readings', 'level_percent', 'REAL');
+ensure_column($db, 'tank_readings', 'depth_outlier', 'INTEGER');
 
 $insert = $db->prepare(
     'INSERT INTO tank_readings (
-        tank_id, source_timestamp, surf_dist, depth, volume_gal, max_volume_gal,
+        tank_id, source_timestamp, surf_dist, depth, depth_outlier, volume_gal, max_volume_gal,
         level_percent, flow_gph, eta_full, eta_empty, time_to_full_min,
         time_to_empty_min, raw_payload, received_at
     ) VALUES (
-        :tank_id, :source_timestamp, :surf_dist, :depth, :volume_gal, :max_volume_gal,
+        :tank_id, :source_timestamp, :surf_dist, :depth, :depth_outlier, :volume_gal, :max_volume_gal,
         :level_percent, :flow_gph, :eta_full, :eta_empty, :time_to_full_min,
         :time_to_empty_min, :raw_payload, :received_at
     )
     ON CONFLICT(tank_id, source_timestamp) DO UPDATE SET
         surf_dist=excluded.surf_dist,
         depth=excluded.depth,
+        depth_outlier=excluded.depth_outlier,
         volume_gal=excluded.volume_gal,
         max_volume_gal=excluded.max_volume_gal,
         level_percent=excluded.level_percent,
@@ -91,6 +94,7 @@ foreach ($records as $record) {
         ':source_timestamp' => $timestamp,
         ':surf_dist' => $record['surf_dist'] ?? null,
         ':depth' => $record['depth'] ?? null,
+        ':depth_outlier' => array_key_exists('depth_outlier', $record) ? $record['depth_outlier'] : null,
         ':volume_gal' => $record['volume_gal'] ?? $record['volume'] ?? null,
         ':max_volume_gal' => $record['max_volume_gal'] ?? null,
         ':level_percent' => $record['level_percent'] ?? null,
