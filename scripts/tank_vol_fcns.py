@@ -990,9 +990,14 @@ class TANK:
     def _prune_history_if_needed(self, now):
         if now < self.next_prune_time:
             return
+        before_len = len(self.history_df)
         cutoff = now - dt.timedelta(hours=self.history_hours)
         self.history_df = self.history_df[self.history_df["datetime"] >= cutoff]
         self.history_df.reset_index(drop=True, inplace=True)
+        after_len = len(self.history_df)
+        if before_len != after_len and self._last_finalized_center_idx >= 0:
+            dropped = before_len - after_len
+            self._last_finalized_center_idx = max(-1, self._last_finalized_center_idx - dropped)
         self.next_prune_time = now + HISTORY_PRUNE_INTERVAL
 
     def update_mins_back(self, mins_back):
