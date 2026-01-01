@@ -799,7 +799,12 @@ class TANK:
         gallons_series = up_to_center["depth"].apply(
             lambda d: depth_to_gallons(self.name, d) if d is not None and not pd.isna(d) else np.nan
         )
-        outlier_series = up_to_center["depth_outlier"].fillna(False).astype(bool)
+        outlier_series = (
+            up_to_center["depth_outlier"]
+            .astype("boolean")
+            .fillna(False)
+            .astype(bool, copy=False)
+        )
         flows, windows_used = compute_adaptive_trailing_flow(
             up_to_center["datetime"],
             gallons_series,

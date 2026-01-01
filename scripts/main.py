@@ -206,53 +206,72 @@ class TankDatabase:
     def insert_tank_reading(
         self, record: Dict[str, object], received_at: Optional[str] = None
     ) -> None:
-        payload = {
-            "tank_id": record["tank_id"],
-            "source_timestamp": record["source_timestamp"],
-            "surf_dist": float_or_none(record.get("surf_dist")),
-            "depth": float_or_none(record.get("depth")),
-            "depth_outlier": 1 if record.get("depth_outlier") else 0 if record.get("depth_outlier") is False else None,
-            "volume_gal": float_or_none(record.get("volume_gal")),
-             "max_volume_gal": float_or_none(record.get("max_volume_gal")),
-             "level_percent": float_or_none(record.get("level_percent")),
-            "flow_gph": float_or_none(record.get("flow_gph")),
-            "eta_full": record.get("eta_full"),
-            "eta_empty": record.get("eta_empty"),
-            "time_to_full_min": float_or_none(record.get("time_to_full_min")),
-            "time_to_empty_min": float_or_none(record.get("time_to_empty_min")),
-            "received_at": received_at or iso_now(),
-        }
+        depth_outlier_val = record.get("depth_outlier")
+        if depth_outlier_val is True:
+            depth_outlier_val = 1
+        elif depth_outlier_val is False:
+            depth_outlier_val = 0
+        else:
+            depth_outlier_val = None
+
+        columns = [
+            "tank_id",
+            "source_timestamp",
+            "surf_dist",
+            "depth",
+            "depth_outlier",
+            "volume_gal",
+            "max_volume_gal",
+            "level_percent",
+            "flow_gph",
+            "eta_full",
+            "eta_empty",
+            "time_to_full_min",
+            "time_to_empty_min",
+            "received_at",
+        ]
+        values = [
+            record["tank_id"],
+            record["source_timestamp"],
+            float_or_none(record.get("surf_dist")),
+            float_or_none(record.get("depth")),
+            depth_outlier_val,
+            float_or_none(record.get("volume_gal")),
+            float_or_none(record.get("max_volume_gal")),
+            float_or_none(record.get("level_percent")),
+            float_or_none(record.get("flow_gph")),
+            record.get("eta_full"),
+            record.get("eta_empty"),
+            float_or_none(record.get("time_to_full_min")),
+            float_or_none(record.get("time_to_empty_min")),
+            received_at or iso_now(),
+        ]
+        placeholders = ", ".join("?" for _ in columns)
+        column_list = ", ".join(columns)
+        update_clause = """
+            surf_dist=excluded.surf_dist,
+            depth=excluded.depth,
+            depth_outlier=excluded.depth_outlier,
+            volume_gal=excluded.volume_gal,
+            max_volume_gal=excluded.max_volume_gal,
+            level_percent=excluded.level_percent,
+            flow_gph=excluded.flow_gph,
+            eta_full=excluded.eta_full,
+            eta_empty=excluded.eta_empty,
+            time_to_full_min=excluded.time_to_full_min,
+            time_to_empty_min=excluded.time_to_empty_min,
+            received_at=excluded.received_at,
+            sent_to_server=0,
+            acked_by_server=0
+        """
+        sql = f"""
+            INSERT INTO tank_readings ({column_list})
+            VALUES ({placeholders})
+            ON CONFLICT(tank_id, source_timestamp) DO UPDATE SET
+            {update_clause}
+        """
         with self.lock, self.conn:
-            self.conn.execute(
-                """
-                INSERT INTO tank_readings (
-                    tank_id, source_timestamp, surf_dist, depth, depth_outlier, volume_gal, max_volume_gal,
-                    level_percent, flow_gph, eta_full, eta_empty, time_to_full_min,
-                    time_to_empty_min, received_at
-                ) VALUES (
-                    :tank_id, :source_timestamp, :surf_dist, :depth, :depth_outlier, :volume_gal,
-                    :max_volume_gal, :level_percent, :flow_gph, :eta_full, :eta_empty,
-                    :time_to_full_min, :time_to_empty_min, :received_at
-                )
-                ON CONFLICT(tank_id, source_timestamp) DO UPDATE SET
-                    surf_dist=excluded.surf_dist,
-                    depth=excluded.depth,
-                    depth_outlier=excluded.depth_outlier,
-                    volume_gal=excluded.volume_gal,
-                    max_volume_gal=excluded.max_volume_gal,
-                    level_percent=excluded.level_percent,
-                    flow_gph=excluded.flow_gph,
-                    eta_full=excluded.eta_full,
-                    eta_empty=excluded.eta_empty,
-                    time_to_full_min=excluded.time_to_full_min,
-                    time_to_empty_min=excluded.time_to_empty_min,
-                    received_at=excluded.received_at,
-                    sent_to_server=0,
-                    acked_by_server=0
-                )
-                """,
-                payload,
-            )
+            self.conn.execute(sql, values)
 
     def insert_pump_event(
         self, record: Dict[str, object], received_at: Optional[str] = None
