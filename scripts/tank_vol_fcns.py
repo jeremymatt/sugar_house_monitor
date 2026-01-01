@@ -244,9 +244,14 @@ def apply_hampel_depth(depth_series: pd.Series, window_size: int, n_sigma: float
     window = max(3, min(int(window_size), len(depth_numeric)))
     res = hampel(depth_numeric.to_numpy(), window_size=window, n_sigma=float(n_sigma))
     filtered = pd.Series(res.filtered_data, index=depth_numeric.index)
-    outliers = pd.Series(False, index=depth_numeric.index)
-    if getattr(res, "outlier_indices", None) is not None:
-        outliers.iloc[res.outlier_indices] = True
+    outliers = pd.Series(False, index=depth_numeric.index, dtype=bool)
+    indices = getattr(res, "outlier_indices", None)
+    if indices is not None:
+        outliers.iloc[indices] = True
+    else:
+        # Fallback: mark rows where Hampel replaced the value.
+        diff_mask = ~(np.isclose(filtered, depth_numeric, equal_nan=True))
+        outliers.loc[diff_mask] = True
     return filtered, outliers
 
 
