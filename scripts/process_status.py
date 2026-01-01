@@ -609,7 +609,7 @@ def compute_evaporator_flow(
             if most_negative_flow is None or flow < most_negative_flow:
                 most_negative_flow = flow
     if most_negative_flow is None:
-        return 0.0
+        return None
     total_flow = abs(most_negative_flow)
     if pump_in == draw_off and pump_flow is not None:
         total_flow += max(pump_flow, 0.0)
@@ -729,6 +729,8 @@ def compute_evap_time_series(
 
         flow_val = row_flow_value(row)
         tank_state[tank_id] = row if flow_val is not None else None
+        if flow_val is None or flow_val >= 0:
+            continue  # only consider negative draw-off samples
 
         record = build_evap_record_from_state(
             tank_state,
@@ -738,7 +740,8 @@ def compute_evap_time_series(
             emptying_threshold,
             ts,
         )
-        if record:
+        # Require the current row's tank to be the draw_off and have a valid flow.
+        if record and (record.get("draw_off_tank") == tank_id):
             draw_off_prev = record["draw_off_tank"] or NO_TANK
             pump_in_prev = record["pump_in_tank"] or NO_TANK
             records.append(record)
