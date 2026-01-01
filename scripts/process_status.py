@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from statistics import median
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -55,7 +56,7 @@ def should_update_status(path: Path, new_ts: Optional[str]) -> bool:
     new_dt = parse_iso(new_ts)
     if cur_dt is None or new_dt is None:
         return True
-    return new_dt > cur_dt
+    return new_dt >= cur_dt
 
 
 def table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -290,6 +291,87 @@ def _flows_close(a: object, b: object, tolerance: float = 1e-3) -> bool:
     if fa is None or fb is None:
         return False
     return abs(fa - fb) <= tolerance
+
+
+def display_volume_window_seconds(env: Dict[str, str]) -> float:
+    val = to_float(env.get("DISPLAY_VOLUME_WINDOW_SECONDS"))
+    if val is None or val <= 0:
+        return 66.0  # 1.1 minutes
+    return float(val)
+
+
+def display_volume_median(rows: list[sqlite3.Row], window_seconds: float) -> Optional[float]:
+    """Median of recent raw gallons (excluding outliers) within the window."""
+    if not rows:
+        return None
+    rows_sorted = sorted(
+        [row for row in rows if parse_iso(row["source_timestamp"])],
+        key=lambda r: parse_iso(r["source_timestamp"]),
+    )
+    if not rows_sorted:
+        return None
+    latest_ts = parse_iso(rows_sorted[-1]["source_timestamp"])
+    if latest_ts is None:
+        return None
+    cutoff = latest_ts - timedelta(seconds=window_seconds)
+    vols = []
+    for row in rows_sorted:
+        ts = parse_iso(row["source_timestamp"])
+        if ts is None or ts < cutoff:
+            continue
+        outlier_flag = False
+        try:
+            outlier_flag = bool(row["depth_outlier"])
+        except Exception:
+            outlier_flag = False
+        if outlier_flag:
+            continue
+        vol = to_float(row["volume_gal"] if "volume_gal" in row.keys() else None)
+        if vol is None:
+            continue
+        vols.append(vol)
+    if not vols:
+        return None
+    return float(median(vols))
+
+
+def latest_flow_row(rows: list[sqlite3.Row]) -> Optional[sqlite3.Row]:
+    """Return the newest row with a non-outlier flow value."""
+    if not rows:
+        return None
+    sorted_rows = sorted(
+        [row for row in rows if parse_iso(row["source_timestamp"])],
+        key=lambda r: parse_iso(r["source_timestamp"]),
+        reverse=True,
+    )
+    for row in sorted_rows:
+        if row_flow_value(row) is None:
+            continue
+        return row
+    return None
+
+
+def compute_display_eta(volume: Optional[float], flow: Optional[float], capacity: Optional[float], ref_ts: Optional[str]):
+    eta_full = None
+    eta_empty = None
+    time_to_full_min = None
+    time_to_empty_min = None
+    if volume is None or flow is None or capacity in (None, 0):
+        return eta_full, eta_empty, time_to_full_min, time_to_empty_min
+    ref_dt = parse_iso(ref_ts) or datetime.now(timezone.utc)
+    if flow > 0:
+        remaining = max(capacity - volume, 0)
+        minutes = (remaining / flow) * 60 if flow != 0 else None
+        if minutes is not None:
+            eta_full = (ref_dt + timedelta(minutes=minutes)).isoformat()
+            time_to_full_min = minutes
+    elif flow < 0:
+        remaining = max(volume, 0)
+        minutes = (remaining / abs(flow)) * 60 if flow != 0 else None
+        if minutes is not None:
+            eta_empty = (ref_dt + timedelta(minutes=minutes)).isoformat()
+            time_to_empty_min = minutes
+    return eta_full, eta_empty, time_to_full_min, time_to_empty_min
 
 
 def parse_retention_days(env: Dict[str, str]) -> Optional[float]:
@@ -817,6 +899,7 @@ def main() -> None:
         "roadside": float(env["TANK_CAPACITY_ROADSIDE"]),
     }
     emptying_threshold = resolve_emptying_threshold(env)
+    display_window_sec = display_volume_window_seconds(env)
 
     tank_conn = open_db(repo_path_from_config(env["TANK_DB_PATH"]))
     pump_conn = open_db(repo_path_from_config(env["PUMP_DB_PATH"]))
@@ -833,6 +916,11 @@ def main() -> None:
     pump_rows_all = list_all_pump_rows(pump_conn)
     evap_time_series = compute_evap_time_series(tank_rows_all, pump_rows_all, emptying_threshold)
     replace_evap_flow(evap_conn, evap_time_series)
+    rows_by_tank: Dict[str, list[sqlite3.Row]] = {"brookside": [], "roadside": []}
+    for row in tank_rows_all:
+        tank_id = row["tank_id"]
+        if tank_id in rows_by_tank:
+            rows_by_tank[tank_id].append(row)
 
     status_base = repo_path_from_config(env["STATUS_JSON_PATH"]).parent
 
@@ -843,19 +931,34 @@ def main() -> None:
         if max_volume is None:
             max_volume = tank_capacity.get(tank_id)
         percent = row["level_percent"]
+        display_volume = display_volume_median(rows_by_tank.get(tank_id, []), display_window_sec)
+        display_percent = calc_percent(display_volume, max_volume)
         if percent is None:
             percent = calc_percent(row["volume_gal"], max_volume)
+        flow_row = latest_flow_row(rows_by_tank.get(tank_id, []))
+        flow_val = row_flow_value(flow_row)
+        flow_ts = flow_row["source_timestamp"] if flow_row else None
+        eta_full_disp, eta_empty_disp, ttf_disp, tte_disp = compute_display_eta(
+            display_volume, flow_val, max_volume, flow_ts
+        )
         payload = {
             "generated_at": timestamp,
             "tank_id": tank_id,
             "volume_gal": row["volume_gal"],
             "max_volume_gal": max_volume,
             "level_percent": percent,
-            "flow_gph": row["flow_gph"],
-            "eta_full": row["eta_full"],
-            "eta_empty": row["eta_empty"],
-            "time_to_full_min": row["time_to_full_min"],
-            "time_to_empty_min": row["time_to_empty_min"],
+            "flow_gph": flow_val if flow_val is not None else row["flow_gph"],
+            "flow_sample_timestamp": flow_ts,
+            "eta_full": eta_full_disp,
+            "eta_empty": eta_empty_disp,
+            "time_to_full_min": ttf_disp,
+            "time_to_empty_min": tte_disp,
+            "display_volume_gal": display_volume,
+            "display_level_percent": display_percent,
+            "display_eta_full": eta_full_disp,
+            "display_eta_empty": eta_empty_disp,
+            "display_time_to_full_min": ttf_disp,
+            "display_time_to_empty_min": tte_disp,
             "last_sample_timestamp": row["source_timestamp"],
             "last_received_at": row["received_at"],
         }

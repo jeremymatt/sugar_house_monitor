@@ -484,18 +484,21 @@ function updateTankCard(tankKey, tankData, staleSec, thresholdSec) {
     return;
   }
 
-  const vol = toNumber(tankData.volume_gal);
+  const displayVol = toNumber(tankData.display_volume_gal ?? tankData.volume_gal);
+  const vol = displayVol ?? toNumber(tankData.volume_gal);
   const cap = toNumber(tankData.max_volume_gal ?? tankData.capacity_gal);
-  let pct = toNumber(tankData.level_percent);
+  let pct = toNumber(tankData.display_level_percent ?? tankData.level_percent);
   if ((pct == null) && vol != null && cap != null) {
     pct = (vol / cap) * 100;
   }
   const flow = toNumber(tankData.flow_gph);
+  const etaFull = tankData.display_eta_full ?? tankData.eta_full;
+  const etaEmpty = tankData.display_eta_empty ?? tankData.eta_empty;
 
   if (volElem) volElem.textContent = formatVolumeGal(vol);
   if (capElem) capElem.textContent = cap != null ? `Capacity: ${formatVolumeGal(cap)}` : "Capacity: –";
   if (flowElem) flowElem.textContent = formatFlowGph(flow);
-  if (etaElem) etaElem.textContent = formatEta(tankData.eta_full, tankData.eta_empty);
+  if (etaElem) etaElem.textContent = formatEta(etaFull, etaEmpty);
 
   if (fillElem) {
     const h = pct != null ? Math.max(0, Math.min(100, pct)) : 0;
@@ -577,8 +580,8 @@ function computeOverviewSummary() {
   const roadside = latestTanks.roadside;
   if (!brookside && !roadside) return null;
 
-  const bVol = toNumber(brookside?.volume_gal);
-  const rVol = toNumber(roadside?.volume_gal);
+  const bVol = toNumber(brookside?.display_volume_gal ?? brookside?.volume_gal);
+  const rVol = toNumber(roadside?.display_volume_gal ?? roadside?.volume_gal);
   const bCap = toNumber(brookside?.max_volume_gal ?? brookside?.capacity_gal);
   const rCap = toNumber(roadside?.max_volume_gal ?? roadside?.capacity_gal);
   const bFlow = toNumber(brookside?.flow_gph);

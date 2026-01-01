@@ -225,7 +225,7 @@ class TankDatabase:
         with self.lock, self.conn:
             self.conn.execute(
                 """
-                INSERT OR IGNORE INTO tank_readings (
+                INSERT INTO tank_readings (
                     tank_id, source_timestamp, surf_dist, depth, depth_outlier, volume_gal, max_volume_gal,
                     level_percent, flow_gph, eta_full, eta_empty, time_to_full_min,
                     time_to_empty_min, received_at
@@ -233,6 +233,22 @@ class TankDatabase:
                     :tank_id, :source_timestamp, :surf_dist, :depth, :depth_outlier, :volume_gal,
                     :max_volume_gal, :level_percent, :flow_gph, :eta_full, :eta_empty,
                     :time_to_full_min, :time_to_empty_min, :received_at
+                )
+                ON CONFLICT(tank_id, source_timestamp) DO UPDATE SET
+                    surf_dist=excluded.surf_dist,
+                    depth=excluded.depth,
+                    depth_outlier=excluded.depth_outlier,
+                    volume_gal=excluded.volume_gal,
+                    max_volume_gal=excluded.max_volume_gal,
+                    level_percent=excluded.level_percent,
+                    flow_gph=excluded.flow_gph,
+                    eta_full=excluded.eta_full,
+                    eta_empty=excluded.eta_empty,
+                    time_to_full_min=excluded.time_to_full_min,
+                    time_to_empty_min=excluded.time_to_empty_min,
+                    received_at=excluded.received_at,
+                    sent_to_server=0,
+                    acked_by_server=0
                 )
                 """,
                 payload,
@@ -632,7 +648,6 @@ class UploadWorker:
                 "source_timestamp": row["source_timestamp"],
                 "surf_dist": row["surf_dist"],
                 "depth": row["depth"],
-                "depth_outlier": row["depth_outlier"],
                 "volume_gal": row["volume_gal"],
                 "max_volume_gal": row["max_volume_gal"],
                 "level_percent": row["level_percent"],
@@ -1357,8 +1372,13 @@ class TankPiApp:
                         break
                     except EOFError:
                         break
-                    if payload:
-                        self.handle_tank_measurement(payload, payload.get("source_timestamp"))
+                    if not payload:
+                        continue
+                    payloads = payload if isinstance(payload, list) else [payload]
+                    for item in payloads:
+                        if not item:
+                            continue
+                        self.handle_tank_measurement(item, item.get("source_timestamp"))
                         self.last_tank_update[name] = time.time()
                         self._tank_health_grace_until[name] = 0.0
                         processed = True
