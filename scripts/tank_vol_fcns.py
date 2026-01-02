@@ -264,16 +264,22 @@ def _log_sample_timing(
     start_time: float,
     end_time: float,
     log_path: Path = SAMPLE_TIMING_LOG,
+    window_minutes: Optional[float] = None,
 ) -> None:
     if not payloads:
         return
-    try:
-        first = payloads[0] if isinstance(payloads, list) else payloads
-    except Exception:
-        first = None
-    ts = ""
-    if isinstance(first, dict):
-        ts = first.get("source_timestamp") or first.get("timestamp") or ""
+    timestamps = []
+    if isinstance(payloads, list):
+        for item in payloads:
+            if isinstance(item, dict):
+                ts_val = item.get("source_timestamp") or item.get("timestamp")
+                if ts_val:
+                    timestamps.append(ts_val)
+    elif isinstance(payloads, dict):
+        ts_val = payloads.get("source_timestamp") or payloads.get("timestamp")
+        if ts_val:
+            timestamps.append(ts_val)
+    ts = max(timestamps) if timestamps else ""
     duration = max(0.0, end_time - start_time)
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -281,12 +287,15 @@ def _log_sample_timing(
         with log_path.open("a", newline="") as fp:
             writer = csv.writer(fp)
             if not exists:
-                writer.writerow(["tank_id", "source_timestamp", "duration_seconds", "logged_at"])
+                writer.writerow(
+                    ["tank_id", "source_timestamp", "duration_seconds", "window_minutes", "logged_at"]
+                )
             writer.writerow(
                 [
                     tank_id,
                     ts,
                     f"{duration:.6f}",
+                    "" if window_minutes is None else f"{float(window_minutes):.3f}",
                     ensure_utc(dt.datetime.now(dt.timezone.utc)).isoformat(),
                 ]
             )
@@ -687,7 +696,13 @@ def run_tank_controller(
                                 status_queue.put(payload)
                     else:
                         status_queue.put(measurement_payloads)
-                _log_sample_timing(tank_name, measurement_payloads, start_t, end_t)
+                _log_sample_timing(
+                    tank_name,
+                    measurement_payloads,
+                    start_t,
+                    end_t,
+                    window_minutes=tank.last_flow_window_min,
+                )
                 did_update = True
         else:
             while now >= update_time:
@@ -701,7 +716,13 @@ def run_tank_controller(
                                 status_queue.put(payload)
                     else:
                         status_queue.put(measurement_payloads)
-                _log_sample_timing(tank_name, measurement_payloads, start_t, end_t)
+                _log_sample_timing(
+                    tank_name,
+                    measurement_payloads,
+                    start_t,
+                    end_t,
+                    window_minutes=tank.last_flow_window_min,
+                )
                 update_time += reading_wait_time
                 now = _clock_now(clock)
                 did_update = True
