@@ -32,8 +32,8 @@ def parse_iso(ts: str) -> datetime:
     return dt
 
 
-def load_durations(path: Path) -> Dict[str, Tuple[List[datetime], List[float], List[float]]]:
-    series: Dict[str, Tuple[List[datetime], List[float], List[float]]] = {}
+def load_durations(path: Path) -> Dict[str, Tuple[List[datetime], List[float], List[float], List[float]]]:
+    series: Dict[str, Tuple[List[datetime], List[float], List[float], List[float]]] = {}
     if not path.exists():
         raise FileNotFoundError(f"Timing log not found: {path}")
     with path.open() as fp:
@@ -45,16 +45,21 @@ def load_durations(path: Path) -> Dict[str, Tuple[List[datetime], List[float], L
                 dur = float(row.get("duration_seconds") or 0.0)
             except ValueError:
                 continue
-            try:
-                window_val = float(row.get("window_minutes")) if row.get("window_minutes") else None
-            except ValueError:
-                window_val = None
+            def _float(val):
+                try:
+                    return float(val)
+                except Exception:
+                    return None
+            window_val = _float(row.get("window_minutes")) if row.get("window_minutes") else None
             if not tank or ts is None:
                 continue
-            series.setdefault(tank, ([], [], []))
+            hampel = _float(row.get("hampel_seconds"))
+            flow = _float(row.get("flow_seconds"))
+            series.setdefault(tank, ([], [], [], []))
             series[tank][0].append(ts)
             series[tank][1].append(dur)
             series[tank][2].append(window_val if window_val is not None else float("nan"))
+            series[tank][3].append(hampel if hampel is not None else float("nan"))
     return series
 
 
@@ -65,11 +70,12 @@ def main() -> None:
     for tank in ("brookside", "roadside"):
         if tank not in data:
             continue
-        times, durations, windows = data[tank]
+        times, durations, windows, hampel = data[tank]
         if not times:
             continue
         ax1.plot(times, durations, label=f"{tank} duration")
         ax2.plot(times, windows, linestyle="--", alpha=0.4, label=f"{tank} window (min)")
+        ax2.plot(times, hampel, linestyle=":", alpha=0.3, label=f"{tank} hampel (s)")
     ax1.set_xlabel("Sample timestamp")
     ax1.set_ylabel("Duration (seconds)")
     ax2.set_ylabel("Flow window (minutes)")

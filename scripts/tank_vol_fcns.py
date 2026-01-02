@@ -265,6 +265,11 @@ def _log_sample_timing(
     end_time: float,
     log_path: Path = SAMPLE_TIMING_LOG,
     window_minutes: Optional[float] = None,
+    hampel_seconds: Optional[float] = None,
+    flow_seconds: Optional[float] = None,
+    append_seconds: Optional[float] = None,
+    prune_seconds: Optional[float] = None,
+    total_seconds: Optional[float] = None,
 ) -> None:
     if not payloads:
         return
@@ -288,7 +293,18 @@ def _log_sample_timing(
             writer = csv.writer(fp)
             if not exists:
                 writer.writerow(
-                    ["tank_id", "source_timestamp", "duration_seconds", "window_minutes", "logged_at"]
+                    [
+                        "tank_id",
+                        "source_timestamp",
+                        "duration_seconds",
+                        "window_minutes",
+                        "hampel_seconds",
+                        "flow_seconds",
+                        "append_seconds",
+                        "prune_seconds",
+                        "total_seconds",
+                        "logged_at",
+                    ]
                 )
             writer.writerow(
                 [
@@ -296,6 +312,11 @@ def _log_sample_timing(
                     ts,
                     f"{duration:.6f}",
                     "" if window_minutes is None else f"{float(window_minutes):.3f}",
+                    "" if hampel_seconds is None else f"{float(hampel_seconds):.6f}",
+                    "" if flow_seconds is None else f"{float(flow_seconds):.6f}",
+                    "" if append_seconds is None else f"{float(append_seconds):.6f}",
+                    "" if prune_seconds is None else f"{float(prune_seconds):.6f}",
+                    "" if total_seconds is None else f"{float(total_seconds):.6f}",
                     ensure_utc(dt.datetime.now(dt.timezone.utc)).isoformat(),
                 ]
             )
@@ -702,6 +723,11 @@ def run_tank_controller(
                     start_t,
                     end_t,
                     window_minutes=tank.last_flow_window_min,
+                    hampel_seconds=tank._last_hampel_duration,
+                    flow_seconds=tank._last_flow_duration,
+                    append_seconds=tank._last_append_duration,
+                    prune_seconds=tank._last_prune_duration,
+                    total_seconds=tank._last_total_duration,
                 )
                 did_update = True
         else:
@@ -722,6 +748,11 @@ def run_tank_controller(
                     start_t,
                     end_t,
                     window_minutes=tank.last_flow_window_min,
+                    hampel_seconds=tank._last_hampel_duration,
+                    flow_seconds=tank._last_flow_duration,
+                    append_seconds=tank._last_append_duration,
+                    prune_seconds=tank._last_prune_duration,
+                    total_seconds=tank._last_total_duration,
                 )
                 update_time += reading_wait_time
                 now = _clock_now(clock)
@@ -820,6 +851,12 @@ class TANK:
         self.hampel_window_size = max(3, self.hampel_window_size)
         self._last_finalized_center_idx = -1
         self._ensure_history_columns()
+        # Profiling fields
+        self._last_hampel_duration = None
+        self._last_flow_duration = None
+        self._last_append_duration = None
+        self._last_prune_duration = None
+        self._last_total_duration = None
 
     def _ensure_history_columns(self) -> None:
         """Ensure history_df has flow/outlier columns even when loaded from disk."""
@@ -902,11 +939,13 @@ class TANK:
             return None
 
         window_df = self.history_df.iloc[-self.hampel_window_size :]
+        hampel_start = time.monotonic()
         _, outliers = apply_hampel_depth(
             window_df["depth"],
             window_size=self.hampel_window_size,
             n_sigma=self.flow_settings.hampel_n_sigma,
         )
+        hampel_end = time.monotonic()
         center_outlier = bool(outliers.iloc[center_offset]) if len(outliers) > center_offset else False
         global_idx = len(self.history_df) - self.hampel_window_size + center_offset
         self.history_df.loc[global_idx, "depth_outlier"] = center_outlier
@@ -921,18 +960,22 @@ class TANK:
             .fillna(False)
             .astype(bool, copy=False)
         )
+        flow_start = time.monotonic()
         flows, windows_used = compute_adaptive_trailing_flow(
             up_to_center["datetime"],
             gallons_series,
             outlier_series,
             self.flow_settings,
         )
+        flow_end = time.monotonic()
         flow_val = flows.iloc[-1]
         window_val = windows_used.iloc[-1]
         self.history_df.loc[global_idx, "flow_gph"] = flow_val
         self.history_df.loc[global_idx, "flow_window_min"] = window_val
 
         self._last_finalized_center_idx = global_idx
+        self._last_hampel_duration = hampel_end - hampel_start
+        self._last_flow_duration = flow_end - flow_start
         return self._build_payload_from_history_idx(global_idx)
 
     def _now(self):
@@ -1067,6 +1110,10 @@ class TANK:
         Update state and payloads. In debug mode, advances only when the
         synthetic clock has reached the next sample time.
         """
+        start_total = time.monotonic()
+        self._last_append_duration = None
+        self._last_prune_duration = None
+        self._last_total_duration = None
         if self.debug_feed:
             sample_time, dist = self._next_debug_distance_if_due(current_time)
             if sample_time is None:
@@ -1082,8 +1129,14 @@ class TANK:
             return None
 
         self.get_gal_in_tank()
+        append_start = time.monotonic()
         self._append_history(measurement_time)
+        append_end = time.monotonic()
+        self._last_append_duration = append_end - append_start
+        prune_start = time.monotonic()
         self._prune_history_if_needed(measurement_time)
+        prune_end = time.monotonic()
+        self._last_prune_duration = prune_end - prune_start
         center_payload = self.get_tank_rate(measurement_time)
 
         latest_idx = self.history_df.index[-1]
@@ -1094,6 +1147,8 @@ class TANK:
             payloads.append(center_payload)
 
         self.status_writer.write(latest_payload)
+        end_total = time.monotonic()
+        self._last_total_duration = end_total - start_total
         return payloads
 
     def _append_history(self, measurement_time):
