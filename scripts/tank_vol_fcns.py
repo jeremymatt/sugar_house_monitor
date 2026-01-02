@@ -1,6 +1,7 @@
 import datetime as dt
 import json
 from collections import deque
+import csv
 import signal
 import sqlite3
 import time
@@ -59,6 +60,7 @@ SERIAL_PORTS = {
 }
 DEFAULT_HISTORY_HOURS = 6
 HISTORY_PRUNE_INTERVAL = dt.timedelta(hours=1)
+SAMPLE_TIMING_LOG = Path(__file__).resolve().parents[1] / "data" / "sample_process_time.csv"
 
 queue_dict = {}
 for tank_name in tank_names:
@@ -254,6 +256,43 @@ def apply_hampel_depth(depth_series: pd.Series, window_size: int, n_sigma: float
     if getattr(res, "outlier_indices", None) is not None:
         outliers.iloc[res.outlier_indices] = True
     return filtered, outliers
+
+
+def _log_sample_timing(
+    tank_id: str,
+    payloads,
+    start_time: float,
+    end_time: float,
+    log_path: Path = SAMPLE_TIMING_LOG,
+) -> None:
+    if not payloads:
+        return
+    try:
+        first = payloads[0] if isinstance(payloads, list) else payloads
+    except Exception:
+        first = None
+    ts = ""
+    if isinstance(first, dict):
+        ts = first.get("source_timestamp") or first.get("timestamp") or ""
+    duration = max(0.0, end_time - start_time)
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        exists = log_path.exists()
+        with log_path.open("a", newline="") as fp:
+            writer = csv.writer(fp)
+            if not exists:
+                writer.writerow(["tank_id", "source_timestamp", "duration_seconds", "logged_at"])
+            writer.writerow(
+                [
+                    tank_id,
+                    ts,
+                    f"{duration:.6f}",
+                    ensure_utc(dt.datetime.now(dt.timezone.utc)).isoformat(),
+                ]
+            )
+    except Exception:
+        # Logging is diagnostic-only; never break sampling if this fails.
+        pass
 
 
 def compute_adaptive_trailing_flow(
@@ -636,7 +675,9 @@ def run_tank_controller(
         did_update = False
         if use_debug_feed:
             while True:
+                start_t = time.monotonic()
                 measurement_payloads = tank.update_status_if_due(now)
+                end_t = time.monotonic()
                 if not measurement_payloads:
                     break
                 if measurement_payloads and status_queue:
@@ -646,10 +687,13 @@ def run_tank_controller(
                                 status_queue.put(payload)
                     else:
                         status_queue.put(measurement_payloads)
+                _log_sample_timing(tank_name, measurement_payloads, start_t, end_t)
                 did_update = True
         else:
             while now >= update_time:
+                start_t = time.monotonic()
                 measurement_payloads = tank.update_status()
+                end_t = time.monotonic()
                 if measurement_payloads and status_queue:
                     if isinstance(measurement_payloads, list):
                         for payload in measurement_payloads:
@@ -657,6 +701,7 @@ def run_tank_controller(
                                 status_queue.put(payload)
                     else:
                         status_queue.put(measurement_payloads)
+                _log_sample_timing(tank_name, measurement_payloads, start_t, end_t)
                 update_time += reading_wait_time
                 now = _clock_now(clock)
                 did_update = True
