@@ -157,7 +157,16 @@ if ($type === 'pump') {
     fputcsv($out, ['Time','timestamp_utc','timestamp_est','Pump Event','Pump Run Time','Pump Interval','Gallons Per Hour']);
     foreach ($stmt as $row) {
         $ts = $row['source_timestamp'];
-        $formatted = $ts ? date('Y-m-d-H:i:s', strtotime($ts)) : '';
+        $formatted = '';
+        if ($ts) {
+            try {
+                $dt = new DateTime($ts);
+                $dt->setTimezone($utcTz);
+                $formatted = $dt->format('Y-m-d-H:i:s');
+            } catch (Exception $e) {
+                $formatted = $ts;
+            }
+        }
         $tsUtc = format_iso_tz($ts, $utcTz);
         $tsEst = format_iso_tz($ts, $estTz);
         fputcsv($out, [
@@ -201,6 +210,8 @@ if ($type === 'evaporator') {
     $out = fopen('php://output', 'w');
     fputcsv($out, [
         'timestamp',
+        'timestamp_utc',
+        'timestamp_est',
         'Draw_off_tank',
         'Draw_off_flow_rate',
         'Pump_in_tank',
@@ -208,8 +219,12 @@ if ($type === 'evaporator') {
         'Evaporator_flow',
     ]);
     foreach ($stmt as $row) {
+        $tsUtc = format_iso_tz($row['sample_timestamp'], $utcTz);
+        $tsEst = format_iso_tz($row['sample_timestamp'], $estTz);
         fputcsv($out, [
             $row['sample_timestamp'],
+            $tsUtc,
+            $tsEst,
             $row['draw_off_tank'],
             $row['draw_off_flow_gph'],
             $row['pump_in_tank'],
