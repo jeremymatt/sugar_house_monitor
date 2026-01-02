@@ -33,6 +33,22 @@ function dt_parts(string $iso): array {
     ];
 }
 
+function format_iso_tz(?string $iso, DateTimeZone $tz): string {
+    if (!$iso) {
+        return '';
+    }
+    try {
+        $dt = new DateTime($iso);
+        $dt->setTimezone($tz);
+        return $dt->format(DATE_ATOM);
+    } catch (Exception $e) {
+        return '';
+    }
+}
+
+$utcTz = new DateTimeZone('UTC');
+$estTz = new DateTimeZone('America/New_York');
+
 function table_has_column(PDO $conn, string $table, string $column): bool {
     // Best-effort sanitation of table name since PRAGMA can't use bound params.
     $table_safe = preg_replace('/[^A-Za-z0-9_]/', '', $table);
@@ -70,13 +86,17 @@ if ($type === 'brookside' || $type === 'roadside') {
 
     send_csv_headers("{$tankId}.csv");
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['Unnamed: 0','timestamp','yr','mo','day','hr','m','s','surf_dist','depth','is_outlier','gal','flow_gph']);
+    fputcsv($out, ['Unnamed: 0','timestamp','timestamp_utc','timestamp_est','yr','mo','day','hr','m','s','surf_dist','depth','is_outlier','gal','flow_gph']);
     $idx = 0;
     foreach ($stmt as $row) {
         $parts = dt_parts($row['source_timestamp']);
+        $tsUtc = format_iso_tz($row['source_timestamp'], $utcTz);
+        $tsEst = format_iso_tz($row['source_timestamp'], $estTz);
         fputcsv($out, [
             $idx++,
             $row['source_timestamp'],
+            $tsUtc,
+            $tsEst,
             $parts['yr'],
             $parts['mo'],
             $parts['day'],
@@ -134,12 +154,16 @@ if ($type === 'pump') {
     );
     send_csv_headers('pump_times.csv');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['Time','Pump Event','Pump Run Time','Pump Interval','Gallons Per Hour']);
+    fputcsv($out, ['Time','timestamp_utc','timestamp_est','Pump Event','Pump Run Time','Pump Interval','Gallons Per Hour']);
     foreach ($stmt as $row) {
         $ts = $row['source_timestamp'];
         $formatted = $ts ? date('Y-m-d-H:i:s', strtotime($ts)) : '';
+        $tsUtc = format_iso_tz($ts, $utcTz);
+        $tsEst = format_iso_tz($ts, $estTz);
         fputcsv($out, [
             $formatted,
+            $tsUtc,
+            $tsEst,
             $row['event_type'],
             $row['pump_run_time_s'],
             $row['pump_interval_s'],
