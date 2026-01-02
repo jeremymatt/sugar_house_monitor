@@ -1384,35 +1384,61 @@ class TankPiApp:
         error_queues = {name: TVF.queue_dict[name].get("errors") for name in TVF.tank_names}
         while not self.stop_event.is_set():
             processed = False
-            for name, status_queue in queues.items():
-                while True:
-                    try:
-                        payload = status_queue.get_nowait()
-                    except queue.Empty:
-                        break
-                    except EOFError:
-                        break
-                    if not payload:
-                        continue
-                    payloads = payload if isinstance(payload, list) else [payload]
-                    for item in payloads:
-                        if not item:
-                            continue
-                        self.handle_tank_measurement(item, item.get("source_timestamp"))
-                        self.last_tank_update[name] = time.time()
-                        self._tank_health_grace_until[name] = 0.0
-                        processed = True
-                if error_queues.get(name):
+            try:
+                for name, status_queue in queues.items():
                     while True:
                         try:
-                            err_payload = error_queues[name].get_nowait()
+                            payload = status_queue.get_nowait()
                         except queue.Empty:
                             break
                         except EOFError:
                             break
-                        if err_payload:
-                            self._handle_error_event(name, err_payload)
-                            processed = True
+                        if not payload:
+                            continue
+                        payloads = payload if isinstance(payload, list) else [payload]
+                        for item in payloads:
+                            if not item:
+                                continue
+                            try:
+                                self.handle_tank_measurement(item, item.get("source_timestamp"))
+                                self.last_tank_update[name] = time.time()
+                                self._tank_health_grace_until[name] = 0.0
+                                processed = True
+                            except Exception:
+                                LOGGER.exception("Failed to process tank payload for %s", name)
+                                err_msg = f"{name}: collector failed to handle payload"
+                                self.error_writer.append(err_msg, source="tank_pi")
+                                try:
+                                    self.db.insert_error_log(
+                                        {
+                                            "source": "tank_pi",
+                                            "message": err_msg,
+                                            "source_timestamp": iso_now(),
+                                        },
+                                        iso_now(),
+                                    )
+                                except Exception:
+                                    LOGGER.debug("Error log insert failed", exc_info=True)
+                    if error_queues.get(name):
+                        while True:
+                            try:
+                                err_payload = error_queues[name].get_nowait()
+                            except queue.Empty:
+                                break
+                            except EOFError:
+                                break
+                            if err_payload:
+                                try:
+                                    self._handle_error_event(name, err_payload)
+                                    processed = True
+                                except Exception:
+                                    LOGGER.exception("Failed to process error payload for %s", name)
+                                    self.error_writer.append(
+                                        f"{name}: collector failed to handle error payload", source="tank_pi"
+                                    )
+            except Exception:
+                LOGGER.exception("Measurement collector loop encountered an error; continuing")
+                self.error_writer.append("collector loop error", source="tank_pi")
             if not processed:
                 self.stop_event.wait(0.2)
             self._check_tank_health()
