@@ -1277,6 +1277,16 @@ class TankPiApp:
         self.last_tank_update[tank_name] = time.time()
         return proc
 
+    def _log_controller_restart(self, tank_name: str, reason: str) -> None:
+        """Log a controller restart to the error log for visibility."""
+        self._handle_error_event(
+            tank_name,
+            {
+                "message": f"Controller restart: {reason}",
+                "source_timestamp": iso_now(),
+            },
+        )
+
     def _restart_tank_controller(self, tank_name: str) -> None:
         proc = self.tank_processes.get(tank_name)
         if proc and proc.is_alive():
@@ -1315,6 +1325,7 @@ class TankPiApp:
                         name,
                         now - last_ts,
                     )
+                    self._log_controller_restart(name, "stale updates watchdog")
                     self._restart_tank_controller(name)
 
     def _handle_error_event(self, tank_name: str, event: Dict[str, object]) -> None:
@@ -1563,6 +1574,7 @@ class TankPiApp:
                     tank_name,
                     proc.exitcode,
                 )
+                self._log_controller_restart(tank_name, "process died")
             self._start_tank_controller(
                 tank_name,
                 self.measurement_params,
