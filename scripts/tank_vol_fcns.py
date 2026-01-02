@@ -432,6 +432,36 @@ class DebugTankFeed:
             flow_gph=base_sample.flow_gph,
         )
 
+    def next_sample_if_due(self, now: Optional[dt.datetime] = None) -> Optional[DebugSample]:
+        """
+        Return the next sample only when its scheduled time is <= `now`
+        (or the current synthetic clock time). Does not block.
+        """
+        if not self.records:
+            return None
+        if now is None:
+            now = self.clock.now() if self.clock else dt.datetime.now(dt.timezone.utc)
+        if self.index >= len(self.records):
+            if not self.loop:
+                return None
+            self.index = 0
+            span = self.cycle_span
+            if span <= dt.timedelta(0):
+                span = self.loop_gap
+            self.offset += span + self.loop_gap
+        base_sample = self.records[self.index]
+        scheduled = base_sample.timestamp + self.offset
+        if scheduled > now:
+            return None
+        self.index += 1
+        return DebugSample(
+            timestamp=scheduled,
+            surf_dist=base_sample.surf_dist,
+            depth=base_sample.depth,
+            volume_gal=base_sample.volume_gal,
+            flow_gph=base_sample.flow_gph,
+        )
+
 
 class TankStatusFileWriter:
     """Atomically write per-tank status JSON files without locking hassles."""
@@ -605,15 +635,18 @@ def run_tank_controller(
         now = _clock_now(clock)
         did_update = False
         if use_debug_feed:
-            measurement_payloads = tank.update_status()
-            if measurement_payloads and status_queue:
-                if isinstance(measurement_payloads, list):
-                    for payload in measurement_payloads:
-                        if payload:
-                            status_queue.put(payload)
-                else:
-                    status_queue.put(measurement_payloads)
-            did_update = bool(measurement_payloads)
+            while True:
+                measurement_payloads = tank.update_status_if_due(now)
+                if not measurement_payloads:
+                    break
+                if measurement_payloads and status_queue:
+                    if isinstance(measurement_payloads, list):
+                        for payload in measurement_payloads:
+                            if payload:
+                                status_queue.put(payload)
+                    else:
+                        status_queue.put(measurement_payloads)
+                did_update = True
         else:
             while now >= update_time:
                 measurement_payloads = tank.update_status()
@@ -951,9 +984,25 @@ class TANK:
             return None, None
         return ensure_utc(sample.timestamp), _safe_float(sample.surf_dist)
 
+    def _next_debug_distance_if_due(self, now: Optional[dt.datetime] = None):
+        """Non-blocking debug sample retrieval; returns None when not yet due."""
+        if not self.debug_feed:
+            return None, None
+        sample = self.debug_feed.next_sample_if_due(now)
+        if not sample:
+            return None, None
+        return ensure_utc(sample.timestamp), _safe_float(sample.surf_dist)
+
     def update_status(self):
+        return self.update_status_if_due()
+
+    def update_status_if_due(self, current_time: Optional[dt.datetime] = None):
+        """
+        Update state and payloads. In debug mode, advances only when the
+        synthetic clock has reached the next sample time.
+        """
         if self.debug_feed:
-            sample_time, dist = self._next_debug_distance()
+            sample_time, dist = self._next_debug_distance_if_due(current_time)
             if sample_time is None:
                 return None
             self.dist_to_surf = dist
