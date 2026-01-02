@@ -598,11 +598,12 @@ def run_tank_controller(
                 "source_timestamp": _clock_now(clock).isoformat(),
             }
         )
-    update_time = _clock_now(clock) - dt.timedelta(days=1)
+    update_time = _clock_now(clock)
+    loop_sleep = 0.01 if clock else 0.1
     while True:
         now = _clock_now(clock)
-        if now > update_time:
-            update_time = now + reading_wait_time
+        did_update = False
+        while now >= update_time:
             measurement_payloads = tank.update_status()
             if measurement_payloads and status_queue:
                 if isinstance(measurement_payloads, list):
@@ -611,6 +612,9 @@ def run_tank_controller(
                             status_queue.put(payload)
                 else:
                     status_queue.put(measurement_payloads)
+            update_time += reading_wait_time
+            now = _clock_now(clock)
+            did_update = True
         if not command_queue.empty():
             command = command_queue.get()
             parts = command.split(":")
@@ -633,7 +637,8 @@ def run_tank_controller(
                         tank.update_mins_back(command_val)
                         tank.get_tank_rate()
                     response_queue.put(tank.return_current_state())
-        time.sleep(0.1)
+        if not did_update:
+            time.sleep(loop_sleep)
 
 
 class TANK:
