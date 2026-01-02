@@ -61,7 +61,6 @@ SERIAL_PORTS = {
 DEFAULT_HISTORY_HOURS = 6
 HISTORY_PRUNE_INTERVAL = dt.timedelta(hours=1)
 SAMPLE_TIMING_LOG = Path(__file__).resolve().parents[1] / "data" / "sample_process_time.csv"
-MAX_FLOW_POINTS = 800  # cap flow calc history to control runtime growth
 
 queue_dict = {}
 for tank_name in tank_names:
@@ -952,9 +951,12 @@ class TANK:
         self.history_df.loc[global_idx, "depth_outlier"] = center_outlier
 
         up_to_center = self.history_df.iloc[: global_idx + 1].copy()
-        # Keep only a trailing slice to prevent O(n^2) growth as history grows.
-        if len(up_to_center) > MAX_FLOW_POINTS:
-            up_to_center = up_to_center.tail(MAX_FLOW_POINTS)
+        # Trim history to only what can influence the trailing fit based on the
+        # configured max adaptive window; no arbitrary row cap.
+        max_window_min = float(self.flow_settings.adapt_pos_max_window_min)
+        center_ts = up_to_center.iloc[-1]["datetime"]
+        cutoff_ts = center_ts - pd.Timedelta(minutes=max_window_min)
+        up_to_center = up_to_center[up_to_center["datetime"] >= cutoff_ts]
         gallons_series = up_to_center["depth"].apply(
             lambda d: depth_to_gallons(self.name, d) if d is not None and not pd.isna(d) else np.nan
         )
