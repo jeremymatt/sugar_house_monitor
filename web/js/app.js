@@ -58,7 +58,7 @@ const DRAW_OFF_COLORS = {
   "---": "#7a7f8a",
 };
 const PUMP_COLOR = "#d55e00"; // pump line orange
-const NET_COLOR = "#0072b2";  // net flow line blue
+const NET_COLOR = "#0072b2";  // tank inflow line blue
 
 // Flow thresholds (gph) and reserve volume (gal)
 const TANKS_FILLING_THRESHOLD = Number(window.TANKS_FILLING_THRESHOLD ?? 5);
@@ -98,7 +98,7 @@ let lastGeneratedAt = null;
 let lastFetchError = false;
 let lastPumpFlow = null;
 const pumpHistory = [];
-const netFlowHistory = [];
+const inflowHistory = []; // tank inflow (positive-only) for pump chart
 let evapHistory = [];
 const HISTORY_MIN_SPACING_MS = 30 * 1000; // throttle points every 30s unless value changes
 let pumpFetchGuard = false;
@@ -110,7 +110,7 @@ let evapFetchAbort = null;
 let evapFetchToken = 0;
 let pendingEvapWindow = null;
 let evapPlotSettings = {
-  y_axis_min: 200,
+  y_axis_min: 0,
   y_axis_max: 600,
   window_sec: EVAP_HISTORY_DEFAULT_SEC,
 };
@@ -590,6 +590,7 @@ function computeOverviewSummary() {
   const totalGallons = (bVol ?? 0) + (rVol ?? 0);
   const hasFlow = bFlow != null || rFlow != null;
   const netFlow = hasFlow ? (bFlow || 0) + (rFlow || 0) : null;
+  const inflowFlow = hasFlow ? Math.max(bFlow || 0, 0) + Math.max(rFlow || 0, 0) : null;
 
   const roadRemaining = rCap != null && rVol != null ? Math.max(rCap - rVol, 0) : null;
   const brookRemaining = bCap != null && bVol != null ? Math.max(bCap - bVol, 0) : null;
@@ -615,6 +616,7 @@ function computeOverviewSummary() {
   return {
     totalGallons,
     netFlow,
+    inflowFlow,
     overflowMinutes,
     lastFireMinutes,
   };
@@ -790,7 +792,7 @@ async function refreshPumpHistory(windowSec) {
   pumpFetchGuard = true;
   const token = ++pumpFetchToken;
   pumpHistory.splice(0, pumpHistory.length);
-  netFlowHistory.splice(0, netFlowHistory.length);
+  inflowHistory.splice(0, inflowHistory.length);
   updatePumpHistoryChart();
   const aborter = new AbortController();
   pumpFetchAbort = aborter;
@@ -813,18 +815,19 @@ async function refreshPumpHistory(windowSec) {
           if (t != null && v != null) pumpHistory.unshift({ t, v });
         });
     }
-    if (history.net) {
-      history.net
+    const inflowSeries = history.inflow || history.net;
+    if (inflowSeries) {
+      inflowSeries
         .slice()
         .reverse()
         .forEach((p) => {
           const t = msFromIso(p.ts);
           const v = toNumber(p.flow_gph);
-          if (t != null && v != null) netFlowHistory.unshift({ t, v });
+          if (t != null && v != null) inflowHistory.unshift({ t, v });
         });
     }
     pruneToWindow(pumpHistory, windowSec);
-    pruneToWindow(netFlowHistory, windowSec);
+    pruneToWindow(inflowHistory, windowSec);
     updatePumpHistoryChart();
   } catch (err) {
     if (!aborter.signal.aborted) {
@@ -899,15 +902,15 @@ function drawLine(ctx, points, color, x0, x1, yMin, yMax, dims) {
   ctx.stroke();
 }
 
-function updatePumpHistoryChart(pumpPoint, netPoint) {
+function updatePumpHistoryChart(pumpPoint, inflowPoint) {
   if (!pumpFetchGuard) {
     if (pumpPoint) addHistoryPoint(pumpHistory, pumpPoint.v, pumpPoint.t);
-    if (netPoint) addHistoryPoint(netFlowHistory, netPoint.v, netPoint.t);
+    if (inflowPoint) addHistoryPoint(inflowHistory, inflowPoint.v, inflowPoint.t);
   }
 
   const latestTs = Math.max(
     pumpHistory.length ? pumpHistory[pumpHistory.length - 1].t : 0,
-    netFlowHistory.length ? netFlowHistory[netFlowHistory.length - 1].t : 0
+    inflowHistory.length ? inflowHistory[inflowHistory.length - 1].t : 0
   );
 
   const canvas = document.getElementById("pump-history-canvas");
@@ -920,7 +923,7 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
   }
 
   pruneToWindow(pumpHistory, flowHistoryWindowSec);
-  pruneToWindow(netFlowHistory, flowHistoryWindowSec);
+  pruneToWindow(inflowHistory, flowHistoryWindowSec);
   // Fit to container width on each draw for responsiveness.
   const desiredWidth = canvas.clientWidth || canvas.width || 600;
   if (canvas.width !== desiredWidth) {
@@ -997,9 +1000,9 @@ function updatePumpHistoryChart(pumpPoint, netPoint) {
 
   // Lines
   drawLine(ctx, pumpHistory, PUMP_COLOR, start, now, yMin, yMax, { padLeft, padTop, plotW, plotH });
-  drawLine(ctx, netFlowHistory, NET_COLOR, start, now, yMin, yMax, { padLeft, padTop, plotW, plotH });
+  drawLine(ctx, inflowHistory, NET_COLOR, start, now, yMin, yMax, { padLeft, padTop, plotW, plotH });
 
-  if ((!pumpHistory.length) && (!netFlowHistory.length)) {
+  if ((!pumpHistory.length) && (!inflowHistory.length)) {
     drawCenteredMessage(canvas, "#1a1f28", "#888", "No flow data yet");
     if (note) note.textContent = `Showing last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"}`;
     return;
@@ -1182,7 +1185,7 @@ function recomputeStalenessAndRender() {
   const pumpTs = msFromIso(pump?.last_event_timestamp || pump?.last_received_at);
   const bTs = msFromIso(brookside?.last_sample_timestamp || brookside?.last_received_at);
   const rTs = msFromIso(roadside?.last_sample_timestamp || roadside?.last_received_at);
-  const netTs = averageMs(bTs, rTs);
+  const tankTs = averageMs(bTs, rTs);
 
   updateTankCard("brookside", brookside, brooksideSec, brooksideThresh);
   updateTankCard("roadside",  roadside,  roadsideSec,  roadsideThresh);
@@ -1203,7 +1206,7 @@ function recomputeStalenessAndRender() {
   }
   updatePumpHistoryChart(
     pumpFlowVal != null && pumpTs != null ? { v: pumpFlowVal, t: pumpTs } : null,
-    overview?.netFlow != null && netTs != null ? { v: overview.netFlow, t: netTs } : null
+    overview?.inflowFlow != null && tankTs != null ? { v: overview.inflowFlow, t: tankTs } : null
   );
   updateEvapHistoryChart();
 

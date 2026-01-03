@@ -43,6 +43,7 @@ if ($pumpDbPath && file_exists($pumpDbPath)) {
 }
 
 $netRows = [];
+$inflowRows = [];
 if ($tankDbPath && file_exists($tankDbPath)) {
     $tankDb = connect_sqlite($tankDbPath);
     $check = $tankDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='tank_readings'");
@@ -130,9 +131,14 @@ if ($tankDbPath && file_exists($tankDbPath)) {
                 continue;
             }
             $net = ($bFlow ?? 0.0) + ($rFlow ?? 0.0);
+            $inflow = max($bFlow ?? 0.0, 0.0) + max($rFlow ?? 0.0, 0.0);
             $netRows[] = [
                 'ts' => $ev['ts'],
                 'flow_gph' => $net,
+            ];
+            $inflowRows[] = [
+                'ts' => $ev['ts'],
+                'flow_gph' => $inflow,
             ];
         }
     }
@@ -142,5 +148,6 @@ respond_json([
     'status' => 'ok',
     'pump' => $pumpRows,
     'net' => $netRows,
+    'inflow' => $inflowRows,
     'window_sec' => $windowSec,
 ]);

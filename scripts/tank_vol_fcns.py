@@ -267,9 +267,10 @@ def _log_sample_timing(
     window_minutes: Optional[float] = None,
     hampel_seconds: Optional[float] = None,
     flow_seconds: Optional[float] = None,
+    short_flow_seconds: Optional[float] = None,
+    main_flow_seconds: Optional[float] = None,
     append_seconds: Optional[float] = None,
     prune_seconds: Optional[float] = None,
-    total_seconds: Optional[float] = None,
 ) -> None:
     if not payloads:
         return
@@ -300,9 +301,10 @@ def _log_sample_timing(
                         "window_minutes",
                         "hampel_seconds",
                         "flow_seconds",
+                        "short_flow_seconds",
+                        "main_flow_seconds",
                         "append_seconds",
                         "prune_seconds",
-                        "total_seconds",
                         "logged_at",
                     ]
                 )
@@ -314,9 +316,10 @@ def _log_sample_timing(
                     "" if window_minutes is None else f"{float(window_minutes):.3f}",
                     "" if hampel_seconds is None else f"{float(hampel_seconds):.6f}",
                     "" if flow_seconds is None else f"{float(flow_seconds):.6f}",
+                    "" if short_flow_seconds is None else f"{float(short_flow_seconds):.6f}",
+                    "" if main_flow_seconds is None else f"{float(main_flow_seconds):.6f}",
                     "" if append_seconds is None else f"{float(append_seconds):.6f}",
                     "" if prune_seconds is None else f"{float(prune_seconds):.6f}",
-                    "" if total_seconds is None else f"{float(total_seconds):.6f}",
                     ensure_utc(dt.datetime.now(dt.timezone.utc)).isoformat(),
                 ]
             )
@@ -330,10 +333,11 @@ def compute_adaptive_trailing_flow(
     gallons: pd.Series,
     is_outlier: pd.Series,
     settings: FlowSettings,
-):
+) -> tuple[pd.Series, pd.Series, Dict[str, float]]:
     """Compute per-point flow using trailing adaptive window with negative-flow guard."""
     flows = pd.Series(np.nan, index=gallons.index, dtype=float)
     windows_used = pd.Series(np.nan, index=gallons.index, dtype=float)
+    timings: Dict[str, float] = {"short_window_seconds": 0.0, "flow_fit_seconds": 0.0}
 
     short_window = pd.Timedelta(minutes=settings.adapt_short_flow_window_min)
     flow_history = deque(maxlen=max(1, int(settings.adapt_window_update_delay)))
@@ -350,6 +354,7 @@ def compute_adaptive_trailing_flow(
             continue
         ts = timestamps.loc[idx]
 
+        short_start = time.monotonic()
         short_mask = (
             valid_mask
             & (timestamps >= ts - short_window)
@@ -365,6 +370,7 @@ def compute_adaptive_trailing_flow(
                 slope, _ = np.polyfit(hours, short_df, 1)
                 short_flow = float(slope)
                 flow_history.append(short_flow)
+        timings["short_window_seconds"] += (time.monotonic() - short_start)
 
         target_window = current_window_min
         if flow_history:
@@ -405,6 +411,7 @@ def compute_adaptive_trailing_flow(
             prev_window_min = trailing_window_min
             continue
 
+        flow_fit_start = time.monotonic()
         times_ns = timestamps.loc[window_mask].astype("int64")
         t0 = times_ns.iloc[0]
         hours = (times_ns - t0) / 3.6e12
@@ -413,6 +420,7 @@ def compute_adaptive_trailing_flow(
             continue
 
         slope, _ = np.polyfit(hours, window_gals, 1)
+        timings["flow_fit_seconds"] += (time.monotonic() - flow_fit_start)
         flows.at[idx] = float(slope)
         windows_used.at[idx] = trailing_window_min
 
@@ -422,7 +430,7 @@ def compute_adaptive_trailing_flow(
 
         prev_window_min = trailing_window_min
 
-    return flows, windows_used
+    return flows, windows_used, timings
 
 
 
@@ -725,9 +733,10 @@ def run_tank_controller(
                     window_minutes=tank.last_flow_window_min,
                     hampel_seconds=tank._last_hampel_duration,
                     flow_seconds=tank._last_flow_duration,
+                    short_flow_seconds=tank._last_short_flow_duration,
+                    main_flow_seconds=tank._last_main_flow_duration,
                     append_seconds=tank._last_append_duration,
                     prune_seconds=tank._last_prune_duration,
-                    total_seconds=tank._last_total_duration,
                 )
                 did_update = True
         else:
@@ -750,9 +759,10 @@ def run_tank_controller(
                     window_minutes=tank.last_flow_window_min,
                     hampel_seconds=tank._last_hampel_duration,
                     flow_seconds=tank._last_flow_duration,
+                    short_flow_seconds=tank._last_short_flow_duration,
+                    main_flow_seconds=tank._last_main_flow_duration,
                     append_seconds=tank._last_append_duration,
                     prune_seconds=tank._last_prune_duration,
-                    total_seconds=tank._last_total_duration,
                 )
                 update_time += reading_wait_time
                 now = _clock_now(clock)
@@ -857,6 +867,8 @@ class TANK:
         self._last_append_duration = None
         self._last_prune_duration = None
         self._last_total_duration = None
+        self._last_short_flow_duration = None
+        self._last_main_flow_duration = None
 
     def _ensure_history_columns(self) -> None:
         """Ensure history_df has flow/outlier columns even when loaded from disk."""
@@ -967,7 +979,7 @@ class TANK:
             .astype(bool, copy=False)
         )
         flow_start = time.monotonic()
-        flows, windows_used = compute_adaptive_trailing_flow(
+        flows, windows_used, flow_timings = compute_adaptive_trailing_flow(
             up_to_center["datetime"],
             gallons_series,
             outlier_series,
@@ -982,6 +994,8 @@ class TANK:
         self._last_finalized_center_idx = global_idx
         self._last_hampel_duration = hampel_end - hampel_start
         self._last_flow_duration = flow_end - flow_start
+        self._last_short_flow_duration = flow_timings.get("short_window_seconds")
+        self._last_main_flow_duration = flow_timings.get("flow_fit_seconds")
         return self._build_payload_from_history_idx(global_idx)
 
     def _now(self):
