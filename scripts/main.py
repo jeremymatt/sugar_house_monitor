@@ -538,7 +538,13 @@ class LocalErrorWriter:
 
 
 class UploadWorker:
-    def __init__(self, env: Dict[str, str], db: TankDatabase, speed_factor: float = 1.0):
+    def __init__(
+        self,
+        env: Dict[str, str],
+        db: TankDatabase,
+        speed_factor: float = 1.0,
+        pump_enabled: bool = True,
+    ):
         self.db = db
         self.api_base = env["API_BASE_URL"]
         self.api_key = env["API_KEY"]
@@ -553,6 +559,7 @@ class UploadWorker:
         self.tank_interval = base_tank_interval
         self.pump_batch = base_pump_batch
         self.pump_interval = base_pump_interval
+        self.pump_enabled = pump_enabled
         self.vacuum_batch = int(env.get("VACUUM_UPLOAD_BATCH_SIZE", "8"))
         self.vacuum_interval = int(env.get("VACUUM_UPLOAD_INTERVAL_SECONDS", "30"))
         self.heartbeat_interval = float(env.get("UPLOAD_HEARTBEAT_SECONDS", "120"))
@@ -575,10 +582,12 @@ class UploadWorker:
         self.stop_event = threading.Event()
         now = time.monotonic()
         self._last_tank_handshake = now
-        self._last_pump_handshake = now
+        self._last_pump_handshake = now if self.pump_enabled else None
         self._next_heartbeat = now + self.heartbeat_interval
         self._next_prune = now if self.retention_days and self.prune_interval > 0 else None
         self._next_error_upload = time.monotonic()
+        if not self.pump_enabled:
+            LOGGER.info("Pump uploads/handshakes disabled (DEBUG_RELEASER=false)")
 
     def start(self) -> None:
         self._prune_if_due(force=True)
@@ -610,7 +619,7 @@ class UploadWorker:
 
     def _run(self) -> None:
         next_tank = time.monotonic()
-        next_pump = time.monotonic()
+        next_pump = time.monotonic() if self.pump_enabled else None
         next_vac = time.monotonic()
         next_error = self._next_error_upload
         while not self.stop_event.is_set():
@@ -624,11 +633,14 @@ class UploadWorker:
                         self._send_handshake("tank")
                         self._last_tank_handshake = now
                     next_tank = now + self.tank_interval
-                if now >= next_pump:
+                if self.pump_enabled and next_pump is not None and now >= next_pump:
                     sent = self._upload_pump()
                     if sent:
                         self._last_pump_handshake = now
-                    elif now - self._last_pump_handshake >= self.handshake_interval:
+                    elif (
+                        self._last_pump_handshake is not None
+                        and now - self._last_pump_handshake >= self.handshake_interval
+                    ):
                         self._send_handshake("pump")
                         self._last_pump_handshake = now
                     next_pump = now + self.pump_interval
@@ -913,7 +925,13 @@ class TankPiApp:
         except ValueError:
             self.clock_multiplier = 1.0
         speed_factor = self.clock_multiplier if self.debug_enabled else 1.0
-        self.upload_worker = UploadWorker(env, self.db, speed_factor=speed_factor)
+        self.debug_pump = str_to_bool(env.get("DEBUG_RELEASER"), False)
+        self.upload_worker = UploadWorker(
+            env,
+            self.db,
+            speed_factor=speed_factor,
+            pump_enabled=self.debug_pump,
+        )
         self.loop_debug_data = str_to_bool(env.get("DEBUG_LOOP_DATA"), False)
         self.debug_loop_gap = timedelta(
             seconds=float(self.env.get("DEBUG_LOOP_GAP_SECONDS", "10"))
