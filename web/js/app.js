@@ -629,6 +629,7 @@ function updateOverviewCard(summary, vacuumData) {
   const overflowEtaElem = document.getElementById("overview-overflow-eta");
   const reserveElem = document.getElementById("overview-reserve");
   const vacReadingElem = document.getElementById("vacuum-reading");
+  const vacNoteElem = document.getElementById("vacuum-reading-note");
   if (reserveElem) reserveElem.textContent = `${RESERVE_GALLONS} gal`;
 
   if (!summary) {
@@ -644,8 +645,22 @@ function updateOverviewCard(summary, vacuumData) {
   }
 
   const vacVal = toNumber(vacuumData?.reading_inhg);
+  const vacTs = vacuumData?.last_received_at || vacuumData?.source_timestamp;
+  const vacStaleSec = vacTs ? secondsSinceLast(vacTs) : null;
   if (vacReadingElem) {
     vacReadingElem.textContent = vacVal != null ? `${vacVal.toFixed(1)} inHg` : "–";
+  }
+  if (vacNoteElem) {
+    if (vacStaleSec == null) {
+      vacNoteElem.textContent = "Updated ---";
+    } else {
+      const mins = Math.floor(vacStaleSec / 60);
+      const secs = Math.floor(vacStaleSec % 60);
+      const parts = [];
+      if (mins > 0) parts.push(`${mins}m`);
+      parts.push(`${secs}s`);
+      vacNoteElem.textContent = `Updated ${parts.join(" ")} ago`;
+    }
   }
 }
 
