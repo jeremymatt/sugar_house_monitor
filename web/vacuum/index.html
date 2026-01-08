@@ -5,87 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Vacuum</title>
   <style>
-    :root {
-      color-scheme: light;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #ffffff;
-      color: #111111;
-      font-family: "Helvetica Neue", Arial, sans-serif;
+      background: #fff;
+      color: #111;
+      font-family: Arial, sans-serif;
     }
-
-    .wrap {
-      width: 100%;
-      padding: 2.5rem 1.5rem;
-      text-align: center;
-    }
-
-    .label {
-      text-transform: uppercase;
-      letter-spacing: 0.18em;
-      font-size: 0.95rem;
-      color: #444444;
-      margin-bottom: 0.35rem;
-    }
-
-    .value {
-      font-size: clamp(72px, 18vw, 160px);
+    #vacuum-value {
+      font-size: clamp(72px, 20vw, 180px);
       font-weight: 700;
       line-height: 1.05;
-    }
-
-    .meta {
-      margin-top: 0.65rem;
-      font-size: 0.95rem;
-      color: #555555;
-      min-height: 1.2em;
-    }
-
-    .error {
-      color: #c1121f;
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="label">Vacuum</div>
-    <div id="vacuum-value" class="value">--</div>
-    <div id="vacuum-meta" class="meta">&nbsp;</div>
-  </div>
+  <div id="vacuum-value">--</div>
   <script>
     (() => {
-      const VALUE_EL = document.getElementById("vacuum-value");
-      const META_EL = document.getElementById("vacuum-meta");
       const STATUS_URL = "/sugar_house_monitor/data/status_vacuum.json";
       const INTERVAL_MS = 1000;
-
-      const render = (reading, timestamp, note, isError = false) => {
-        if (Number.isFinite(reading)) {
-          VALUE_EL.textContent = `${reading.toFixed(1)} inHg`;
-        } else {
-          VALUE_EL.textContent = "--";
-        }
-        if (note) {
-          META_EL.textContent = note;
-          META_EL.classList.toggle("error", isError);
-        } else if (timestamp) {
-          META_EL.textContent = `Updated ${timestamp}`;
-          META_EL.classList.remove("error");
-        } else {
-          META_EL.innerHTML = "&nbsp;";
-          META_EL.classList.remove("error");
-        }
-      };
+      const valueEl = document.getElementById("vacuum-value");
 
       const fetchOnce = async () => {
         try {
@@ -93,10 +38,9 @@
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const payload = await res.json();
           const reading = Number(payload?.reading_inhg);
-          const ts = payload?.last_received_at || payload?.source_timestamp || "";
-          render(reading, ts, "");
+          valueEl.textContent = Number.isFinite(reading) ? `${reading.toFixed(1)} inHg` : "--";
         } catch (err) {
-          render(null, null, "Waiting for data...", true);
+          valueEl.textContent = "--";
         } finally {
           setTimeout(fetchOnce, INTERVAL_MS);
         }
