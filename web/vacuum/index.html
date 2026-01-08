@@ -13,24 +13,48 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #fff;
-      color: #111;
+      background: #1a1f28;
+      color: #f5f7fb;
       font-family: Arial, sans-serif;
     }
     #vacuum-value {
       font-size: clamp(72px, 20vw, 180px);
       font-weight: 700;
       line-height: 1.05;
+      color: #ffffff;
+    }
+    #vacuum-ts {
+      margin-top: 0.35rem;
+      font-size: 1rem;
+      color: #a7afbf;
     }
   </style>
 </head>
 <body>
-  <div id="vacuum-value">--</div>
+  <div style="text-align:center;">
+    <div id="vacuum-value">--</div>
+    <div id="vacuum-ts">&nbsp;</div>
+  </div>
   <script>
     (() => {
       const STATUS_URL = "/sugar_house_monitor/data/status_vacuum.json";
       const INTERVAL_MS = 1000;
       const valueEl = document.getElementById("vacuum-value");
+      const tsEl = document.getElementById("vacuum-ts");
+
+      const formatTs = (iso) => {
+        if (!iso) return "";
+        const d = new Date(iso);
+        if (isNaN(d)) return "";
+        return d.toLocaleString("en-US", {
+          timeZone: "America/New_York",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        });
+      };
 
       const fetchOnce = async () => {
         try {
@@ -38,9 +62,12 @@
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const payload = await res.json();
           const reading = Number(payload?.reading_inhg);
+          const ts = payload?.last_received_at || payload?.source_timestamp || "";
           valueEl.textContent = Number.isFinite(reading) ? `${reading.toFixed(1)} inHg` : "--";
+          tsEl.textContent = formatTs(ts) || " ";
         } catch (err) {
           valueEl.textContent = "--";
+          tsEl.textContent = " ";
         } finally {
           setTimeout(fetchOnce, INTERVAL_MS);
         }
