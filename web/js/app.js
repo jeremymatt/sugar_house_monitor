@@ -652,14 +652,14 @@ function updateOverviewCard(summary, vacuumData) {
   }
   if (vacNoteElem) {
     if (vacStaleSec == null) {
-      vacNoteElem.textContent = "Updated ---";
+      vacNoteElem.textContent = "Updated • ---";
     } else {
       const mins = Math.floor(vacStaleSec / 60);
       const secs = Math.floor(vacStaleSec % 60);
       const parts = [];
       if (mins > 0) parts.push(`${mins}m`);
       parts.push(`${secs}s`);
-      vacNoteElem.textContent = `Updated ${parts.join(" ")} ago`;
+      vacNoteElem.textContent = `Updated • ${parts.join(" ")} ago`;
     }
   }
 }
