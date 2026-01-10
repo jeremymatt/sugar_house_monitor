@@ -15,7 +15,7 @@ import time
 import math
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 import pygame
@@ -240,11 +240,12 @@ def scale_ui(value: float) -> int:
     return int(round(value * UI_SCALE))
 
 
-def draw_text(surface, text, pos, size=20, color=TEXT_MAIN, bold=False):
-    global _WARN_NO_FONT, _WARN_RENDER_FAIL
+def get_font(size: int, bold: bool):
     scaled_size = scale_font(size)
     key = (scaled_size, bool(bold))
     font_obj = _FONT_CACHE.get(key)
+    if font_obj:
+        return font_obj
 
     if not font_obj and HAS_FONT:
         try:
@@ -268,7 +269,28 @@ def draw_text(surface, text, pos, size=20, color=TEXT_MAIN, bold=False):
 
     if font_obj:
         _FONT_CACHE[key] = font_obj
-    else:
+
+    return font_obj
+
+
+def measure_text(text: str, size=20, bold=False) -> int:
+    font_obj = get_font(size, bold)
+    if not font_obj:
+        return 0
+    try:
+        if hasattr(font_obj, "get_rect"):
+            return font_obj.get_rect(text).width
+        if hasattr(font_obj, "size"):
+            return font_obj.size(text)[0]
+    except Exception:
+        return 0
+    return 0
+
+
+def draw_text(surface, text, pos, size=20, color=TEXT_MAIN, bold=False):
+    global _WARN_NO_FONT, _WARN_RENDER_FAIL
+    font_obj = get_font(size, bold)
+    if not font_obj:
         if not _WARN_NO_FONT:
             debug_log("No usable font available; text will not render.")
             _WARN_NO_FONT = True
@@ -413,94 +435,91 @@ def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
 
 def draw_status(surface, rect, status: EvapStatus):
     pygame.draw.rect(surface, CARD_BG, rect, border_radius=scale_ui(12))
-    pad = scale_ui(8)
-    col_gap = scale_ui(6)
-    row_gap = scale_ui(4)
-    label_size = 16
-    value_size = 20
-    value_emphasis_size = 22
-    note_size = 14
-    last_fire_size = 18
-    line_gap = scale_ui(2)
+    pad = scale_ui(6)
+    row_size = 19
+    row_gap = scale_ui(2)
+    row_step = scale_font(row_size) + row_gap
+    label_gap = scale_ui(6)
 
-    def line_height(size: int) -> int:
-        return scale_font(size) + line_gap
+    divider_x = rect.centerx
+    divider_top = rect.y + pad
+    divider_bottom = rect.bottom - pad
+    pygame.draw.line(
+        surface,
+        TEXT_MAIN,
+        (divider_x, divider_top),
+        (divider_x, divider_bottom),
+        max(1, scale_ui(1)),
+    )
 
-    label_h = line_height(label_size)
-    row1_value_h = line_height(value_emphasis_size)
-    note_h = line_height(note_size)
-    row1_h = label_h + row1_value_h + note_h
-
-    inner_x = rect.x + pad
-    inner_y = rect.y + pad
-    inner_w = rect.width - pad * 2
-
-    col_w = (inner_w - col_gap * 2) // 3
-    row2_col_w = (inner_w - col_gap) // 2
-    row1_y = inner_y
-    row2_y = row1_y + row1_h + row_gap
-
-    def draw_block(x, y, label, value, note=None, value_size_override=None):
-        value_size_local = value_size_override or value_size
-        draw_text(surface, label, (x, y), size=label_size, color=TEXT_MUTED)
-        value_y = y + label_h
-        draw_text(surface, value, (x, value_y), size=value_size_local, color=TEXT_MAIN, bold=True)
-        if note is not None:
-            note_y = value_y + line_height(value_size_local)
-            draw_text(surface, note, (x, note_y), size=note_size, color=TEXT_MUTED)
-
-    ts_str = status.sample_ts or "–"
-    try:
-        dt = datetime.fromisoformat(ts_str)
-        ts_str = dt.strftime("%H:%M")
-    except Exception:
-        pass
+    inner_left = rect.x + pad
+    inner_right = rect.right - pad
+    left_col_x0 = inner_left
+    left_col_x1 = divider_x - scale_ui(6)
+    right_col_x0 = divider_x + scale_ui(6)
+    right_col_x1 = inner_right
 
     flow_str = f"{status.evap_flow:.1f} gph" if status.evap_flow is not None else "–"
     do_flow = f"{status.draw_off_flow:.1f} gph" if status.draw_off_flow is not None else "–"
     pi_flow = f"{status.pump_in_flow:.1f} gph" if status.pump_in_flow is not None else "–"
-    last_fire_str = "---"
-    if status.last_fire_min is not None:
-        hrs = int(status.last_fire_min // 60)
-        mins = int(status.last_fire_min % 60)
-        last_fire_str = f"{hrs:02d}:{mins:02d}"
-    stack_temp_str = f"{status.stack_temp_f:.1f} F" if status.stack_temp_f is not None else "–"
+    draw_off_str = f"{status.draw_off.upper()} ({do_flow})"
+    pump_in_str = f"{status.pump_in.upper()} ({pi_flow})"
 
-    draw_block(
-        inner_x,
-        row1_y,
-        "Evap Flow",
-        flow_str,
-        f"Time {ts_str}",
-        value_size_override=value_emphasis_size,
+    last_fire_str = "--:--"
+    last_fire_eta = "--/-- --:--"
+    if status.last_fire_min is not None:
+        total_min = max(0, status.last_fire_min)
+        hrs = int(total_min // 60)
+        mins = int(total_min % 60)
+        last_fire_str = f"{hrs:02d}:{mins:02d}"
+        base_dt = parse_iso(status.sample_ts) or datetime.now(timezone.utc)
+        eta_dt = base_dt + timedelta(minutes=total_min)
+        last_fire_eta = eta_dt.strftime("%m/%d %H:%M")
+    last_fire_value = f"{last_fire_str} ({last_fire_eta})"
+
+    stack_temp_str = f"{status.stack_temp_f:.1f}F" if status.stack_temp_f is not None else "–"
+
+    last_update_str = "--:--"
+    sample_dt = parse_iso(status.sample_ts)
+    if sample_dt:
+        elapsed_sec = int((datetime.now(timezone.utc) - sample_dt).total_seconds())
+        if elapsed_sec < 0:
+            elapsed_sec = 0
+        mins, secs = divmod(elapsed_sec, 60)
+        last_update_str = f"{mins:02d}:{secs:02d}"
+
+    left_labels = ["Evap flow:", "Draw off:", "Pump in:"]
+    left_values = [flow_str, draw_off_str, pump_in_str]
+    right_labels = ["Last fire:", "Stack temp:", "Last Update:"]
+    right_values = [last_fire_value, stack_temp_str, last_update_str]
+
+    left_col_width = max(1, left_col_x1 - left_col_x0)
+    right_col_width = max(1, right_col_x1 - right_col_x0)
+    left_label_width = min(
+        max(measure_text(label, row_size) for label in left_labels),
+        int(left_col_width * 0.45),
     )
-    draw_block(
-        inner_x + col_w + col_gap,
-        row1_y,
-        "Draw Off",
-        status.draw_off.upper(),
-        do_flow,
+    right_label_width = min(
+        max(measure_text(label, row_size) for label in right_labels),
+        int(right_col_width * 0.45),
     )
-    draw_block(
-        inner_x + (col_w + col_gap) * 2,
-        row1_y,
-        "Pump In",
-        status.pump_in.upper(),
-        pi_flow,
-    )
-    draw_block(
-        inner_x,
-        row2_y,
-        "Last Fire In",
-        last_fire_str,
-        value_size_override=last_fire_size,
-    )
-    draw_block(
-        inner_x + row2_col_w + col_gap,
-        row2_y,
-        "Stack Temp",
-        stack_temp_str,
-    )
+    left_label_right = left_col_x0 + left_label_width
+    right_label_right = right_col_x0 + right_label_width
+    left_value_x = left_label_right + label_gap
+    right_value_x = right_label_right + label_gap
+
+    start_y = rect.y + pad
+    for idx, (label, value) in enumerate(zip(left_labels, left_values)):
+        y = start_y + idx * row_step
+        label_x = left_label_right - measure_text(label, row_size)
+        draw_text(surface, label, (label_x, y), size=row_size, color=TEXT_MUTED)
+        draw_text(surface, value, (left_value_x, y), size=row_size, color=TEXT_MAIN, bold=True)
+
+    for idx, (label, value) in enumerate(zip(right_labels, right_values)):
+        y = start_y + idx * row_step
+        label_x = right_label_right - measure_text(label, row_size)
+        draw_text(surface, label, (label_x, y), size=row_size, color=TEXT_MUTED)
+        draw_text(surface, value, (right_value_x, y), size=row_size, color=TEXT_MAIN, bold=True)
 
 
 def disable_screen_blanking():
@@ -559,7 +578,7 @@ def main():
         screen.fill(BACKGROUND)
         outer_margin = scale_ui(6)
         section_gap = scale_ui(6)
-        status_height = scale_ui(120)
+        status_height = scale_ui(80)
         chart_rect = pygame.Rect(
             outer_margin,
             outer_margin,
