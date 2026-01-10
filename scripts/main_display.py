@@ -65,8 +65,8 @@ AXIS_GRID = (205, 205, 205)
 AXIS_LABEL = (30, 30, 30)
 COLORS = {
     "---": (120, 120, 120),      # gray
-    "brookside": (0, 114, 178),  # blue (colorblind-friendly)
-    "roadside": (213, 94, 0),    # orange (colorblind-friendly)
+    "brookside": (0, 90, 140),   # blue (darker)
+    "roadside": (180, 70, 0),    # orange (darker)
 }
 
 try:
@@ -469,7 +469,7 @@ def draw_status(surface, rect, status: EvapStatus):
         key = name.strip().lower()
         return {"brookside": "Brook", "roadside": "Road"}.get(key, name.strip().title())
 
-    flow_str = format_flow(status.evap_flow, with_space=False)
+    flow_str = format_flow(status.evap_flow, with_space=True)
     do_flow = format_flow(status.draw_off_flow, with_space=True)
     pi_flow = format_flow(status.pump_in_flow, with_space=True)
     draw_off_name = short_tank(status.draw_off)
@@ -477,19 +477,17 @@ def draw_status(surface, rect, status: EvapStatus):
     draw_off_str = f"{draw_off_name} ({do_flow})"
     pump_in_str = f"{pump_in_name} ({pi_flow})"
 
-    last_fire_str = "--:--"
-    last_fire_eta = "--/-- --:--"
+    last_fire_time = "--:-- --"
+    last_fire_hours = "--.-hrs"
     if status.last_fire_min is not None:
         total_min = max(0, status.last_fire_min)
-        hrs = int(total_min // 60)
-        mins = int(total_min % 60)
-        last_fire_str = f"{hrs:02d}:{mins:02d}"
         base_dt = parse_iso(status.sample_ts) or datetime.now(timezone.utc)
         eta_dt = base_dt + timedelta(minutes=total_min)
-        last_fire_eta = eta_dt.strftime("%m/%d %H:%M")
-    last_fire_value = f"{last_fire_str} ({last_fire_eta})"
+        last_fire_time = eta_dt.strftime("%I:%M %p")
+        last_fire_hours = f"{(total_min / 60.0):.1f}hrs"
+    last_fire_value = f"{last_fire_time} ({last_fire_hours})"
 
-    stack_temp_str = f"{status.stack_temp_f:.1f}F" if status.stack_temp_f is not None else "–"
+    stack_temp_str = f"{status.stack_temp_f:.1f} F" if status.stack_temp_f is not None else "–"
 
     last_update_str = "--:--"
     sample_dt = parse_iso(status.sample_ts)
