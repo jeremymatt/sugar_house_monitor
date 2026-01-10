@@ -439,7 +439,6 @@ def draw_status(surface, rect, status: EvapStatus):
     row_size = 19
     row_gap = scale_ui(2)
     row_step = scale_font(row_size) + row_gap
-    label_gap = scale_ui(6)
 
     divider_x = rect.centerx
     divider_top = rect.y + pad
@@ -452,18 +451,31 @@ def draw_status(surface, rect, status: EvapStatus):
         max(1, scale_ui(1)),
     )
 
-    inner_left = rect.x + pad
-    inner_right = rect.right - pad
-    left_col_x0 = inner_left
-    left_col_x1 = divider_x - scale_ui(6)
+    left_col_x0 = rect.x + pad
     right_col_x0 = divider_x + scale_ui(6)
-    right_col_x1 = inner_right
 
-    flow_str = f"{status.evap_flow:.1f} gph" if status.evap_flow is not None else "–"
-    do_flow = f"{status.draw_off_flow:.1f} gph" if status.draw_off_flow is not None else "–"
-    pi_flow = f"{status.pump_in_flow:.1f} gph" if status.pump_in_flow is not None else "–"
-    draw_off_str = f"{status.draw_off.upper()} ({do_flow})"
-    pump_in_str = f"{status.pump_in.upper()} ({pi_flow})"
+    def format_flow(val: Optional[float], with_space: bool = True) -> str:
+        if val is None:
+            return "–"
+        try:
+            num = int(round(float(val)))
+        except (TypeError, ValueError):
+            return "–"
+        return f"{num} gph" if with_space else f"{num}gph"
+
+    def short_tank(name: str) -> str:
+        if not name or name == "---":
+            return "---"
+        key = name.strip().lower()
+        return {"brookside": "Brook", "roadside": "Road"}.get(key, name.strip().title())
+
+    flow_str = format_flow(status.evap_flow, with_space=False)
+    do_flow = format_flow(status.draw_off_flow, with_space=True)
+    pi_flow = format_flow(status.pump_in_flow, with_space=True)
+    draw_off_name = short_tank(status.draw_off)
+    pump_in_name = short_tank(status.pump_in)
+    draw_off_str = f"{draw_off_name} ({do_flow})"
+    pump_in_str = f"{pump_in_name} ({pi_flow})"
 
     last_fire_str = "--:--"
     last_fire_eta = "--/-- --:--"
@@ -488,38 +500,25 @@ def draw_status(surface, rect, status: EvapStatus):
         mins, secs = divmod(elapsed_sec, 60)
         last_update_str = f"{mins:02d}:{secs:02d}"
 
-    left_labels = ["Evap flow:", "Draw off:", "Pump in:"]
-    left_values = [flow_str, draw_off_str, pump_in_str]
-    right_labels = ["Last fire:", "Stack temp:", "Last Update:"]
-    right_values = [last_fire_value, stack_temp_str, last_update_str]
-
-    left_col_width = max(1, left_col_x1 - left_col_x0)
-    right_col_width = max(1, right_col_x1 - right_col_x0)
-    left_label_width = min(
-        max(measure_text(label, row_size) for label in left_labels),
-        int(left_col_width * 0.45),
-    )
-    right_label_width = min(
-        max(measure_text(label, row_size) for label in right_labels),
-        int(right_col_width * 0.45),
-    )
-    left_label_right = left_col_x0 + left_label_width
-    right_label_right = right_col_x0 + right_label_width
-    left_value_x = left_label_right + label_gap
-    right_value_x = right_label_right + label_gap
+    left_rows = [
+        f"Evap Flow: {flow_str}",
+        f"Draw off: {draw_off_str}",
+        f"Pump in: {pump_in_str}",
+    ]
+    right_rows = [
+        f"Last fire: {last_fire_value}",
+        f"Stack temp: {stack_temp_str}",
+        f"Last Update: {last_update_str}",
+    ]
 
     start_y = rect.y + pad
-    for idx, (label, value) in enumerate(zip(left_labels, left_values)):
+    for idx, text in enumerate(left_rows):
         y = start_y + idx * row_step
-        label_x = left_label_right - measure_text(label, row_size)
-        draw_text(surface, label, (label_x, y), size=row_size, color=TEXT_MUTED)
-        draw_text(surface, value, (left_value_x, y), size=row_size, color=TEXT_MAIN, bold=True)
+        draw_text(surface, text, (left_col_x0, y), size=row_size, color=TEXT_MAIN, bold=True)
 
-    for idx, (label, value) in enumerate(zip(right_labels, right_values)):
+    for idx, text in enumerate(right_rows):
         y = start_y + idx * row_step
-        label_x = right_label_right - measure_text(label, row_size)
-        draw_text(surface, label, (label_x, y), size=row_size, color=TEXT_MUTED)
-        draw_text(surface, value, (right_value_x, y), size=row_size, color=TEXT_MAIN, bold=True)
+        draw_text(surface, text, (right_col_x0, y), size=row_size, color=TEXT_MAIN, bold=True)
 
 
 def disable_screen_blanking():
