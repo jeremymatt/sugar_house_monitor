@@ -1737,6 +1737,8 @@ def main() -> None:
         LOGGER.error("Failed to load tank_pi env: %s", exc)
         sys.exit(1)
 
+    TVF.set_sample_process_timing(str_to_bool(env.get("DEBUG_SAMPLE_PROCESS_TIMING"), False))
+
     app = TankPiApp(env)
 
     def handle_signal(sig, frame):

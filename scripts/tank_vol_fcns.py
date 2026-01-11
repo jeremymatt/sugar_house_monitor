@@ -61,6 +61,12 @@ SERIAL_PORTS = {
 DEFAULT_HISTORY_HOURS = 6
 HISTORY_PRUNE_INTERVAL = dt.timedelta(hours=1)
 SAMPLE_TIMING_LOG = Path(__file__).resolve().parents[1] / "data" / "sample_process_time.csv"
+DEBUG_SAMPLE_PROCESS_TIMING = False
+
+
+def set_sample_process_timing(enabled: bool) -> None:
+    global DEBUG_SAMPLE_PROCESS_TIMING
+    DEBUG_SAMPLE_PROCESS_TIMING = bool(enabled)
 
 queue_dict = {}
 for tank_name in tank_names:
@@ -272,6 +278,8 @@ def _log_sample_timing(
     append_seconds: Optional[float] = None,
     prune_seconds: Optional[float] = None,
 ) -> None:
+    if not DEBUG_SAMPLE_PROCESS_TIMING:
+        return
     if not payloads:
         return
     timestamps = []

@@ -1,0 +1,7 @@
+numpy==1.26.4
+pandas==2.2.2
+hampel==1.0.2
+adafruit-blinka==8.47.0
+adafruit-circuitpython-charlcd==3.4.8
+pyserial==3.5
+RPi.GPIO==0.7.1
