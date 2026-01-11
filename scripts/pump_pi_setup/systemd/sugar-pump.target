@@ -1,0 +1,6 @@
+[Unit]
+Description=Sugar House Pump Stack
+Wants=sugar-adc.service sugar-pump-controller.service sugar-vacuum.service sugar-uploader.service
+
+[Install]
+WantedBy=multi-user.target

@@ -4,43 +4,35 @@ This folder documents a multi-process layout so SPI access is centralized and ea
 
 ## Safety and state machine behavior
 - The pump controller remains the only authority for pump on/off decisions.
-- Incoherent or stale sensor data must be handled inside the pump controller: set fatal, force pump off, keep the process running.
-- Supervisors should restart only on crash or hang, not on "fatal" or "warning" states.
-- If the ADC service stops updating, the pump controller should treat samples as stale and keep the pump off until samples resume or an operator intervenes.
+- Incoherent or stale sensor data is handled inside the pump controller: it forces the pump off and escalates to fatal after `ADC_STALE_FATAL_SECONDS`.
+- Supervisors restart only on crash or hang, not on "fatal" or "warning" states.
+- If the ADC service stops updating, the pump controller treats samples as stale and keeps the pump off until samples resume or an operator intervenes.
 
 ## Recommended supervision model
-Systemd can supervise each process directly. A custom supervisor script is optional, but it adds a single point of failure because all children die if it crashes.
+Systemd supervises each process directly. A custom supervisor script is optional, but it adds a single point of failure because all children die if it crashes.
 
 ## Service layout
-- sugar-adc.service: owns MCP3008 and publishes latest samples (socket, shared memory, or a small DB).
-- sugar-pump-controller.service: reads cached samples and drives the relay + state machine.
-- sugar-vacuum.service: computes slow vacuum averages from cached samples.
-- sugar-uploader.service: uploads pump events, vacuum readings, and error logs.
+- `sugar-adc.service`: owns MCP3008 and publishes cached samples (default cache path: `/dev/shm/pump_adc_cache.json`, override with `ADC_CACHE_PATH`).
+- `sugar-pump-controller.service`: reads cached samples and drives the relay + state machine.
+- `sugar-vacuum.service`: computes slow vacuum averages from cached samples.
+- `sugar-uploader.service`: uploads pump events, vacuum readings, and error logs.
 
-## Example unit files
-These ExecStart paths assume new entry points named below. Update to match the actual scripts once they exist.
-
-### /etc/systemd/system/sugar-adc.service
-```ini
-[Unit]
-Description=Sugar House ADC Service
-After=network.target
-
-[Service]
-Type=simple
-User=pump
-WorkingDirectory=/home/pump/sugar_house_monitor
-Environment=PYTHONUNBUFFERED=1
-Environment=SUGAR_CONFIG_DIR=/home/pump/sugar_house_monitor/config
-ExecStart=/home/pump/.venv/bin/python /home/pump/sugar_house_monitor/scripts/adc_service.py
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
+## Quick start
+Production mode (enable auto-restart):
+```bash
+sudo /home/pump/sugar_house_monitor/scripts/pump_pi_setup/systemd_setup.sh -on
 ```
 
-### /etc/systemd/system/sugar-pump-controller.service
+Testing mode (disable auto-restart, run manually):
+```bash
+sudo /home/pump/sugar_house_monitor/scripts/pump_pi_setup/systemd_setup.sh -off
+python /home/pump/sugar_house_monitor/scripts/main_pump.py
+```
+
+## Unit templates
+Unit templates live in `scripts/pump_pi_setup/systemd/`. The `systemd_setup.sh` script installs them into `/etc/systemd/system` and fills in the repo path, user, venv path, and log location.
+
+### Example unit file
 ```ini
 [Unit]
 Description=Sugar House Pump Controller
@@ -55,71 +47,16 @@ Environment=SUGAR_CONFIG_DIR=/home/pump/sugar_house_monitor/config
 ExecStart=/home/pump/.venv/bin/python /home/pump/sugar_house_monitor/scripts/pump_controller.py
 Restart=always
 RestartSec=2
+StandardOutput=append:/home/pump/pump_controller.log
+StandardError=append:/home/pump/pump_controller.log
 
 [Install]
 WantedBy=multi-user.target
-```
-
-### /etc/systemd/system/sugar-vacuum.service
-```ini
-[Unit]
-Description=Sugar House Vacuum Sampler
-After=sugar-adc.service
-Requires=sugar-adc.service
-
-[Service]
-Type=simple
-User=pump
-WorkingDirectory=/home/pump/sugar_house_monitor
-Environment=PYTHONUNBUFFERED=1
-Environment=SUGAR_CONFIG_DIR=/home/pump/sugar_house_monitor/config
-ExecStart=/home/pump/.venv/bin/python /home/pump/sugar_house_monitor/scripts/vacuum_service.py
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### /etc/systemd/system/sugar-uploader.service
-```ini
-[Unit]
-Description=Sugar House Upload Worker
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=pump
-WorkingDirectory=/home/pump/sugar_house_monitor
-Environment=PYTHONUNBUFFERED=1
-Environment=SUGAR_CONFIG_DIR=/home/pump/sugar_house_monitor/config
-ExecStart=/home/pump/.venv/bin/python /home/pump/sugar_house_monitor/scripts/upload_service.py
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### /etc/systemd/system/sugar-pump.target
-```ini
-[Unit]
-Description=Sugar House Pump Stack
-Wants=sugar-adc.service sugar-pump-controller.service sugar-vacuum.service sugar-uploader.service
-
-[Install]
-WantedBy=multi-user.target
-```
-
-## Enable the services
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now sugar-pump.target
 ```
 
 ## Logs
 ```bash
+tail -f ~/pump_controller.log
 journalctl -u sugar-pump-controller.service -f
 ```
 

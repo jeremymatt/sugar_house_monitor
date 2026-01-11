@@ -11,12 +11,15 @@ Responsibilities:
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import math
+import os
 import queue
 import signal
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -42,6 +45,8 @@ ADC_REFERENCE_VOLTAGE = 5.0
 ADC_BOOL_THRESHOLD_V = 1.0
 ADC_DEBOUNCE_SAMPLES = 3
 ADC_DEBOUNCE_DELAY = 0.01  # seconds between debounce samples
+ADC_STALE_SECONDS = 2.0
+ADC_STALE_FATAL_SECONDS = 10.0
 PUMP_CONTROL_PIN = 17  # BCM pin for optical relay control
 HANDSHAKE_INTERVAL_SECONDS = 150  # pump heartbeat cadence
 UPLOAD_BATCH_SIZE = 1
@@ -118,6 +123,10 @@ def env_bool(env: Dict[str, str], key: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+class ADCStaleError(RuntimeError):
+    pass
+
+
 class PumpDatabase:
     def __init__(self, path: Path):
         self.path = path
@@ -132,12 +141,18 @@ class PumpDatabase:
 
         db_exists = self.path.exists()
         try:
-            self.conn = sqlite3.connect(self.path, check_same_thread=False)
+            self.conn = sqlite3.connect(self.path, check_same_thread=False, timeout=10)
         except Exception as exc:
             raise RuntimeError(f"Failed to open pump DB at {self.path}: {exc}") from exc
         LOGGER.info("Opened pump DB at %s (%s)", self.path, "existing" if db_exists else "new")
 
         self.conn.row_factory = sqlite3.Row
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+            self.conn.execute("PRAGMA busy_timeout=5000")
+        except Exception as exc:
+            LOGGER.warning("Failed to set sqlite pragmas: %s", exc)
         with self.conn:
             self.conn.execute(
                 """
@@ -444,6 +459,7 @@ class PumpState:
     last_error_log_time: Optional[float] = None
     error_started_at: Optional[float] = None
     last_error_count_logged: Optional[int] = None
+    adc_stale_started_at: Optional[float] = None
 
 
 class PumpController:
@@ -453,12 +469,16 @@ class PumpController:
         error_writer: LocalErrorWriter,
         error_threshold: int,
         loop_delay: float,
+        adc_stale_fatal_seconds: Optional[float] = None,
         debug_signal_log: bool = False,
     ):
         self.db = db
         self.error_writer = error_writer
         self.state = PumpState()
         self.error_threshold = error_threshold
+        self.adc_stale_fatal_seconds = (
+            float(adc_stale_fatal_seconds) if adc_stale_fatal_seconds is not None else float(error_threshold)
+        )
         self.loop_delay = loop_delay
         self.debug_signal_log = debug_signal_log
         self.lock = threading.Lock()
@@ -499,8 +519,14 @@ class PumpController:
         if not should_log:
             return
         payload = {"source": "pump_pi", "message": message, "source_timestamp": iso_now()}
-        self.db.insert_error_log(payload)
-        self.error_writer.append(message)
+        try:
+            self.db.insert_error_log(payload)
+        except Exception as exc:
+            LOGGER.warning("Failed to persist error log: %s", exc)
+        try:
+            self.error_writer.append(message)
+        except Exception as exc:
+            LOGGER.warning("Failed to write local error log: %s", exc)
 
     def _handle_fatal(self) -> None:
         if not self.state.fatal_error:
@@ -534,9 +560,29 @@ class PumpController:
             if (now - self.state.error_started_at) >= self.error_threshold:
                 self._handle_fatal()
 
+    def _increment_adc_stale(self, message: str) -> None:
+        now = time.time()
+        if self.state.adc_stale_started_at is None:
+            self.state.adc_stale_started_at = now
+        self._record_error(message)
+        prev_state = self.state.current_state
+        if prev_state in {"pumping", "manual_pumping"}:
+            self.state.current_state = "not_pumping"
+            self._pump_stop(prev_state)
+        if (
+            self.state.adc_stale_started_at is not None
+            and (now - self.state.adc_stale_started_at) >= self.adc_stale_fatal_seconds
+        ):
+            self._handle_fatal()
+
+    def _handle_adc_stale(self, message: str) -> None:
+        with self.lock:
+            self._increment_adc_stale(message)
+
     def _reset_error_timer(self) -> None:
         self.state.error_started_at = None
         self.state.last_error_count_logged = None
+        self.state.adc_stale_started_at = None
 
     def _tank_full_event_handling(self, event_type: str) -> None:
         now = time.time()
@@ -610,6 +656,8 @@ class PumpController:
         while not self.stop_event.is_set():
             try:
                 signals, volts = reader.read_signals(return_volts=True)
+                with self.lock:
+                    self.state.adc_stale_started_at = None
                 self._last_signals = signals
                 now = time.time()
                 if any(signals.values()) or self.debug_signal_log:
@@ -634,6 +682,9 @@ class PumpController:
                 self._apply_signals(signals)
                 if self.state.current_state != prev_state:
                     LOGGER.info("State transition: %s -> %s", prev_state, self.state.current_state)
+            except ADCStaleError as exc:
+                LOGGER.warning("ADC data stale: %s", exc)
+                self._handle_adc_stale(str(exc))
             except Exception as exc:  # pragma: no cover
                 LOGGER.exception("Signal loop error: %s", exc)
                 self._record_error(f"Signal loop error: {exc}")
@@ -1056,6 +1107,8 @@ class VacuumSampler:
                     avg_inhg = float(np.mean([r["inhg"] for r in readings]))
                     payload = {"reading_inhg": avg_inhg, "source_timestamp": iso_now()}
                     self.db.insert_vacuum_reading(payload)
+            except ADCStaleError as exc:
+                LOGGER.warning("Vacuum loop waiting for ADC cache: %s", exc)
             except Exception as exc:  # pragma: no cover
                 LOGGER.exception("Vacuum loop error: %s", exc)
             self.stop_event.wait(self.refresh_rate)
@@ -1072,6 +1125,7 @@ class PumpApp:
         self.loop_delay = env_float(env, "LOOP_DELAY", LOOP_DELAY)
         self.vacuum_refresh_rate = env_float(env, "VACUUM_REFRESH_RATE", VACUUM_REFRESH_RATE)
         self.pump_control_pin = env_int(env, "PUMP_CONTROL_PIN", PUMP_CONTROL_PIN)
+        self.adc_stale_fatal_seconds = env_float(env, "ADC_STALE_FATAL_SECONDS", ADC_STALE_FATAL_SECONDS)
         debug_signal_log = env_bool(env, "DEBUG_SIGNAL_LOG", DEBUG_SIGNAL_LOG)
         self.reader = MCP3008Reader(
             adc_threshold_v=env_float(env, "ADC_BOOL_THRESHOLD_V", ADC_BOOL_THRESHOLD_V),
@@ -1085,6 +1139,7 @@ class PumpApp:
             error_writer=self.error_writer,
             error_threshold=self.error_threshold,
             loop_delay=self.loop_delay,
+            adc_stale_fatal_seconds=self.adc_stale_fatal_seconds,
             debug_signal_log=debug_signal_log,
         )
         self.relay = PumpRelay(self.pump_control_pin)
@@ -1138,7 +1193,7 @@ class PumpApp:
                 self._restart_thread("vacuum")
 
 
-def main() -> None:
+def run_monolith() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -1170,6 +1225,72 @@ def main() -> None:
             time.sleep(1)
     finally:
         app.shutdown()
+
+def run_test_mode() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    script_dir = Path(__file__).resolve().parent
+    services = [
+        ("adc_service", script_dir / "adc_service.py"),
+        ("pump_controller", script_dir / "pump_controller.py"),
+        ("vacuum_service", script_dir / "vacuum_service.py"),
+        ("upload_service", script_dir / "upload_service.py"),
+    ]
+    env = os.environ.copy()
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    processes: List[tuple[str, subprocess.Popen]] = []
+
+    def stop_all() -> None:
+        for _, proc in processes:
+            if proc.poll() is None:
+                proc.terminate()
+        for _, proc in processes:
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+
+    def handle_signal(sig, frame):
+        LOGGER.info("Received signal %s, shutting down.", sig)
+        stop_all()
+        sys.exit(0)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, handle_signal)
+
+    for name, path in services:
+        proc = subprocess.Popen([sys.executable, str(path)], env=env)
+        processes.append((name, proc))
+        LOGGER.info("Started %s (%s)", name, path)
+
+    try:
+        while True:
+            for name, proc in processes:
+                code = proc.poll()
+                if code is not None:
+                    LOGGER.error("%s exited with code %s; shutting down.", name, code)
+                    stop_all()
+                    sys.exit(code if code != 0 else 1)
+            time.sleep(1)
+    finally:
+        stop_all()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Pump Pi runner")
+    parser.add_argument(
+        "--monolith",
+        action="store_true",
+        help="Run the legacy single-process pump app (debug only).",
+    )
+    args = parser.parse_args()
+    if args.monolith:
+        run_monolith()
+    else:
+        run_test_mode()
 
 
 if __name__ == "__main__":
