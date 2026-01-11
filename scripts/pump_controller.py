@@ -71,7 +71,8 @@ class ControllerService:
         )
         self.pump_control_pin = env_int(env, "PUMP_CONTROL_PIN", PUMP_CONTROL_PIN)
         self.reader = CachedSignalReader(resolve_cache_path(env), self.adc_stale_seconds)
-        debug_signal_log = env_bool(env, "DEBUG_SIGNAL_LOG", DEBUG_SIGNAL_LOG)
+        verbose_log = env_bool(env, "VERBOSE", False)
+        debug_signal_log = verbose_log or env_bool(env, "DEBUG_SIGNAL_LOG", DEBUG_SIGNAL_LOG)
         self.controller = PumpController(
             db=self.db,
             error_writer=self.error_writer,

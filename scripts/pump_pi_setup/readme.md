@@ -59,6 +59,7 @@ WantedBy=multi-user.target
 tail -f ~/pump_controller.log
 journalctl -u sugar-pump-controller.service -f
 ```
+Log rotation is installed by `systemd_setup.sh -on` at `/etc/logrotate.d/sugar-pump` (2MB, keep 5).
 
 ## Environment setup
 1) Copy the pump config template and edit it:
@@ -70,6 +71,9 @@ cp /home/pump/sugar_house_monitor/config/example/pump_pi.env /home/pump/sugar_ho
 ```bash
 /home/pump/sugar_house_monitor/scripts/pump_pi_setup/setup_environment.sh
 ```
+
+## Debug logging
+Set `VERBOSE=true` in `config/pump_pi.env` to force periodic signal summaries even when all inputs are low.
 
 ## Optional hard-stop on service exit
 If you want an explicit GPIO off on service stop, add this to the pump controller unit:

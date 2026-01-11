@@ -660,7 +660,7 @@ class PumpController:
                     self.state.adc_stale_started_at = None
                 self._last_signals = signals
                 now = time.time()
-                if any(signals.values()) or self.debug_signal_log:
+                if self.debug_signal_log:
                     if (
                         self._last_signal_log is None
                         or signals != self._last_signal_log
@@ -892,6 +892,8 @@ class UploadWorker:
         self.thread = threading.Thread(target=self._run, daemon=True)
         now = time.monotonic()
         self._last_pump_handshake = now
+        self._last_pump_upload_attempt = now
+        self._last_pump_pending = 0
         self._next_prune = now if self.retention_days > 0 and self.prune_interval > 0 else None
 
     def start(self) -> None:
@@ -924,19 +926,28 @@ class UploadWorker:
         self._next_prune = now + self.prune_interval
 
     def _run(self) -> None:
-        next_pump = time.monotonic()
         next_vacuum = time.monotonic()
         next_error = time.monotonic()
         while not self.stop_event.wait(1):
             now = time.monotonic()
-            if now >= next_pump:
-                sent = self._upload_pump()
-                if sent:
-                    self._last_pump_handshake = now
-                elif now - self._last_pump_handshake >= self.handshake_interval:
+            try:
+                pump_pending = self.db.count_unsent("pump_events")
+            except Exception as exc:  # pragma: no cover - defensive
+                LOGGER.warning("Unable to inspect pump queue: %s", exc)
+                pump_pending = 0
+
+            if pump_pending > 0:
+                immediate = self._last_pump_pending == 0
+                if immediate or (now - self._last_pump_upload_attempt) >= self.pump_interval:
+                    sent = self._upload_pump()
+                    self._last_pump_upload_attempt = now
+                    if sent:
+                        self._last_pump_handshake = now
+            else:
+                if now - self._last_pump_handshake >= self.handshake_interval:
                     self._send_handshake()
                     self._last_pump_handshake = now
-                next_pump = now + self.pump_interval
+            self._last_pump_pending = pump_pending
             if now >= next_vacuum:
                 self._upload_vacuum()
                 next_vacuum = now + self.vacuum_interval
@@ -1126,7 +1137,8 @@ class PumpApp:
         self.vacuum_refresh_rate = env_float(env, "VACUUM_REFRESH_RATE", VACUUM_REFRESH_RATE)
         self.pump_control_pin = env_int(env, "PUMP_CONTROL_PIN", PUMP_CONTROL_PIN)
         self.adc_stale_fatal_seconds = env_float(env, "ADC_STALE_FATAL_SECONDS", ADC_STALE_FATAL_SECONDS)
-        debug_signal_log = env_bool(env, "DEBUG_SIGNAL_LOG", DEBUG_SIGNAL_LOG)
+        verbose_log = env_bool(env, "VERBOSE", False)
+        debug_signal_log = verbose_log or env_bool(env, "DEBUG_SIGNAL_LOG", DEBUG_SIGNAL_LOG)
         self.reader = MCP3008Reader(
             adc_threshold_v=env_float(env, "ADC_BOOL_THRESHOLD_V", ADC_BOOL_THRESHOLD_V),
             reference_voltage=env_float(env, "ADC_REFERENCE_VOLTAGE", ADC_REFERENCE_VOLTAGE),
