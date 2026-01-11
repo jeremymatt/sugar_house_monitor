@@ -1,7 +1,9 @@
 #include <Wire.h>
+// install the liquidcrystal i2c library by Frank de Brabander
 #include <Adafruit_I2CDevice.h>
 #include <Adafruit_I2CRegister.h>
 #include "Adafruit_MCP9600.h"
+#include <LiquidCrystal_I2C.h>
 #include <WiFiS3.h>
 #include <ArduinoHttpClient.h>
 #include <time.h>
@@ -34,7 +36,10 @@
 #define SHM_WIFI_RETRY_MS 500UL
 #endif
 #ifndef SHM_WIFI_MAX_ATTEMPTS
-#define SHM_WIFI_MAX_ATTEMPTS 40
+#define SHM_WIFI_MAX_ATTEMPTS 10
+#endif
+#ifndef SHM_WINDOW_SIZE_MINUTES
+#define SHM_WINDOW_SIZE_MINUTES 15
 #endif
 
 const char WIFI_SSID[] = SHM_WIFI_SSID;
@@ -52,6 +57,13 @@ const unsigned long SENSOR_RECOVERY_COOLDOWN_MS = 30000UL;
 const int HTTP_FAILURE_THRESHOLD = 3;
 const unsigned long WIFI_RECOVERY_COOLDOWN_MS = 30000UL;
 const int MCP_REINIT_RETRIES = 3;
+const int window_size_minutes = SHM_WINDOW_SIZE_MINUTES;
+const int WINDOW_BUFFER_MINUTES = SHM_WINDOW_SIZE_MINUTES * 4;
+const unsigned long MINUTE_MS = 60000UL;
+
+const uint8_t LCD_I2C_ADDRESS = 0x27;
+const uint8_t LCD_COLUMNS = 20;
+const uint8_t LCD_ROWS = 4;
 
 #if SHM_USE_TLS
 WiFiSSLClient netClient;
@@ -60,6 +72,8 @@ WiFiClient netClient;
 #endif
 
 Adafruit_MCP9600 mcp;
+LiquidCrystal_I2C lcd(LCD_I2C_ADDRESS, LCD_COLUMNS, LCD_ROWS);
+bool lcdReady = false;
 
 /* Set and print ambient resolution */
 Ambient_Resolution ambientRes = RES_ZERO_POINT_0625;
@@ -69,9 +83,155 @@ int sensorFailureCount = 0;
 unsigned long lastRecoveryMs = 0;
 int httpFailureCount = 0;
 unsigned long lastWifiRecoveryMs = 0;
+float stackMinuteSums[WINDOW_BUFFER_MINUTES];
+uint16_t minuteSampleCounts[WINDOW_BUFFER_MINUTES];
+int minuteWriteIndex = 0;
+int minutesStored = 0;
+float currentMinuteStackSum = 0.0f;
+uint16_t currentMinuteCount = 0;
+unsigned long currentMinuteStartMs = 0;
 
 inline float C_to_F(float c) {
   return c * 9.0 / 5.0 + 32.0;
+}
+
+bool i2cDevicePresent(uint8_t address) {
+  Wire.beginTransmission(address);
+  return Wire.endTransmission() == 0;
+}
+
+void initLcd() {
+  if (!i2cDevicePresent(LCD_I2C_ADDRESS)) {
+    Serial.println("LCD not found; continuing without display");
+    lcdReady = false;
+    return;
+  }
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  lcdReady = true;
+  Serial.println("LCD initialized");
+}
+
+void storeMinuteBucket() {
+  stackMinuteSums[minuteWriteIndex] = currentMinuteStackSum;
+  minuteSampleCounts[minuteWriteIndex] = currentMinuteCount;
+  minuteWriteIndex = (minuteWriteIndex + 1) % WINDOW_BUFFER_MINUTES;
+  if (minutesStored < WINDOW_BUFFER_MINUTES) {
+    minutesStored += 1;
+  }
+  currentMinuteStackSum = 0.0f;
+  currentMinuteCount = 0;
+}
+
+void advanceMinuteBuckets(unsigned long nowMs) {
+  if (currentMinuteStartMs == 0) {
+    currentMinuteStartMs = nowMs;
+    return;
+  }
+  while (nowMs - currentMinuteStartMs >= MINUTE_MS) {
+    storeMinuteBucket();
+    currentMinuteStartMs += MINUTE_MS;
+  }
+}
+
+void recordStackSample(float stackF) {
+  currentMinuteStackSum += stackF;
+  currentMinuteCount += 1;
+}
+
+void getMinuteBucket(int offsetMinutes, float &sum, uint16_t &count) {
+  if (offsetMinutes == 0) {
+    sum = currentMinuteStackSum;
+    count = currentMinuteCount;
+    return;
+  }
+  if (offsetMinutes > minutesStored) {
+    sum = 0.0f;
+    count = 0;
+    return;
+  }
+  int index = minuteWriteIndex - offsetMinutes;
+  if (index < 0) {
+    index += WINDOW_BUFFER_MINUTES;
+  }
+  sum = stackMinuteSums[index];
+  count = minuteSampleCounts[index];
+}
+
+float windowAverageStackF(int startOffsetMinutes) {
+  float sum = 0.0f;
+  uint32_t count = 0;
+  for (int i = 0; i < window_size_minutes; i++) {
+    float bucketSum = 0.0f;
+    uint16_t bucketCount = 0;
+    getMinuteBucket(startOffsetMinutes + i, bucketSum, bucketCount);
+    sum += bucketSum;
+    count += bucketCount;
+  }
+  if (count == 0) {
+    return NAN;
+  }
+  return sum / static_cast<float>(count);
+}
+
+int tempForDisplay(float tempF) {
+  if (isnan(tempF)) {
+    return 0;
+  }
+  long rounded = (tempF >= 0.0f) ? static_cast<long>(tempF + 0.5f)
+                                 : static_cast<long>(tempF - 0.5f);
+  if (rounded > 9999) {
+    rounded = 9999;
+  } else if (rounded < -999) {
+    rounded = -999;
+  }
+  return static_cast<int>(rounded);
+}
+
+void lcdPrintRow(uint8_t row, const char *text) {
+  if (!lcdReady) {
+    return;
+  }
+  lcd.setCursor(0, row);
+  lcd.print(text);
+  const int len = strlen(text);
+  for (int i = len; i < LCD_COLUMNS; i++) {
+    lcd.print(' ');
+  }
+}
+
+void updateLcd(float stackF, float ambientF,
+               float windowA, float windowB, float windowC, float windowD) {
+  if (!lcdReady) {
+    return;
+  }
+
+  char row1[LCD_COLUMNS + 1];
+  char row2[LCD_COLUMNS + 1];
+  char row3[LCD_COLUMNS + 1];
+  char row4[LCD_COLUMNS + 1];
+
+  const int ambientDisplay = tempForDisplay(ambientF);
+  const int stackDisplay = tempForDisplay(stackF);
+  const int windowADisplay = tempForDisplay(windowA);
+  const int windowBDisplay = tempForDisplay(windowB);
+  const int windowCDisplay = tempForDisplay(windowC);
+  const int windowDDisplay = tempForDisplay(windowD);
+
+  snprintf(row1, sizeof(row1), "Ambient: %04dF", ambientDisplay);
+  snprintf(row2, sizeof(row2), "Stack: %04dF", stackDisplay);
+  snprintf(row3, sizeof(row3), "%03d:%04dF||%03d:%04dF",
+           window_size_minutes, windowADisplay,
+           window_size_minutes * 2, windowBDisplay);
+  snprintf(row4, sizeof(row4), "%03d:%04dF||%03d:%04dF",
+           window_size_minutes * 3, windowCDisplay,
+           window_size_minutes * 4, windowDDisplay);
+
+  lcdPrintRow(0, row1);
+  lcdPrintRow(1, row2);
+  lcdPrintRow(2, row3);
+  lcdPrintRow(3, row4);
 }
 
 bool hasValidLocalIp(const IPAddress &ip) {
@@ -338,6 +498,8 @@ void setup()
     while (1);
   }
 
+  initLcd();
+
   connectWifi();
 
   Serial.println(F("------------------------------"));
@@ -351,6 +513,8 @@ void loop()
     return;
   }
   lastSampleMs = now;
+
+  advanceMinuteBuckets(now);
 
   float hotC  = mcp.readThermocouple();
   float coldC = mcp.readAmbient();
@@ -370,6 +534,13 @@ void loop()
   const float hotF = C_to_F(hotC);
   const float coldF = C_to_F(coldC);
 
+  recordStackSample(hotF);
+
+  const float windowA = windowAverageStackF(0);
+  const float windowB = windowAverageStackF(window_size_minutes);
+  const float windowC = windowAverageStackF(window_size_minutes * 2);
+  const float windowD = windowAverageStackF(window_size_minutes * 3);
+
   Serial.print("Stack (hot junction): ");
   Serial.print(hotF, 2);
   Serial.println(" F");
@@ -382,5 +553,6 @@ void loop()
   Serial.print(mcp.readADC() * 2);
   Serial.println(" uV");
 
+  updateLcd(hotF, coldF, windowA, windowB, windowC, windowD);
   sendTemps(hotF, coldF);
 }
