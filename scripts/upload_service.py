@@ -48,8 +48,8 @@ class UploadService:
 
     def _watchdog_loop(self) -> None:
         while not self.stop_event.wait(5):
-            if not (self.worker.thread and self.worker.thread.is_alive()):
-                self.error_writer.append("Restarting upload loop", source="upload_service")
+            if not self.worker.is_healthy():
+                self.error_writer.append("Restarting upload loops", source="upload_service")
                 self.worker.stop()
                 self.worker = UploadWorker(self.env, self.db)
                 self.worker.start()

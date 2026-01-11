@@ -889,7 +889,8 @@ class UploadWorker:
         )
         self.prune_interval = max(default_prune_interval, 60.0) if self.retention_days > 0 else 0.0
         self.stop_event = threading.Event()
-        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread: Optional[threading.Thread] = None
+        self.threads: List[threading.Thread] = []
         now = time.monotonic()
         self._last_pump_handshake = now
         self._last_pump_upload_attempt = now
@@ -897,13 +898,30 @@ class UploadWorker:
         self._next_prune = now if self.retention_days > 0 and self.prune_interval > 0 else None
 
     def start(self) -> None:
+        if self.threads and any(thread.is_alive() for thread in self.threads):
+            return
         self.flush_once(label="startup")
         self._prune_if_due(force=True)
-        self.thread.start()
+        self.stop_event.clear()
+        now = time.monotonic()
+        self._last_pump_handshake = now
+        self._last_pump_upload_attempt = now
+        self._last_pump_pending = 0
+        self._next_prune = now if self.retention_days > 0 and self.prune_interval > 0 else None
+        self.threads = [
+            threading.Thread(target=self._pump_loop, daemon=True),
+            threading.Thread(target=self._vacuum_loop, daemon=True),
+            threading.Thread(target=self._error_loop, daemon=True),
+            threading.Thread(target=self._prune_loop, daemon=True),
+        ]
+        self.thread = self.threads[0]
+        for thread in self.threads:
+            thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
-        self.thread.join(timeout=2)
+        for thread in self.threads:
+            thread.join(timeout=2)
 
     def _prune_if_due(self, force: bool = False) -> None:
         if not self.retention_days or self.retention_days <= 0 or not self.prune_interval:
@@ -925,10 +943,8 @@ class UploadWorker:
             LOGGER.warning("Database prune failed: %s", exc)
         self._next_prune = now + self.prune_interval
 
-    def _run(self) -> None:
-        next_vacuum = time.monotonic()
-        next_error = time.monotonic()
-        while not self.stop_event.wait(1):
+    def _pump_loop(self) -> None:
+        while not self.stop_event.is_set():
             now = time.monotonic()
             try:
                 pump_pending = self.db.count_unsent("pump_events")
@@ -939,7 +955,11 @@ class UploadWorker:
             if pump_pending > 0:
                 immediate = self._last_pump_pending == 0
                 if immediate or (now - self._last_pump_upload_attempt) >= self.pump_interval:
-                    sent = self._upload_pump()
+                    try:
+                        sent = self._upload_pump()
+                    except Exception as exc:  # pragma: no cover - defensive
+                        LOGGER.warning("Pump upload loop error: %s", exc)
+                        sent = False
                     self._last_pump_upload_attempt = now
                     if sent:
                         self._last_pump_handshake = now
@@ -948,13 +968,33 @@ class UploadWorker:
                     self._send_handshake()
                     self._last_pump_handshake = now
             self._last_pump_pending = pump_pending
-            if now >= next_vacuum:
+            if self.stop_event.wait(1):
+                break
+
+    def _vacuum_loop(self) -> None:
+        while not self.stop_event.is_set():
+            try:
                 self._upload_vacuum()
-                next_vacuum = now + self.vacuum_interval
-            if now >= next_error:
+            except Exception as exc:  # pragma: no cover - defensive
+                LOGGER.warning("Vacuum upload loop error: %s", exc)
+            if self.stop_event.wait(self.vacuum_interval):
+                break
+
+    def _error_loop(self) -> None:
+        while not self.stop_event.is_set():
+            try:
                 self._upload_errors()
-                next_error = now + self.error_interval
+            except Exception as exc:  # pragma: no cover - defensive
+                LOGGER.warning("Error upload loop error: %s", exc)
+            if self.stop_event.wait(self.error_interval):
+                break
+
+    def _prune_loop(self) -> None:
+        while not self.stop_event.wait(5):
             self._prune_if_due()
+
+    def is_healthy(self) -> bool:
+        return bool(self.threads) and all(thread.is_alive() for thread in self.threads)
 
     def flush_once(self, label: str = "manual") -> None:
         try:

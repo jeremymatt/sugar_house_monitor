@@ -29,6 +29,11 @@ sudo /home/pump/sugar_house_monitor/scripts/pump_pi_setup/systemd_setup.sh -off
 python /home/pump/sugar_house_monitor/scripts/main_pump.py
 ```
 
+To restart the pump controller after entering fatal error state:
+```bash
+sudo systemctl restart sugar-pump-controller.service
+```
+
 ## Unit templates
 Unit templates live in `scripts/pump_pi_setup/systemd/`. The `systemd_setup.sh` script installs them into `/etc/systemd/system` and fills in the repo path, user, venv path, and log location.
 
