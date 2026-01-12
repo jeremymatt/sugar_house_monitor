@@ -25,7 +25,7 @@ ln -s /home/dh_m958u5/sugar_house_monitor/web /path/to/wordpress_root/sugar_hous
 ```
 After creation, the symlink should look like this:
 ```
-lrwxrwxrwx 1 dh_m958u5 pg9115256 43 Nov 16 16:03 sugar_house_monitor -> /home/dh_m958u5/sugar_house_monitor/web
+lrwxrwxrwx 1 {username} {usergroup} 43 Nov 16 16:03 sugar_house_monitor -> /home/{username}/sugar_house_monitor/web
 ```
 
 ## Do you need a Python venv?
