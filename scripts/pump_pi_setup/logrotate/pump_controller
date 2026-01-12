@@ -1,0 +1,8 @@
+__LOG_PATH__ {
+  size 2M
+  rotate 5
+  missingok
+  notifempty
+  copytruncate
+  create 0644 __USER__ __GROUP__
+}

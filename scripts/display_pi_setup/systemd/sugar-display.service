@@ -1,0 +1,17 @@
+[Unit]
+Description=Sugar House Display Controller
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__REPO_ROOT__
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__VENV_PATH__/bin/python __REPO_ROOT__/scripts/main_display.py
+Restart=always
+RestartSec=2
+StandardOutput=append:__LOG_PATH__
+StandardError=append:__LOG_PATH__
+
+[Install]
+WantedBy=multi-user.target

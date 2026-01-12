@@ -39,7 +39,7 @@ function ensure_tables(PDO $db): void {
         $now = gmdate('c');
         $db->exec(
             "INSERT INTO plot_settings (id, y_axis_min, y_axis_max, window_sec, updated_at)
-             VALUES (1, 200.0, 600.0, 7200, '{$now}')"
+             VALUES (1, 0.0, 600.0, 7200, '{$now}')"
         );
     }
 }
@@ -53,7 +53,7 @@ function load_settings(PDO $db): array {
             'window_sec' => (int) $row['window_sec'],
         ];
     }
-    return ['y_axis_min' => 200.0, 'y_axis_max' => 600.0, 'window_sec' => 7200];
+    return ['y_axis_min' => 0.0, 'y_axis_max' => 600.0, 'window_sec' => 7200];
 }
 
 function reconcile_bounds(float $yMin, float $yMax, array $mins, array $maxes): array {

@@ -132,7 +132,7 @@ To preview the UI without any field hardware:
 1. Copy or symlink samples in `real_data/` and set `BROOKSIDE_CSV`, `ROADSIDE_CSV`, and `PUMP_EVENTS_CSV` in `config/tank_pi.env`.
 2. Enable `DEBUG_TANK=true` (and optionally `DEBUG_RELEASER=true`) and pick a `SYNTHETIC_CLOCK_MULTIPLIER`.
 3. Keep `RESET_ON_DEBUG_START=true` when you want the Pi to wipe its local SQLite DB and call `/api/reset.php` so the server DBs/status files are pristine before replay.
-4. Run `python3 scripts/main.py`. The service will:
+4. Run `python3 scripts/main_tank.py`. The service will:
    - Recreate the per-component `web/data/status_*.json` files based on the local queue (for the fallback UI) and simultaneously POST batches to `ingest_tank.php` / `ingest_pump.php`, just like the live sensors.
    - Serve the `web/` directory via `http://<pi-host>:<LOCAL_HTTP_PORT>/`. Because the server WordPress instance is also receiving the synthetic data, both sites should show identical telemetry, and CSV exports from `scripts/export_db_to_csv.py` will reflect the replay.
 5. Leave `DEBUG_LOOP_DATA=true` if you want continuous playback once the newest sample is reached.

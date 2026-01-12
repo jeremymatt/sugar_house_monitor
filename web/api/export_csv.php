@@ -10,6 +10,7 @@ $tankDbPath = resolve_repo_path($env['TANK_DB_PATH'] ?? '');
 $pumpDbPath = resolve_repo_path($env['PUMP_DB_PATH'] ?? '');
 $evapDbPath = resolve_repo_path($env['EVAPORATOR_DB_PATH'] ?? 'data/evaporator.db');
 $vacDbPath  = resolve_repo_path($env['VACUUM_DB_PATH'] ?? $pumpDbPath);
+$stackDbPath = resolve_repo_path($env['STACK_TEMP_DB_PATH'] ?? $vacDbPath);
 
 $type = $_GET['type'] ?? '';
 $type = strtolower($type);
@@ -32,11 +33,51 @@ function dt_parts(string $iso): array {
     ];
 }
 
+function format_iso_tz(?string $iso, DateTimeZone $tz): string {
+    if (!$iso) {
+        return '';
+    }
+    try {
+        $dt = new DateTime($iso);
+        $dt->setTimezone($tz);
+        return $dt->format(DATE_ATOM);
+    } catch (Exception $e) {
+        return '';
+    }
+}
+
+$utcTz = new DateTimeZone('UTC');
+$estTz = new DateTimeZone('America/New_York');
+
+function table_has_column(PDO $conn, string $table, string $column): bool {
+    // Best-effort sanitation of table name since PRAGMA can't use bound params.
+    $table_safe = preg_replace('/[^A-Za-z0-9_]/', '', $table);
+    $stmt = $conn->query('PRAGMA table_info(' . $table_safe . ')');
+    if ($stmt === false) {
+        return false;
+    }
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as $row) {
+        if (isset($row['name']) && strtolower($row['name']) === strtolower($column)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 if ($type === 'brookside' || $type === 'roadside') {
     $tankId = $type;
     $conn = connect_sqlite($tankDbPath);
+    $hasOutlier = table_has_column($conn, 'tank_readings', 'depth_outlier');
+    $selectCols = 'source_timestamp, surf_dist, depth';
+    if ($hasOutlier) {
+        $selectCols .= ', depth_outlier';
+    } else {
+        $selectCols .= ', NULL AS depth_outlier';
+    }
+    $selectCols .= ', volume_gal, flow_gph';
     $stmt = $conn->prepare(
-        'SELECT source_timestamp, surf_dist, depth, volume_gal
+        'SELECT ' . $selectCols . '
          FROM tank_readings
          WHERE tank_id = :tank
          ORDER BY source_timestamp'
@@ -45,13 +86,17 @@ if ($type === 'brookside' || $type === 'roadside') {
 
     send_csv_headers("{$tankId}.csv");
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['Unnamed: 0','timestamp','yr','mo','day','hr','m','s','surf_dist','depth','gal']);
+    fputcsv($out, ['Unnamed: 0','timestamp','timestamp_utc','timestamp_est','yr','mo','day','hr','m','s','surf_dist','depth','is_outlier','gal','flow_gph']);
     $idx = 0;
     foreach ($stmt as $row) {
         $parts = dt_parts($row['source_timestamp']);
+        $tsUtc = format_iso_tz($row['source_timestamp'], $utcTz);
+        $tsEst = format_iso_tz($row['source_timestamp'], $estTz);
         fputcsv($out, [
             $idx++,
             $row['source_timestamp'],
+            $tsUtc,
+            $tsEst,
             $parts['yr'],
             $parts['mo'],
             $parts['day'],
@@ -60,7 +105,40 @@ if ($type === 'brookside' || $type === 'roadside') {
             $parts['s'],
             $row['surf_dist'],
             $row['depth'],
+            $row['depth_outlier'],
             $row['volume_gal'],
+            $row['flow_gph'],
+        ]);
+    }
+    fclose($out);
+    exit;
+}
+
+if ($type === 'stack' || $type === 'stacktemp' || $type === 'stacktemps') {
+    $conn = connect_sqlite($stackDbPath);
+    $conn->exec(
+        'CREATE TABLE IF NOT EXISTS stack_temperatures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stack_temp_f REAL,
+            ambient_temp_f REAL,
+            source_timestamp TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            UNIQUE(source_timestamp)
+        )'
+    );
+    $stmt = $conn->query(
+        'SELECT source_timestamp, stack_temp_f, ambient_temp_f
+         FROM stack_temperatures
+         ORDER BY source_timestamp'
+    );
+    send_csv_headers('stack_temperatures.csv');
+    $out = fopen('php://output', 'w');
+    fputcsv($out, ['timestamp','Stack Temp (F)','Ambient Temp (F)']);
+    foreach ($stmt as $row) {
+        fputcsv($out, [
+            $row['source_timestamp'],
+            $row['stack_temp_f'],
+            $row['ambient_temp_f'],
         ]);
     }
     fclose($out);
@@ -76,12 +154,25 @@ if ($type === 'pump') {
     );
     send_csv_headers('pump_times.csv');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['Time','Pump Event','Pump Run Time','Pump Interval','Gallons Per Hour']);
+    fputcsv($out, ['Time','timestamp_utc','timestamp_est','Pump Event','Pump Run Time','Pump Interval','Gallons Per Hour']);
     foreach ($stmt as $row) {
         $ts = $row['source_timestamp'];
-        $formatted = $ts ? date('Y-m-d-H:i:s', strtotime($ts)) : '';
+        $formatted = '';
+        if ($ts) {
+            try {
+                $dt = new DateTime($ts);
+                $dt->setTimezone($utcTz);
+                $formatted = $dt->format('Y-m-d-H:i:s');
+            } catch (Exception $e) {
+                $formatted = $ts;
+            }
+        }
+        $tsUtc = format_iso_tz($ts, $utcTz);
+        $tsEst = format_iso_tz($ts, $estTz);
         fputcsv($out, [
             $formatted,
+            $tsUtc,
+            $tsEst,
             $row['event_type'],
             $row['pump_run_time_s'],
             $row['pump_interval_s'],
@@ -119,6 +210,8 @@ if ($type === 'evaporator') {
     $out = fopen('php://output', 'w');
     fputcsv($out, [
         'timestamp',
+        'timestamp_utc',
+        'timestamp_est',
         'Draw_off_tank',
         'Draw_off_flow_rate',
         'Pump_in_tank',
@@ -126,8 +219,12 @@ if ($type === 'evaporator') {
         'Evaporator_flow',
     ]);
     foreach ($stmt as $row) {
+        $tsUtc = format_iso_tz($row['sample_timestamp'], $utcTz);
+        $tsEst = format_iso_tz($row['sample_timestamp'], $estTz);
         fputcsv($out, [
             $row['sample_timestamp'],
+            $tsUtc,
+            $tsEst,
             $row['draw_off_tank'],
             $row['draw_off_flow_gph'],
             $row['pump_in_tank'],

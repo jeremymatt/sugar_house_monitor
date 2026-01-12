@@ -328,7 +328,7 @@
       <div class="card-header">
         <div>
           <h2>System Overview</h2>
-          <div class="card-subtitle">Combined tanks (flows only) and vacuum</div>
+          <div class="card-subtitle">Combined tanks (flows only), vacuum, and stack temps</div>
         </div>
       </div>
 
@@ -336,7 +336,7 @@
         <div class="metric">
           <span class="metric-label">Vacuum</span>
           <span class="metric-value" id="vacuum-reading">–</span>
-          <span class="metric-note">Debug values until sensor online</span>
+          <span class="metric-note" id="vacuum-reading-note">Awaiting data</span>
         </div>
         <div class="metric">
           <span class="metric-label">Total sap</span>
@@ -352,6 +352,16 @@
           <span class="metric-label">Overflow in</span>
           <span class="metric-value" id="overview-overflow-time">---</span>
           <span class="metric-note" id="overview-overflow-eta">---</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Stack temp</span>
+          <span class="metric-value" id="stack-temp-value">–</span>
+          <span class="metric-note" id="stack-temp-note">Awaiting data</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Ambient temp</span>
+          <span class="metric-value" id="ambient-temp-value">–</span>
+          <span class="metric-note" id="ambient-temp-note">Awaiting data</span>
         </div>
         <div class="metric">
           <span class="metric-label">Tank Monitor</span>
@@ -483,7 +493,7 @@
       <div class="chart-container">
         <div class="chart-legend">
           <span class="legend-item"><span class="legend-swatch" style="background:#d55e00;"></span>Pump</span>
-          <span class="legend-item"><span class="legend-swatch" style="background:#0072b2;"></span>Tank</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#0072b2;"></span>Tank inflow</span>
         </div>
         <canvas id="pump-history-canvas" width="600" height="220" aria-label="Pump flow history" style="width:100%; height:240px;"></canvas>
         <div class="metric-note" id="pump-history-note">Showing last 6 hours</div>
@@ -587,6 +597,8 @@
       <a href="/sugar_house_monitor/tank_error_log.txt">Tank error log</a>
       <span style="margin: 0 0.4rem; color: var(--text-muted);">|</span>
       <a href="/sugar_house_monitor/pump_error_log.txt">Pump error log</a>
+      <span style="margin: 0 0.4rem; color: var(--text-muted);">|</span>
+      <a href="/sugar_house_monitor/vacuum/">Simple vacuum</a>
     </div>
 
     <footer class="small" style="margin-top:0.5rem; color:var(--text-muted);">

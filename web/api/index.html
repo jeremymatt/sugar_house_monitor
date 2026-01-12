@@ -23,6 +23,8 @@
   <ul>
     <li><code>POST /sugar_house_monitor/api/ingest_tank.php</code> – upload processed tank readings</li>
     <li><code>POST /sugar_house_monitor/api/ingest_pump.php</code> – upload processed pump events</li>
+    <li><code>POST /sugar_house_monitor/api/ingest_vacuum.php</code> – upload vacuum readings</li>
+    <li><code>POST /sugar_house_monitor/api/ingest_stacktemp.php</code> – upload stack/ambient thermocouple readings</li>
     <li><code>POST /sugar_house_monitor/api/reset.php</code> – truncate server DBs/status (debug only)</li>
   </ul>
   <p>Each request must include the shared API key via the <code>X-API-Key</code> header (or an <code>api_key</code> field in the JSON body) and provide the readings/events array in the request body.</p>

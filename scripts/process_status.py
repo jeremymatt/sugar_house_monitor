@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from statistics import median
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -55,7 +56,7 @@ def should_update_status(path: Path, new_ts: Optional[str]) -> bool:
     new_dt = parse_iso(new_ts)
     if cur_dt is None or new_dt is None:
         return True
-    return new_dt > cur_dt
+    return new_dt >= cur_dt
 
 
 def table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -126,6 +127,46 @@ def get_latest_vacuum_row(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
     return cur.fetchone()
 
 
+def get_latest_stack_temp_row(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    if not table_exists(conn, "stack_temperatures"):
+        return None
+    cur = conn.execute(
+        """
+        SELECT *
+        FROM stack_temperatures
+        ORDER BY received_at DESC
+        LIMIT 1
+        """
+    )
+    return cur.fetchone()
+
+
+def list_all_tank_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    if not table_exists(conn, "tank_readings"):
+        return []
+    cur = conn.execute(
+        """
+        SELECT *
+        FROM tank_readings
+        ORDER BY source_timestamp
+        """
+    )
+    return cur.fetchall()
+
+
+def list_all_pump_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    if not table_exists(conn, "pump_events"):
+        return []
+    cur = conn.execute(
+        """
+        SELECT *
+        FROM pump_events
+        ORDER BY source_timestamp
+        """
+    )
+    return cur.fetchall()
+
+
 def get_latest_monitor_ts(conn: sqlite3.Connection, stream: str) -> Optional[str]:
     if not table_exists(conn, "monitor_heartbeats"):
         return None
@@ -165,7 +206,7 @@ DEFAULT_EMPTYING_THRESHOLD = -2.5
 ZERO_FLOW_TOLERANCE = 2.5
 PUMP_LOW_THRESHOLD = 5.0
 PUMP_MATCH_TOLERANCE = 0.5
-DEFAULT_PLOT_SETTINGS = (200.0, 600.0, 2 * 60 * 60)  # y_min, y_max, window_sec
+DEFAULT_PLOT_SETTINGS = (0.0, 600.0, 2 * 60 * 60)  # y_min, y_max, window_sec
 NO_TANK = "---"
 
 
@@ -197,6 +238,19 @@ def average_timestamp_iso(ts_a: Optional[str], ts_b: Optional[str]) -> Optional[
     return None
 
 
+def latest_timestamp_iso(ts_a: Optional[str], ts_b: Optional[str]) -> Optional[str]:
+    dt_a = parse_iso(ts_a)
+    dt_b = parse_iso(ts_b)
+    if dt_a and dt_b:
+        newer = dt_a if dt_a > dt_b else dt_b
+        return newer.astimezone(timezone.utc).isoformat()
+    if dt_a:
+        return dt_a.astimezone(timezone.utc).isoformat()
+    if dt_b:
+        return dt_b.astimezone(timezone.utc).isoformat()
+    return None
+
+
 def to_float(val: object) -> Optional[float]:
     if val is None:
         return None
@@ -204,6 +258,120 @@ def to_float(val: object) -> Optional[float]:
         return float(val)
     except (TypeError, ValueError):
         return None
+
+
+def row_flow_value(row: Optional[sqlite3.Row]) -> Optional[float]:
+    if row is None:
+        return None
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    outlier_flag = None
+    if "depth_outlier" in keys:
+        try:
+            outlier_flag = row["depth_outlier"]
+        except Exception:
+            outlier_flag = None
+    if outlier_flag:
+        return None
+    return to_float(row["flow_gph"]) if "flow_gph" in keys else None
+
+
+def _flows_match(a: object, b: object, tolerance: float = 1e-6) -> bool:
+    """Return True when two flow values are effectively equal."""
+    fa = to_float(a)
+    fb = to_float(b)
+    if fa is None or fb is None:
+        return False
+    return abs(fa - fb) <= tolerance
+
+
+def _flows_close(a: object, b: object, tolerance: float = 1e-3) -> bool:
+    """True if both flows are finite and within tolerance."""
+    fa = to_float(a)
+    fb = to_float(b)
+    if fa is None or fb is None:
+        return False
+    return abs(fa - fb) <= tolerance
+
+
+def display_volume_window_seconds(env: Dict[str, str]) -> float:
+    val = to_float(env.get("DISPLAY_VOLUME_WINDOW_SECONDS"))
+    if val is None or val <= 0:
+        return 66.0  # 1.1 minutes
+    return float(val)
+
+
+def display_volume_median(rows: list[sqlite3.Row], window_seconds: float) -> Optional[float]:
+    """Median of recent raw gallons (excluding outliers) within the window."""
+    if not rows:
+        return None
+    rows_sorted = sorted(
+        [row for row in rows if parse_iso(row["source_timestamp"])],
+        key=lambda r: parse_iso(r["source_timestamp"]),
+    )
+    if not rows_sorted:
+        return None
+    latest_ts = parse_iso(rows_sorted[-1]["source_timestamp"])
+    if latest_ts is None:
+        return None
+    cutoff = latest_ts - timedelta(seconds=window_seconds)
+    vols = []
+    for row in rows_sorted:
+        ts = parse_iso(row["source_timestamp"])
+        if ts is None or ts < cutoff:
+            continue
+        outlier_flag = False
+        try:
+            outlier_flag = bool(row["depth_outlier"])
+        except Exception:
+            outlier_flag = False
+        if outlier_flag:
+            continue
+        vol = to_float(row["volume_gal"] if "volume_gal" in row.keys() else None)
+        if vol is None:
+            continue
+        vols.append(vol)
+    if not vols:
+        return None
+    return float(median(vols))
+
+
+def latest_flow_row(rows: list[sqlite3.Row]) -> Optional[sqlite3.Row]:
+    """Return the newest row with a non-outlier flow value."""
+    if not rows:
+        return None
+    sorted_rows = sorted(
+        [row for row in rows if parse_iso(row["source_timestamp"])],
+        key=lambda r: parse_iso(r["source_timestamp"]),
+        reverse=True,
+    )
+    for row in sorted_rows:
+        if row_flow_value(row) is None:
+            continue
+        return row
+    return None
+
+
+def compute_display_eta(volume: Optional[float], flow: Optional[float], capacity: Optional[float], ref_ts: Optional[str]):
+    eta_full = None
+    eta_empty = None
+    time_to_full_min = None
+    time_to_empty_min = None
+    if volume is None or flow is None or capacity in (None, 0):
+        return eta_full, eta_empty, time_to_full_min, time_to_empty_min
+    ref_dt = parse_iso(ref_ts) or datetime.now(timezone.utc)
+    if flow > 0:
+        remaining = max(capacity - volume, 0)
+        minutes = (remaining / flow) * 60 if flow != 0 else None
+        if minutes is not None:
+            eta_full = (ref_dt + timedelta(minutes=minutes)).isoformat()
+            time_to_full_min = minutes
+    elif flow < 0:
+        remaining = max(volume, 0)
+        minutes = (remaining / abs(flow)) * 60 if flow != 0 else None
+        if minutes is not None:
+            eta_empty = (ref_dt + timedelta(minutes=minutes)).isoformat()
+            time_to_empty_min = minutes
+    return eta_full, eta_empty, time_to_full_min, time_to_empty_min
 
 
 def parse_retention_days(env: Dict[str, str]) -> Optional[float]:
@@ -255,6 +423,7 @@ def prune_server_databases(
     tank_conn: sqlite3.Connection,
     pump_conn: sqlite3.Connection,
     vacuum_conn: sqlite3.Connection,
+    stack_conn: sqlite3.Connection,
     evap_conn: sqlite3.Connection,
 ) -> None:
     retention_days = parse_retention_days(env)
@@ -278,6 +447,7 @@ def prune_server_databases(
         "tank": prune_table_if_exists(tank_conn, "tank_readings", "source_timestamp", cutoff),
         "pump": prune_table_if_exists(pump_conn, "pump_events", "source_timestamp", cutoff),
         "vacuum": prune_table_if_exists(vacuum_conn, "vacuum_readings", "source_timestamp", cutoff),
+        "stack": prune_table_if_exists(stack_conn, "stack_temperatures", "source_timestamp", cutoff),
         "evap": prune_table_if_exists(evap_conn, "evaporator_flow", "sample_timestamp", cutoff),
     }
     try:
@@ -287,7 +457,13 @@ def prune_server_databases(
     total_deleted = sum(deletions.values())
     if total_deleted:
         print(f"Pruned {total_deleted} rows older than {retention_days} days")
-        for label, conn in (("tank", tank_conn), ("pump", pump_conn), ("vacuum", vacuum_conn), ("evap", evap_conn)):
+        for label, conn in (
+            ("tank", tank_conn),
+            ("pump", pump_conn),
+            ("vacuum", vacuum_conn),
+            ("stack", stack_conn),
+            ("evap", evap_conn),
+        ):
             if deletions.get(label, 0) <= 0:
                 continue
             try:
@@ -322,6 +498,12 @@ def ensure_evap_tables(conn: sqlite3.Connection) -> None:
                 evaporator_flow_gph REAL,
                 created_at TEXT NOT NULL
             )
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_evap_sample_timestamp
+            ON evaporator_flow(sample_timestamp)
             """
         )
         conn.execute(
@@ -421,16 +603,171 @@ def compute_evaporator_flow(
 ) -> Optional[float]:
     if brookside_flow is None and roadside_flow is None:
         return None
-    negative_flows = []
+    most_negative_flow = None
     for flow in (brookside_flow, roadside_flow):
         if flow is not None and flow < emptying_threshold:
-            negative_flows.append(abs(flow))
-    if not negative_flows:
-        return 0.0
-    total_flow = sum(negative_flows)
+            if most_negative_flow is None or flow < most_negative_flow:
+                most_negative_flow = flow
+    if most_negative_flow is None:
+        return None
+    total_flow = abs(most_negative_flow)
     if pump_in == draw_off and pump_flow is not None:
         total_flow += max(pump_flow, 0.0)
     return total_flow
+
+
+def is_duplicate_evap(prev_row: Optional[sqlite3.Row], record: Dict[str, object]) -> bool:
+    """Avoid inserting identical evaporator rows repeatedly."""
+    if not prev_row:
+        return False
+    same_draw = (prev_row["draw_off_tank"] or NO_TANK) == (record.get("draw_off_tank") or NO_TANK)
+    same_pump = (prev_row["pump_in_tank"] or NO_TANK) == (record.get("pump_in_tank") or NO_TANK)
+    same_evap = _flows_close(prev_row["evaporator_flow_gph"], record.get("evaporator_flow_gph"))
+    same_draw_flow = _flows_close(prev_row["draw_off_flow_gph"], record.get("draw_off_flow_gph"))
+    same_pump_flow = _flows_close(prev_row["pump_in_flow_gph"], record.get("pump_in_flow_gph"))
+    return same_draw and same_pump and same_evap and same_draw_flow and same_pump_flow
+
+
+def build_evap_record_from_state(
+    tank_state: Dict[str, Optional[sqlite3.Row]],
+    pump_row: Optional[sqlite3.Row],
+    draw_off_prev: str,
+    pump_in_prev: str,
+    emptying_threshold: float,
+    sample_dt: datetime,
+) -> Optional[Dict[str, object]]:
+    brook_row = tank_state.get("brookside")
+    road_row = tank_state.get("roadside")
+    brook_flow = row_flow_value(brook_row)
+    road_flow = row_flow_value(road_row)
+    pump_flow = to_float(pump_row["gallons_per_hour"]) if pump_row else None
+
+    if brook_flow is None and road_flow is None:
+        return None
+
+    draw_off = pick_draw_off(brook_flow, road_flow, draw_off_prev, emptying_threshold)
+    other_flow = None
+    if draw_off == "brookside":
+        other_flow = road_flow
+    elif draw_off == "roadside":
+        other_flow = brook_flow
+    pump_in = pick_pump_in(draw_off, pump_flow, other_flow, pump_in_prev)
+
+    draw_off_flow = brook_flow if draw_off == "brookside" else road_flow if draw_off == "roadside" else None
+    if pump_in == draw_off:
+        pump_in_flow = draw_off_flow
+    elif pump_in == "brookside":
+        pump_in_flow = brook_flow
+    elif pump_in == "roadside":
+        pump_in_flow = road_flow
+    else:
+        pump_in_flow = None
+
+    evap_flow = compute_evaporator_flow(draw_off, pump_in, brook_flow, road_flow, pump_flow, emptying_threshold)
+    if evap_flow is None:
+        return None
+
+    return {
+        "sample_timestamp": sample_dt.astimezone(timezone.utc).isoformat(),
+        "draw_off_tank": draw_off,
+        "pump_in_tank": pump_in,
+        "draw_off_flow_gph": draw_off_flow,
+        "pump_in_flow_gph": pump_in_flow,
+        "pump_flow_gph": pump_flow,
+        "brookside_flow_gph": brook_flow,
+        "roadside_flow_gph": road_flow,
+        "evaporator_flow_gph": evap_flow,
+        "created_at": iso_now(),
+    }
+
+
+def compute_evap_time_series(
+    tank_rows: list[sqlite3.Row],
+    pump_rows: list[sqlite3.Row],
+    emptying_threshold: float,
+) -> list[Dict[str, object]]:
+    if not tank_rows:
+        return []
+
+    # Sort defensively in case caller did not.
+    tank_rows_sorted = sorted(
+        [row for row in tank_rows if parse_iso(row["source_timestamp"])],
+        key=lambda r: parse_iso(r["source_timestamp"]),
+    )
+    pump_rows_sorted = sorted(
+        [row for row in pump_rows if parse_iso(row["source_timestamp"])],
+        key=lambda r: parse_iso(r["source_timestamp"]),
+    )
+
+    tank_state: Dict[str, Optional[sqlite3.Row]] = {"brookside": None, "roadside": None}
+    records: list[Dict[str, object]] = []
+    pump_idx = 0
+    pump_state: Optional[sqlite3.Row] = None
+    draw_off_prev = NO_TANK
+    pump_in_prev = NO_TANK
+
+    for row in tank_rows_sorted:
+        ts = parse_iso(row["source_timestamp"])
+        if ts is None:
+            continue
+
+        # Advance pump state to the latest event at or before this tank timestamp.
+        while pump_idx < len(pump_rows_sorted):
+            pump_ts = parse_iso(pump_rows_sorted[pump_idx]["source_timestamp"])
+            if pump_ts is None:
+                pump_idx += 1
+                continue
+            if pump_ts <= ts:
+                pump_state = pump_rows_sorted[pump_idx]
+                pump_idx += 1
+                continue
+            break
+
+        tank_id = row["tank_id"]
+        if tank_id not in tank_state:
+            continue
+
+        flow_val = row_flow_value(row)
+        tank_state[tank_id] = row if flow_val is not None else None
+        if flow_val is None or flow_val >= 0:
+            continue  # only consider negative draw-off samples
+
+        record = build_evap_record_from_state(
+            tank_state,
+            pump_state,
+            draw_off_prev,
+            pump_in_prev,
+            emptying_threshold,
+            ts,
+        )
+        # Require the current row's tank to be the draw_off and have a valid flow.
+        if record and (record.get("draw_off_tank") == tank_id):
+            draw_off_prev = record["draw_off_tank"] or NO_TANK
+            pump_in_prev = record["pump_in_tank"] or NO_TANK
+            records.append(record)
+
+    return records
+
+
+def replace_evap_flow(evap_conn: sqlite3.Connection, records: list[Dict[str, object]]) -> None:
+    with evap_conn:
+        evap_conn.execute("DELETE FROM evaporator_flow")
+        if not records:
+            return
+        evap_conn.executemany(
+            """
+            INSERT INTO evaporator_flow (
+                sample_timestamp, draw_off_tank, pump_in_tank, draw_off_flow_gph,
+                pump_in_flow_gph, pump_flow_gph, brookside_flow_gph, roadside_flow_gph,
+                evaporator_flow_gph, created_at
+            ) VALUES (
+                :sample_timestamp, :draw_off_tank, :pump_in_tank, :draw_off_flow_gph,
+                :pump_in_flow_gph, :pump_flow_gph, :brookside_flow_gph, :roadside_flow_gph,
+                :evaporator_flow_gph, :created_at
+            )
+            """,
+            records,
+        )
 
 
 def build_evap_record(
@@ -465,18 +802,23 @@ def build_evap_record(
     else:
         pump_in_flow = None
 
-    sample_ts = average_timestamp_iso(
+    sample_ts = latest_timestamp_iso(
         brook_row["source_timestamp"] if brook_row else None,
         road_row["source_timestamp"] if road_row else None,
     )
     if sample_ts is None:
         return None
+    prev_sample_ts = parse_iso(prev_row["sample_timestamp"]) if prev_row else None
+    current_ts_dt = parse_iso(sample_ts)
+    if prev_sample_ts and current_ts_dt and current_ts_dt <= prev_sample_ts:
+        return None
 
     evap_flow = compute_evaporator_flow(
         draw_off, pump_in, brook_flow, road_flow, pump_flow, emptying_threshold
     )
-
-    return {
+    if evap_flow is None:
+        return None
+    record = {
         "sample_timestamp": sample_ts,
         "draw_off_tank": draw_off,
         "pump_in_tank": pump_in,
@@ -488,6 +830,9 @@ def build_evap_record(
         "evaporator_flow_gph": evap_flow,
         "created_at": iso_now(),
     }
+    if is_duplicate_evap(prev_row, record):
+        return None
+    return record
 
 
 def insert_evap_record(conn: sqlite3.Connection, record: Dict[str, object]) -> None:
@@ -503,6 +848,16 @@ def insert_evap_record(conn: sqlite3.Connection, record: Dict[str, object]) -> N
                 :pump_in_flow_gph, :pump_flow_gph, :brookside_flow_gph, :roadside_flow_gph,
                 :evaporator_flow_gph, :created_at
             )
+            ON CONFLICT(sample_timestamp) DO UPDATE SET
+                draw_off_tank=excluded.draw_off_tank,
+                pump_in_tank=excluded.pump_in_tank,
+                draw_off_flow_gph=excluded.draw_off_flow_gph,
+                pump_in_flow_gph=excluded.pump_in_flow_gph,
+                pump_flow_gph=excluded.pump_flow_gph,
+                brookside_flow_gph=excluded.brookside_flow_gph,
+                roadside_flow_gph=excluded.roadside_flow_gph,
+                evaporator_flow_gph=excluded.evaporator_flow_gph,
+                created_at=excluded.created_at
             """,
             record,
         )
@@ -547,6 +902,7 @@ def main() -> None:
         "roadside": float(env["TANK_CAPACITY_ROADSIDE"]),
     }
     emptying_threshold = resolve_emptying_threshold(env)
+    display_window_sec = display_volume_window_seconds(env)
 
     tank_conn = open_db(repo_path_from_config(env["TANK_DB_PATH"]))
     pump_conn = open_db(repo_path_from_config(env["PUMP_DB_PATH"]))
@@ -554,9 +910,20 @@ def main() -> None:
     evap_conn = open_db(repo_path_from_config(evap_path_cfg))
     vacuum_db_path = repo_path_from_config(env.get("VACUUM_DB_PATH", env["PUMP_DB_PATH"]))
     vacuum_conn = open_db(vacuum_db_path)
+    stack_db_path = repo_path_from_config(env.get("STACK_TEMP_DB_PATH", env.get("VACUUM_DB_PATH", env["PUMP_DB_PATH"])))
+    stack_conn = vacuum_conn if stack_db_path == vacuum_db_path else open_db(stack_db_path)
     ensure_evap_tables(evap_conn)
-    prune_server_databases(env, tank_conn, pump_conn, vacuum_conn, evap_conn)
+    prune_server_databases(env, tank_conn, pump_conn, vacuum_conn, stack_conn, evap_conn)
     plot_settings = load_plot_settings(evap_conn)
+    tank_rows_all = list_all_tank_rows(tank_conn)
+    pump_rows_all = list_all_pump_rows(pump_conn)
+    evap_time_series = compute_evap_time_series(tank_rows_all, pump_rows_all, emptying_threshold)
+    replace_evap_flow(evap_conn, evap_time_series)
+    rows_by_tank: Dict[str, list[sqlite3.Row]] = {"brookside": [], "roadside": []}
+    for row in tank_rows_all:
+        tank_id = row["tank_id"]
+        if tank_id in rows_by_tank:
+            rows_by_tank[tank_id].append(row)
 
     status_base = repo_path_from_config(env["STATUS_JSON_PATH"]).parent
 
@@ -567,19 +934,34 @@ def main() -> None:
         if max_volume is None:
             max_volume = tank_capacity.get(tank_id)
         percent = row["level_percent"]
+        display_volume = display_volume_median(rows_by_tank.get(tank_id, []), display_window_sec)
+        display_percent = calc_percent(display_volume, max_volume)
         if percent is None:
             percent = calc_percent(row["volume_gal"], max_volume)
+        flow_row = latest_flow_row(rows_by_tank.get(tank_id, []))
+        flow_val = row_flow_value(flow_row)
+        flow_ts = flow_row["source_timestamp"] if flow_row else None
+        eta_full_disp, eta_empty_disp, ttf_disp, tte_disp = compute_display_eta(
+            display_volume, flow_val, max_volume, flow_ts
+        )
         payload = {
             "generated_at": timestamp,
             "tank_id": tank_id,
             "volume_gal": row["volume_gal"],
             "max_volume_gal": max_volume,
             "level_percent": percent,
-            "flow_gph": row["flow_gph"],
-            "eta_full": row["eta_full"],
-            "eta_empty": row["eta_empty"],
-            "time_to_full_min": row["time_to_full_min"],
-            "time_to_empty_min": row["time_to_empty_min"],
+            "flow_gph": flow_val if flow_val is not None else row["flow_gph"],
+            "flow_sample_timestamp": flow_ts,
+            "eta_full": eta_full_disp,
+            "eta_empty": eta_empty_disp,
+            "time_to_full_min": ttf_disp,
+            "time_to_empty_min": tte_disp,
+            "display_volume_gal": display_volume,
+            "display_level_percent": display_percent,
+            "display_eta_full": eta_full_disp,
+            "display_eta_empty": eta_empty_disp,
+            "display_time_to_full_min": ttf_disp,
+            "display_time_to_empty_min": tte_disp,
             "last_sample_timestamp": row["source_timestamp"],
             "last_received_at": row["received_at"],
         }
@@ -635,17 +1017,25 @@ def main() -> None:
         if should_update_status(vac_path, vacuum_payload["source_timestamp"]):
             atomic_write(vac_path, vacuum_payload)
 
+    stack_row = get_latest_stack_temp_row(stack_conn)
+    if stack_row:
+        stack_payload = {
+            "generated_at": timestamp,
+            "stack_temp_f": stack_row["stack_temp_f"],
+            "ambient_temp_f": stack_row["ambient_temp_f"],
+            "source_timestamp": stack_row["source_timestamp"],
+            "last_received_at": stack_row["received_at"],
+        }
+        stack_path = status_base / "status_stack.json"
+        if should_update_status(stack_path, stack_payload["source_timestamp"]):
+            atomic_write(stack_path, stack_payload)
+
     evap_prev = latest_evap_row(evap_conn)
-    evap_record = build_evap_record(tank_rows, pump_row, evap_prev, emptying_threshold)
-    if evap_record:
-        evap_flow = evap_record.get("evaporator_flow_gph")
-        if evap_flow is None or evap_flow > 0:
-            insert_evap_record(evap_conn, evap_record)
-        evap_payload = build_evap_status_payload(evap_record, timestamp, plot_settings)
-        atomic_write(status_base / "status_evaporator.json", evap_payload)
+    if evap_prev:
+        evap_payload = build_evap_status_payload(dict(evap_prev), timestamp, plot_settings)
     else:
         # Ensure a placeholder exists so clients don't 404 while waiting for data.
-        placeholder = build_evap_status_payload(
+        evap_payload = build_evap_status_payload(
             {
                 "sample_timestamp": None,
                 "draw_off_tank": "---",
@@ -660,7 +1050,7 @@ def main() -> None:
             timestamp,
             plot_settings,
         )
-        atomic_write(status_base / "status_evaporator.json", placeholder)
+    atomic_write(status_base / "status_evaporator.json", evap_payload)
 
     monitor_payload = {
         "generated_at": timestamp,

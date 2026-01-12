@@ -43,6 +43,7 @@ if ($pumpDbPath && file_exists($pumpDbPath)) {
 }
 
 $netRows = [];
+$inflowRows = [];
 if ($tankDbPath && file_exists($tankDbPath)) {
     $tankDb = connect_sqlite($tankDbPath);
     $check = $tankDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='tank_readings'");
@@ -85,7 +86,7 @@ if ($tankDbPath && file_exists($tankDbPath)) {
     $check = $tankDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='tank_readings'");
     if ($check->fetch()) {
         $stmt = $tankDb->prepare(
-            'SELECT tank_id, source_timestamp, flow_gph
+            'SELECT tank_id, source_timestamp, flow_gph, depth_outlier
              FROM tank_readings
              WHERE source_timestamp >= :cutoff
              ORDER BY source_timestamp'
@@ -98,15 +99,16 @@ if ($tankDbPath && file_exists($tankDbPath)) {
             $byTank[$tankId][] = [
                 'ts' => $row['source_timestamp'],
                 'flow_gph' => $row['flow_gph'],
+                'depth_outlier' => $row['depth_outlier'] ?? null,
             ];
         }
         // Build net flow using last-known flows at each event timestamp.
         $events = [];
         foreach ($byTank['brookside'] as $row) {
-            $events[] = ['ts' => $row['ts'], 'tank' => 'brookside', 'flow' => $row['flow_gph']];
+            $events[] = ['ts' => $row['ts'], 'tank' => 'brookside', 'flow' => $row['flow_gph'], 'outlier' => $row['depth_outlier']];
         }
         foreach ($byTank['roadside'] as $row) {
-            $events[] = ['ts' => $row['ts'], 'tank' => 'roadside', 'flow' => $row['flow_gph']];
+            $events[] = ['ts' => $row['ts'], 'tank' => 'roadside', 'flow' => $row['flow_gph'], 'outlier' => $row['depth_outlier']];
         }
         usort($events, function ($a, $b) {
             $ta = strtotime($a['ts']);
@@ -114,14 +116,29 @@ if ($tankDbPath && file_exists($tankDbPath)) {
             if ($ta === $tb) return 0;
             return $ta < $tb ? -1 : 1;
         });
-        $bFlow = 0.0;
-        $rFlow = 0.0;
+        $bFlow = null;
+        $rFlow = null;
         foreach ($events as $ev) {
-            if ($ev['tank'] === 'brookside') $bFlow = $ev['flow'] ?? 0.0;
-            if ($ev['tank'] === 'roadside') $rFlow = $ev['flow'] ?? 0.0;
+            $flow = $ev['flow'];
+            $isOutlier = isset($ev['outlier']) && $ev['outlier'];
+            if ($flow === null || $flow === '' || $isOutlier) {
+                continue; // keep last known valid flow
+            }
+            $flowVal = floatval($flow);
+            if ($ev['tank'] === 'brookside') $bFlow = $flowVal;
+            if ($ev['tank'] === 'roadside') $rFlow = $flowVal;
+            if ($bFlow === null && $rFlow === null) {
+                continue;
+            }
+            $net = ($bFlow ?? 0.0) + ($rFlow ?? 0.0);
+            $inflow = max($bFlow ?? 0.0, 0.0) + max($rFlow ?? 0.0, 0.0);
             $netRows[] = [
                 'ts' => $ev['ts'],
-                'flow_gph' => $bFlow + $rFlow,
+                'flow_gph' => $net,
+            ];
+            $inflowRows[] = [
+                'ts' => $ev['ts'],
+                'flow_gph' => $inflow,
             ];
         }
     }
@@ -131,5 +148,6 @@ respond_json([
     'status' => 'ok',
     'pump' => $pumpRows,
     'net' => $netRows,
+    'inflow' => $inflowRows,
     'window_sec' => $windowSec,
 ]);

@@ -1,0 +1,4 @@
+numpy==1.26.4
+adafruit-blinka==8.47.0
+adafruit-circuitpython-mcp3xxx==1.5.11
+RPi.GPIO==0.7.1
