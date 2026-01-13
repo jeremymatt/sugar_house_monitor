@@ -38,6 +38,9 @@
 #ifndef SHM_WIFI_MAX_ATTEMPTS
 #define SHM_WIFI_MAX_ATTEMPTS 10
 #endif
+#ifndef SHM_UPLOAD_RETRY_MS
+#define SHM_UPLOAD_RETRY_MS 30000UL
+#endif
 #ifndef SHM_WINDOW_SIZE_MINUTES
 #define SHM_WINDOW_SIZE_MINUTES 15
 #endif
@@ -56,6 +59,8 @@ const int SENSOR_FAILURE_THRESHOLD = 5;
 const unsigned long SENSOR_RECOVERY_COOLDOWN_MS = 30000UL;
 const int HTTP_FAILURE_THRESHOLD = 3;
 const unsigned long WIFI_RECOVERY_COOLDOWN_MS = 30000UL;
+const unsigned long WIFI_CONNECT_TIMEOUT_MS = WIFI_RETRY_DELAY_MS * WIFI_ATTEMPTS;
+const unsigned long UPLOAD_RETRY_INTERVAL_MS = SHM_UPLOAD_RETRY_MS;
 const int MCP_REINIT_RETRIES = 3;
 const int window_size_minutes = SHM_WINDOW_SIZE_MINUTES;
 const int WINDOW_BUFFER_MINUTES = SHM_WINDOW_SIZE_MINUTES * 4;
@@ -64,6 +69,30 @@ const unsigned long MINUTE_MS = 60000UL;
 const uint8_t LCD_I2C_ADDRESS = 0x27;
 const uint8_t LCD_COLUMNS = 20;
 const uint8_t LCD_ROWS = 4;
+const uint8_t NET_STATUS_COL = LCD_COLUMNS - 4;
+const uint8_t LCD_ARROW_UP = 0;
+const uint8_t LCD_ARROW_DOWN = 1;
+
+uint8_t lcdArrowUp[8] = {
+  0x04,
+  0x0E,
+  0x15,
+  0x04,
+  0x04,
+  0x04,
+  0x04,
+  0x00
+};
+uint8_t lcdArrowDown[8] = {
+  0x00,
+  0x04,
+  0x04,
+  0x04,
+  0x04,
+  0x15,
+  0x0E,
+  0x04
+};
 
 #if SHM_USE_TLS
 WiFiSSLClient netClient;
@@ -83,6 +112,12 @@ int sensorFailureCount = 0;
 unsigned long lastRecoveryMs = 0;
 int httpFailureCount = 0;
 unsigned long lastWifiRecoveryMs = 0;
+bool wifiConnected = false;
+bool wifiConnecting = false;
+unsigned long wifiAttemptStartMs = 0;
+unsigned long lastWifiAttemptMs = 0;
+unsigned long nextUploadAttemptMs = 0;
+bool lastUploadOk = false;
 float stackMinuteSums[WINDOW_BUFFER_MINUTES];
 uint16_t minuteSampleCounts[WINDOW_BUFFER_MINUTES];
 int minuteWriteIndex = 0;
@@ -109,6 +144,8 @@ void initLcd() {
   lcd.init();
   lcd.backlight();
   lcd.clear();
+  lcd.createChar(LCD_ARROW_UP, lcdArrowUp);
+  lcd.createChar(LCD_ARROW_DOWN, lcdArrowDown);
   lcdReady = true;
   Serial.println("LCD initialized");
 }
@@ -201,8 +238,18 @@ void lcdPrintRow(uint8_t row, const char *text) {
   }
 }
 
+void lcdPrintNetStatus(bool netOk) {
+  if (!lcdReady) {
+    return;
+  }
+  lcd.setCursor(NET_STATUS_COL, 0);
+  lcd.print("NET");
+  lcd.write(netOk ? LCD_ARROW_UP : LCD_ARROW_DOWN);
+}
+
 void updateLcd(float stackF, float ambientF,
-               float windowA, float windowB, float windowC, float windowD) {
+               float windowA, float windowB, float windowC, float windowD,
+               bool netOk) {
   if (!lcdReady) {
     return;
   }
@@ -232,6 +279,7 @@ void updateLcd(float stackF, float ambientF,
   lcdPrintRow(1, row2);
   lcdPrintRow(2, row3);
   lcdPrintRow(3, row4);
+  lcdPrintNetStatus(netOk);
 }
 
 bool hasValidLocalIp(const IPAddress &ip) {
@@ -352,57 +400,76 @@ bool recoverMcp() {
   return false;
 }
 
-bool connectWifi() {
+void startWifiAttempt(unsigned long nowMs) {
   Serial.print("Connecting to WiFi SSID ");
   Serial.println(WIFI_SSID);
   WiFi.disconnect();
   WiFi.end();
   delay(100);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  for (int attempt = 0; attempt < WIFI_ATTEMPTS; attempt++) {
-    int status = WiFi.status();
-    IPAddress ip = WiFi.localIP();
-    if (status == WL_CONNECTED && hasValidLocalIp(ip)) {
-      Serial.print("WiFi connected, IP: ");
-      Serial.println(ip);
-      return true;
-    }
-    if (status == WL_CONNECTED) {
-      Serial.print("WiFi connected but waiting for DHCP lease");
-    }
-    delay(WIFI_RETRY_DELAY_MS);
-    Serial.print('.');
-  }
-  Serial.print("\nWiFi connection failed; status=");
-  Serial.println(WiFi.status());
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
-  return false;
+  wifiConnecting = true;
+  wifiAttemptStartMs = nowMs;
+  lastWifiAttemptMs = nowMs;
 }
 
-bool ensureWifi() {
+void updateWifiState(unsigned long nowMs) {
   int status = WiFi.status();
   IPAddress ip = WiFi.localIP();
   if (status == WL_CONNECTED && hasValidLocalIp(ip)) {
-    return true;
+    if (!wifiConnected) {
+      Serial.print("WiFi connected, IP: ");
+      Serial.println(ip);
+      nextUploadAttemptMs = 0;
+      lastUploadOk = false;
+    }
+    wifiConnected = true;
+    wifiConnecting = false;
+    return;
   }
-  if (status == WL_CONNECTED) {
-    Serial.println("WiFi connected but missing IP lease; reconnecting...");
+
+  if (wifiConnected) {
+    Serial.println("WiFi disconnected");
+    lastUploadOk = false;
+  } else if (status == WL_CONNECTED && !hasValidLocalIp(ip) && !wifiConnecting) {
+    Serial.println("WiFi connected but missing IP lease; waiting...");
   }
-  return connectWifi();
+  wifiConnected = false;
+
+  if (wifiConnecting) {
+    if (nowMs - wifiAttemptStartMs >= WIFI_CONNECT_TIMEOUT_MS) {
+      Serial.println("WiFi connect attempt timed out");
+      WiFi.disconnect();
+      WiFi.end();
+      wifiConnecting = false;
+      lastWifiAttemptMs = nowMs;
+    }
+    return;
+  }
+
+  if (nowMs - lastWifiAttemptMs >= WIFI_RETRY_DELAY_MS) {
+    startWifiAttempt(nowMs);
+  }
 }
 
 void resetWifiClient() {
   netClient.stop();
   WiFi.disconnect();
   WiFi.end();
-  delay(250);
-  connectWifi();
+  wifiConnected = false;
+  wifiConnecting = false;
+  wifiAttemptStartMs = 0;
+  lastWifiAttemptMs = 0;
+  lastUploadOk = false;
 }
 
 bool sendTemps(float stackF, float ambientF) {
-  if (!ensureWifi()) {
+  if (!wifiConnected) {
     Serial.println("WiFi unavailable; skipping upload");
+    return false;
+  }
+  if (WiFi.status() != WL_CONNECTED || !hasValidLocalIp(WiFi.localIP())) {
+    wifiConnected = false;
+    Serial.println("WiFi disconnected; skipping upload");
     return false;
   }
 
@@ -500,7 +567,7 @@ void setup()
 
   initLcd();
 
-  connectWifi();
+  startWifiAttempt(millis());
 
   Serial.println(F("------------------------------"));
 }
@@ -509,6 +576,7 @@ void setup()
 void loop()
 {
   const unsigned long now = millis();
+  updateWifiState(now);
   if (now - lastSampleMs < SAMPLE_INTERVAL_MS) {
     return;
   }
@@ -553,6 +621,15 @@ void loop()
   Serial.print(mcp.readADC() * 2);
   Serial.println(" uV");
 
-  updateLcd(hotF, coldF, windowA, windowB, windowC, windowD);
-  sendTemps(hotF, coldF);
+  if (wifiConnected && now >= nextUploadAttemptMs) {
+    const bool uploadOk = sendTemps(hotF, coldF);
+    lastUploadOk = uploadOk;
+    if (uploadOk) {
+      nextUploadAttemptMs = now;
+    } else {
+      nextUploadAttemptMs = now + UPLOAD_RETRY_INTERVAL_MS;
+    }
+  }
+  const bool netOk = wifiConnected && lastUploadOk;
+  updateLcd(hotF, coldF, windowA, windowB, windowC, windowD, netOk);
 }
