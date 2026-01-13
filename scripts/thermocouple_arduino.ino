@@ -61,6 +61,8 @@ const int HTTP_FAILURE_THRESHOLD = 3;
 const unsigned long WIFI_RECOVERY_COOLDOWN_MS = 30000UL;
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = WIFI_RETRY_DELAY_MS * WIFI_ATTEMPTS;
 const unsigned long UPLOAD_RETRY_INTERVAL_MS = SHM_UPLOAD_RETRY_MS;
+const unsigned long STALE_WARNING_TOGGLE_MS = 2000UL;
+const unsigned long STALE_AFTER_MS = SAMPLE_INTERVAL_MS * 2;
 const int MCP_REINIT_RETRIES = 3;
 const int window_size_minutes = SHM_WINDOW_SIZE_MINUTES;
 const int WINDOW_BUFFER_MINUTES = SHM_WINDOW_SIZE_MINUTES * 4;
@@ -118,6 +120,18 @@ unsigned long wifiAttemptStartMs = 0;
 unsigned long lastWifiAttemptMs = 0;
 unsigned long nextUploadAttemptMs = 0;
 bool lastUploadOk = false;
+bool hasValidReading = false;
+float lastHotF = 0.0f;
+float lastColdF = 0.0f;
+float lastWindowA = 0.0f;
+float lastWindowB = 0.0f;
+float lastWindowC = 0.0f;
+float lastWindowD = 0.0f;
+unsigned long lastGoodReadingMs = 0;
+unsigned long lastDisplayToggleMs = 0;
+bool showStaleWarningScreen = false;
+bool lastStale = false;
+bool lastNetOk = false;
 float stackMinuteSums[WINDOW_BUFFER_MINUTES];
 uint16_t minuteSampleCounts[WINDOW_BUFFER_MINUTES];
 int minuteWriteIndex = 0;
@@ -133,6 +147,21 @@ inline float C_to_F(float c) {
 bool i2cDevicePresent(uint8_t address) {
   Wire.beginTransmission(address);
   return Wire.endTransmission() == 0;
+}
+
+void recoverI2cBus() {
+#if defined(SCL) && defined(SDA)
+  pinMode(SDA, INPUT_PULLUP);
+  pinMode(SCL, OUTPUT);
+  for (int i = 0; i < 9; i++) {
+    digitalWrite(SCL, LOW);
+    delayMicroseconds(5);
+    digitalWrite(SCL, HIGH);
+    delayMicroseconds(5);
+  }
+  pinMode(SCL, INPUT_PULLUP);
+  delayMicroseconds(5);
+#endif
 }
 
 void initLcd() {
@@ -238,6 +267,27 @@ void lcdPrintRow(uint8_t row, const char *text) {
   }
 }
 
+void lcdPrintCenteredRow(uint8_t row, const char *text) {
+  if (!lcdReady) {
+    return;
+  }
+  char buffer[LCD_COLUMNS + 1];
+  int len = strlen(text);
+  if (len > LCD_COLUMNS) {
+    len = LCD_COLUMNS;
+  }
+  for (int i = 0; i < LCD_COLUMNS; i++) {
+    buffer[i] = ' ';
+  }
+  const int start = (LCD_COLUMNS - len) / 2;
+  for (int i = 0; i < len; i++) {
+    buffer[start + i] = text[i];
+  }
+  buffer[LCD_COLUMNS] = '\0';
+  lcd.setCursor(0, row);
+  lcd.print(buffer);
+}
+
 void lcdPrintNetStatus(bool netOk) {
   if (!lcdReady) {
     return;
@@ -245,6 +295,24 @@ void lcdPrintNetStatus(bool netOk) {
   lcd.setCursor(NET_STATUS_COL, 0);
   lcd.print("NET");
   lcd.write(netOk ? LCD_ARROW_UP : LCD_ARROW_DOWN);
+}
+
+void showStaleWarning(unsigned long elapsedMs) {
+  if (!lcdReady) {
+    return;
+  }
+  unsigned long totalSeconds = elapsedMs / 1000UL;
+  unsigned long minutes = totalSeconds / 60UL;
+  unsigned long seconds = totalSeconds % 60UL;
+  if (minutes > 99) {
+    minutes = 99;
+  }
+  char row4[LCD_COLUMNS + 1];
+  snprintf(row4, sizeof(row4), "%02lu:%02lu (mm:ss) ago", minutes, seconds);
+  lcdPrintCenteredRow(0, "WARNING");
+  lcdPrintCenteredRow(1, "READING STALE");
+  lcdPrintCenteredRow(2, "Last Update:");
+  lcdPrintCenteredRow(3, row4);
 }
 
 void updateLcd(float stackF, float ambientF,
@@ -381,6 +449,8 @@ bool recoverMcp() {
   Serial.println("Reinitializing MCP9600...");
   Wire.end();
   delay(5);
+  recoverI2cBus();
+  delay(5);
   Wire.begin();
   Wire.setClock(100000);  // slow down I2C for stability
 #ifdef WIRE_HAS_TIMEOUT
@@ -406,7 +476,11 @@ void startWifiAttempt(unsigned long nowMs) {
   WiFi.disconnect();
   WiFi.end();
   delay(100);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  if (strlen(WIFI_PASSWORD) == 0) {
+    WiFi.begin(WIFI_SSID);
+  } else {
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  }
   wifiConnecting = true;
   wifiAttemptStartMs = nowMs;
   lastWifiAttemptMs = nowMs;
@@ -577,59 +651,98 @@ void loop()
 {
   const unsigned long now = millis();
   updateWifiState(now);
-  if (now - lastSampleMs < SAMPLE_INTERVAL_MS) {
-    return;
-  }
-  lastSampleMs = now;
+  bool newReadingOk = false;
 
-  advanceMinuteBuckets(now);
+  if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
+    lastSampleMs = now;
+    advanceMinuteBuckets(now);
 
-  float hotC  = mcp.readThermocouple();
-  float coldC = mcp.readAmbient();
+    float hotC  = mcp.readThermocouple();
+    float coldC = mcp.readAmbient();
 
-  if (isnan(hotC) || isnan(coldC)) {
-    sensorFailureCount += 1;
-    Serial.println("Sensor read failed; skipping sample");
-    if (sensorFailureCount >= SENSOR_FAILURE_THRESHOLD) {
-      if (recoverMcp()) {
-        sensorFailureCount = 0;
+    if (isnan(hotC) || isnan(coldC)) {
+      sensorFailureCount += 1;
+      Serial.println("Sensor read failed; skipping sample");
+      if (sensorFailureCount >= SENSOR_FAILURE_THRESHOLD) {
+        if (recoverMcp()) {
+          sensorFailureCount = 0;
+        }
       }
-    }
-    return;
-  }
-  sensorFailureCount = 0;
-
-  const float hotF = C_to_F(hotC);
-  const float coldF = C_to_F(coldC);
-
-  recordStackSample(hotF);
-
-  const float windowA = windowAverageStackF(0);
-  const float windowB = windowAverageStackF(window_size_minutes);
-  const float windowC = windowAverageStackF(window_size_minutes * 2);
-  const float windowD = windowAverageStackF(window_size_minutes * 3);
-
-  Serial.print("Stack (hot junction): ");
-  Serial.print(hotF, 2);
-  Serial.println(" F");
-
-  Serial.print("Ambient (cold junction): ");
-  Serial.print(coldF, 2);
-  Serial.println(" F");
-
-  Serial.print("ADC: ");
-  Serial.print(mcp.readADC() * 2);
-  Serial.println(" uV");
-
-  if (wifiConnected && now >= nextUploadAttemptMs) {
-    const bool uploadOk = sendTemps(hotF, coldF);
-    lastUploadOk = uploadOk;
-    if (uploadOk) {
-      nextUploadAttemptMs = now;
     } else {
-      nextUploadAttemptMs = now + UPLOAD_RETRY_INTERVAL_MS;
+      sensorFailureCount = 0;
+
+      const float hotF = C_to_F(hotC);
+      const float coldF = C_to_F(coldC);
+
+      recordStackSample(hotF);
+
+      const float windowA = windowAverageStackF(0);
+      const float windowB = windowAverageStackF(window_size_minutes);
+      const float windowC = windowAverageStackF(window_size_minutes * 2);
+      const float windowD = windowAverageStackF(window_size_minutes * 3);
+
+      Serial.print("Stack (hot junction): ");
+      Serial.print(hotF, 2);
+      Serial.println(" F");
+
+      Serial.print("Ambient (cold junction): ");
+      Serial.print(coldF, 2);
+      Serial.println(" F");
+
+      Serial.print("ADC: ");
+      Serial.print(mcp.readADC() * 2);
+      Serial.println(" uV");
+
+      if (wifiConnected && now >= nextUploadAttemptMs) {
+        const bool uploadOk = sendTemps(hotF, coldF);
+        lastUploadOk = uploadOk;
+        if (uploadOk) {
+          nextUploadAttemptMs = now;
+        } else {
+          nextUploadAttemptMs = now + UPLOAD_RETRY_INTERVAL_MS;
+        }
+      }
+
+      lastHotF = hotF;
+      lastColdF = coldF;
+      lastWindowA = windowA;
+      lastWindowB = windowB;
+      lastWindowC = windowC;
+      lastWindowD = windowD;
+      hasValidReading = true;
+      lastGoodReadingMs = now;
+      newReadingOk = true;
     }
   }
+
+  const bool stale = hasValidReading && (now - lastGoodReadingMs >= STALE_AFTER_MS);
+  bool displayToggle = false;
+  if (stale) {
+    if (!lastStale) {
+      showStaleWarningScreen = true;
+      lastDisplayToggleMs = now;
+      displayToggle = true;
+    } else if (now - lastDisplayToggleMs >= STALE_WARNING_TOGGLE_MS) {
+      showStaleWarningScreen = !showStaleWarningScreen;
+      lastDisplayToggleMs = now;
+      displayToggle = true;
+    }
+  } else {
+    if (lastStale) {
+      displayToggle = true;
+    }
+    showStaleWarningScreen = false;
+  }
+  lastStale = stale;
+
   const bool netOk = wifiConnected && lastUploadOk;
-  updateLcd(hotF, coldF, windowA, windowB, windowC, windowD, netOk);
+  const bool displayUpdateNeeded = newReadingOk || displayToggle || (netOk != lastNetOk);
+  if (displayUpdateNeeded) {
+    if (stale && showStaleWarningScreen) {
+      showStaleWarning(now - lastGoodReadingMs);
+    } else {
+      updateLcd(lastHotF, lastColdF, lastWindowA, lastWindowB, lastWindowC, lastWindowD, netOk);
+    }
+    lastNetOk = netOk;
+  }
 }
