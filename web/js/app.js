@@ -56,6 +56,9 @@ const VACUUM_Y_MIN = 0;
 const VACUUM_Y_MAX = 30;
 const VACUUM_TICK_SEGMENTS = 5;
 const VACUUM_DASH = [6, 4];
+const STACK_TEMP_COLOR = "#cfd2d9";
+const STACK_TEMP_DASH = [6, 4];
+const STACK_TEMP_TICK_SEGMENTS = 4;
 const DRAW_OFF_COLORS = {
   brookside: "#0072b2", // blue
   roadside: "#d55e00",  // orange
@@ -106,6 +109,7 @@ const pumpHistory = [];
 const inflowHistory = []; // tank inflow (positive-only) for pump chart
 const vacuumHistory = []; // vacuum readings for pump chart
 let evapHistory = [];
+let stackHistory = [];
 const HISTORY_MIN_SPACING_MS = 30 * 1000; // throttle points every 30s unless value changes
 let pumpFetchGuard = false;
 let pumpFetchAbort = null;
@@ -276,6 +280,24 @@ function buildTicks(min, max, segments = 4) {
     ticks.push(Math.round(val));
   }
   return ticks;
+}
+
+function autoSeriesBounds(points) {
+  if (!points.length) return null;
+  let min = Infinity;
+  let max = -Infinity;
+  points.forEach((pt) => {
+    if (!isFinite(pt.v)) return;
+    if (pt.v < min) min = pt.v;
+    if (pt.v > max) max = pt.v;
+  });
+  if (!isFinite(min) || !isFinite(max)) return null;
+  if (min === max) {
+    min -= 1;
+    max += 1;
+  }
+  const pad = Math.max(2, (max - min) * 0.1);
+  return { min: min - pad, max: max + pad };
 }
 
 function formatTankName(name) {
@@ -451,6 +473,20 @@ function applyEvapHistoryResponse(resp, expectedWindow) {
       })
       .filter((p) => p != null);
     pruneToWindow(evapHistory, evapHistoryWindowSec);
+  }
+
+  if (Array.isArray(resp.stack_history)) {
+    stackHistory = resp.stack_history
+      .map((p) => {
+        const t = msFromIso(p.ts);
+        const v = toNumber(p.stack_temp_f);
+        if (t == null || v == null) return null;
+        return { t, v };
+      })
+      .filter((p) => p != null);
+    pruneToWindow(stackHistory, evapHistoryWindowSec);
+  } else {
+    stackHistory = [];
   }
 
   if (resp.latest && !latestEvaporator) {
@@ -890,6 +926,7 @@ async function refreshEvapHistory(windowSec) {
   evapFetchGuard = true;
   const token = ++evapFetchToken;
   evapHistory = [];
+  stackHistory = [];
   updateEvapHistoryChart();
   const aborter = new AbortController();
   evapFetchAbort = aborter;
@@ -1025,6 +1062,7 @@ function updatePumpHistoryChart(pumpPoint, inflowPoint, vacuumPoint) {
   ctx.translate(12, padTop + plotH / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.textAlign = "center";
+  ctx.fillStyle = "#a7afbf";
   ctx.textBaseline = "top";
   ctx.fillText("gph", 0, 0);
   ctx.restore();
@@ -1091,16 +1129,25 @@ function updateEvapHistoryChart() {
   const note = document.getElementById("boiling-history-note");
   if (!canvas) return;
 
-  if (!evapHistory.length) {
+  if (!evapHistory.length && !stackHistory.length) {
     drawCenteredMessage(canvas, "#1a1f28", "#888", evapFetchGuard ? "FETCHING DATA..." : "No evaporator data yet");
     if (note) note.textContent = `Showing last ${EVAP_WINDOWS[evapHistoryWindowSec.toString()] || "window"}`;
     return;
   }
 
-  const latestTs = evapHistory[evapHistory.length - 1].t;
+  const latestTs = Math.max(
+    evapHistory.length ? evapHistory[evapHistory.length - 1].t : 0,
+    stackHistory.length ? stackHistory[stackHistory.length - 1].t : 0
+  );
+  if (!latestTs) {
+    drawCenteredMessage(canvas, "#1a1f28", "#888", "No evaporator data yet");
+    if (note) note.textContent = `Showing last ${EVAP_WINDOWS[evapHistoryWindowSec.toString()] || "window"}`;
+    return;
+  }
   const windowMs = evapHistoryWindowSec * 1000;
   const start = latestTs - windowMs;
   const filtered = evapHistory.filter((pt) => pt.t >= start);
+  const stackFiltered = stackHistory.filter((pt) => pt.t >= start);
   const bounds = ensureBounds(
     evapPlotSettings.y_axis_min,
     evapPlotSettings.y_axis_max,
@@ -1119,9 +1166,9 @@ function updateEvapHistoryChart() {
   }
   const ctx = canvas.getContext("2d");
   const padLeft = 52;
-  const padRight = 10;
+  const padRight = 52;
   const padTop = 10;
-  const padBottom = 30;
+  const padBottom = 24;
   const plotW = canvas.width - padLeft - padRight;
   const plotH = canvas.height - padTop - padBottom;
 
@@ -1131,6 +1178,7 @@ function updateEvapHistoryChart() {
 
   const yMin = evapPlotSettings.y_axis_min;
   const yMax = evapPlotSettings.y_axis_max;
+  const stackBounds = autoSeriesBounds(stackFiltered);
   ctx.strokeStyle = "rgba(255,255,255,0.12)";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -1165,19 +1213,67 @@ function updateEvapHistoryChart() {
   ctx.fillText("gph", 0, 0);
   ctx.restore();
 
+  if (stackBounds) {
+    const stackTicks = buildTicks(stackBounds.min, stackBounds.max, STACK_TEMP_TICK_SEGMENTS);
+    const rightAxisX = canvas.width - padRight;
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    stackTicks.forEach((val) => {
+      const frac = (val - stackBounds.min) / (stackBounds.max - stackBounds.min || 1);
+      const y = padTop + plotH - frac * plotH;
+      ctx.moveTo(rightAxisX, y);
+      ctx.lineTo(rightAxisX + 4, y);
+    });
+    ctx.stroke();
+
+    ctx.fillStyle = "#a7afbf";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    stackTicks.forEach((val) => {
+      const frac = (val - stackBounds.min) / (stackBounds.max - stackBounds.min || 1);
+      const y = padTop + plotH - frac * plotH;
+      ctx.fillText(val.toString(), rightAxisX + 6, y);
+    });
+
+    ctx.save();
+    ctx.translate(canvas.width - 12, padTop + plotH / 2);
+    ctx.rotate(Math.PI / 2);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = STACK_TEMP_COLOR;
+    ctx.fillText("F", 0, 0);
+    ctx.restore();
+  }
+
+  ctx.fillStyle = "#a7afbf";
   ctx.textBaseline = "top";
   ctx.textAlign = "center";
   const endLabel = new Date(latestTs);
   const startLabel = new Date(start);
   const fmt = (d) =>
     `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  ctx.fillText(fmt(startLabel), padLeft + 40, canvas.height - padBottom + 6);
-  ctx.fillText(fmt(endLabel), canvas.width - padRight - 40, canvas.height - padBottom + 6);
+  ctx.fillText(fmt(startLabel), padLeft + 40, canvas.height - padBottom + 2);
+  ctx.fillText(fmt(endLabel), canvas.width - padRight - 40, canvas.height - padBottom + 2);
   ctx.fillText(
     `time (last ${EVAP_WINDOWS[evapHistoryWindowSec.toString()] || "window"})`,
     padLeft + plotW / 2,
-    canvas.height - padBottom + 6
+    canvas.height - padBottom + 2
   );
+
+  if (stackBounds) {
+    drawLine(
+      ctx,
+      stackFiltered,
+      STACK_TEMP_COLOR,
+      start,
+      latestTs,
+      stackBounds.min,
+      stackBounds.max,
+      { padLeft, padTop, plotW, plotH },
+      { dash: STACK_TEMP_DASH, lineWidth: 1.5 }
+    );
+  }
 
   // Draw segments colored by draw-off tank
   ctx.lineWidth = 2;
@@ -1276,9 +1372,13 @@ function recomputeStalenessAndRender() {
   });
   const evapFlowVal = toNumber(latestEvaporator?.evaporator_flow_gph);
   const evapTs = msFromIso(latestEvaporator?.sample_timestamp || latestEvaporator?.last_received_at);
+  const stackTempVal = toNumber(latestStackTemps?.stack_temp_f);
+  const stackTempTs = msFromIso(latestStackTemps?.source_timestamp || latestStackTemps?.last_received_at);
   if (!evapFetchGuard) {
     addEvapHistoryPoint(evapFlowVal, evapTs, latestEvaporator?.draw_off_tank);
     pruneToWindow(evapHistory, evapHistoryWindowSec);
+    addHistoryPoint(stackHistory, stackTempVal, stackTempTs);
+    pruneToWindow(stackHistory, evapHistoryWindowSec);
   }
   updatePumpHistoryChart(
     pumpFlowVal != null && pumpTs != null ? { v: pumpFlowVal, t: pumpTs } : null,
