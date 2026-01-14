@@ -132,6 +132,7 @@ unsigned long lastDisplayToggleMs = 0;
 bool showStaleWarningScreen = false;
 bool lastStale = false;
 bool lastNetOk = false;
+bool lastDisplayWarning = false;
 float stackMinuteSums[WINDOW_BUFFER_MINUTES];
 uint16_t minuteSampleCounts[WINDOW_BUFFER_MINUTES];
 int minuteWriteIndex = 0;
@@ -149,19 +150,65 @@ bool i2cDevicePresent(uint8_t address) {
   return Wire.endTransmission() == 0;
 }
 
-void recoverI2cBus() {
+bool recoverI2cBus() {
 #if defined(SCL) && defined(SDA)
+  pinMode(SCL, INPUT_PULLUP);
   pinMode(SDA, INPUT_PULLUP);
-  pinMode(SCL, OUTPUT);
-  for (int i = 0; i < 9; i++) {
-    digitalWrite(SCL, LOW);
-    delayMicroseconds(5);
-    digitalWrite(SCL, HIGH);
-    delayMicroseconds(5);
+  delayMicroseconds(5);
+
+  bool sclLow = (digitalRead(SCL) == LOW);
+  bool sdaLow = (digitalRead(SDA) == LOW);
+  if (sclLow || sdaLow) {
+    Serial.print("I2C recovery start: SCL=");
+    Serial.print(sclLow ? "LOW" : "HIGH");
+    Serial.print(" SDA=");
+    Serial.println(sdaLow ? "LOW" : "HIGH");
   }
+
+  if (sclLow || sdaLow) {
+    for (int i = 0; i < 16; i++) {
+      pinMode(SCL, OUTPUT);
+      digitalWrite(SCL, LOW);
+      delayMicroseconds(5);
+      pinMode(SCL, INPUT_PULLUP);
+      delayMicroseconds(5);
+      if (digitalRead(SDA) == HIGH && digitalRead(SCL) == HIGH) {
+        break;
+      }
+    }
+  }
+
+  // Generate a STOP to reset the bus.
+  pinMode(SDA, OUTPUT);
+  digitalWrite(SDA, LOW);
+  delayMicroseconds(5);
   pinMode(SCL, INPUT_PULLUP);
   delayMicroseconds(5);
+  pinMode(SDA, INPUT_PULLUP);
+  delayMicroseconds(5);
+
+  bool sclLowAfter = (digitalRead(SCL) == LOW);
+  bool sdaLowAfter = (digitalRead(SDA) == LOW);
+  if (sclLowAfter || sdaLowAfter) {
+    Serial.print("I2C recovery incomplete: SCL=");
+    Serial.print(sclLowAfter ? "LOW" : "HIGH");
+    Serial.print(" SDA=");
+    Serial.println(sdaLowAfter ? "LOW" : "HIGH");
+  } else if (sclLow || sdaLow) {
+    Serial.println("I2C recovery ok");
+  }
+  return !(sclLowAfter || sdaLowAfter);
+#else
+  return true;
 #endif
+}
+
+void reinitLcd() {
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  lcd.createChar(LCD_ARROW_UP, lcdArrowUp);
+  lcd.createChar(LCD_ARROW_DOWN, lcdArrowDown);
 }
 
 void initLcd() {
@@ -170,11 +217,7 @@ void initLcd() {
     lcdReady = false;
     return;
   }
-  lcd.init();
-  lcd.backlight();
-  lcd.clear();
-  lcd.createChar(LCD_ARROW_UP, lcdArrowUp);
-  lcd.createChar(LCD_ARROW_DOWN, lcdArrowDown);
+  reinitLcd();
   lcdReady = true;
   Serial.println("LCD initialized");
 }
@@ -315,6 +358,21 @@ void showStaleWarning(unsigned long elapsedMs) {
   lcdPrintCenteredRow(3, row4);
 }
 
+void logStaleState(bool stale, unsigned long elapsedMs) {
+  if (stale) {
+    unsigned long totalSeconds = elapsedMs / 1000UL;
+    unsigned long minutes = totalSeconds / 60UL;
+    unsigned long seconds = totalSeconds % 60UL;
+    Serial.print("STALE state detected; last update ");
+    Serial.print(minutes);
+    Serial.print("m");
+    Serial.print(seconds);
+    Serial.println("s ago");
+  } else {
+    Serial.println("STALE state cleared; readings fresh again");
+  }
+}
+
 void updateLcd(float stackF, float ambientF,
                float windowA, float windowB, float windowC, float windowD,
                bool netOk) {
@@ -449,13 +507,17 @@ bool recoverMcp() {
   Serial.println("Reinitializing MCP9600...");
   Wire.end();
   delay(5);
-  recoverI2cBus();
+  const bool busRecovered = recoverI2cBus();
   delay(5);
   Wire.begin();
   Wire.setClock(100000);  // slow down I2C for stability
 #ifdef WIRE_HAS_TIMEOUT
   Wire.setWireTimeout(2500, true);
 #endif
+  if (busRecovered && lcdReady) {
+    reinitLcd();
+    Serial.println("LCD reinitialized after I2C recovery");
+  }
   for (int attempt = 1; attempt <= MCP_REINIT_RETRIES; attempt++) {
     if (initMcp(false)) {
       Serial.println("MCP9600 reinit ok");
@@ -733,15 +795,24 @@ void loop()
     }
     showStaleWarningScreen = false;
   }
+  if (stale != lastStale) {
+    logStaleState(stale, now - lastGoodReadingMs);
+  }
   lastStale = stale;
 
   const bool netOk = wifiConnected && lastUploadOk;
   const bool displayUpdateNeeded = newReadingOk || displayToggle || (netOk != lastNetOk);
   if (displayUpdateNeeded) {
-    if (stale && showStaleWarningScreen) {
+    const bool displayWarning = stale && showStaleWarningScreen;
+    if (displayWarning) {
       showStaleWarning(now - lastGoodReadingMs);
     } else {
       updateLcd(lastHotF, lastColdF, lastWindowA, lastWindowB, lastWindowC, lastWindowD, netOk);
+    }
+    if (displayWarning != lastDisplayWarning) {
+      Serial.print("Display mode: ");
+      Serial.println(displayWarning ? "WARNING" : "NORMAL");
+      lastDisplayWarning = displayWarning;
     }
     lastNetOk = netOk;
   }
