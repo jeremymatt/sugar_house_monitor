@@ -52,6 +52,10 @@ const EVAP_Y_MIN_OPTIONS = [0, 100, 200, 300, 400, 500];
 const EVAP_Y_MAX_OPTIONS = [300, 400, 500, 600, 700, 800];
 const PUMP_Y_MIN_OPTIONS = [0, 50, 100, 150, 200, 250];
 const PUMP_Y_MAX_OPTIONS = [50, 100, 150, 200, 300, 500];
+const VACUUM_Y_MIN = 0;
+const VACUUM_Y_MAX = 30;
+const VACUUM_TICK_SEGMENTS = 5;
+const VACUUM_DASH = [6, 4];
 const DRAW_OFF_COLORS = {
   brookside: "#0072b2", // blue
   roadside: "#d55e00",  // orange
@@ -59,6 +63,7 @@ const DRAW_OFF_COLORS = {
 };
 const PUMP_COLOR = "#d55e00"; // pump line orange
 const NET_COLOR = "#0072b2";  // tank inflow line blue
+const VACUUM_COLOR = "#cfd2d9"; // vacuum line light gray
 
 // Flow thresholds (gph) and reserve volume (gal)
 const TANKS_FILLING_THRESHOLD = Number(window.TANKS_FILLING_THRESHOLD ?? 5);
@@ -99,6 +104,7 @@ let lastFetchError = false;
 let lastPumpFlow = null;
 const pumpHistory = [];
 const inflowHistory = []; // tank inflow (positive-only) for pump chart
+const vacuumHistory = []; // vacuum readings for pump chart
 let evapHistory = [];
 const HISTORY_MIN_SPACING_MS = 30 * 1000; // throttle points every 30s unless value changes
 let pumpFetchGuard = false;
@@ -808,6 +814,7 @@ async function refreshPumpHistory(windowSec) {
   const token = ++pumpFetchToken;
   pumpHistory.splice(0, pumpHistory.length);
   inflowHistory.splice(0, inflowHistory.length);
+  vacuumHistory.splice(0, vacuumHistory.length);
   updatePumpHistoryChart();
   const aborter = new AbortController();
   pumpFetchAbort = aborter;
@@ -841,8 +848,19 @@ async function refreshPumpHistory(windowSec) {
           if (t != null && v != null) inflowHistory.unshift({ t, v });
         });
     }
+    if (history.vacuum) {
+      history.vacuum
+        .slice()
+        .reverse()
+        .forEach((p) => {
+          const t = msFromIso(p.ts);
+          const v = toNumber(p.reading_inhg);
+          if (t != null && v != null) vacuumHistory.unshift({ t, v });
+        });
+    }
     pruneToWindow(pumpHistory, windowSec);
     pruneToWindow(inflowHistory, windowSec);
+    pruneToWindow(vacuumHistory, windowSec);
     updatePumpHistoryChart();
   } catch (err) {
     if (!aborter.signal.aborted) {
@@ -901,10 +919,14 @@ async function refreshEvapHistory(windowSec) {
   }
 }
 
-function drawLine(ctx, points, color, x0, x1, yMin, yMax, dims) {
+function drawLine(ctx, points, color, x0, x1, yMin, yMax, dims, opts = {}) {
   if (!points.length) return;
+  ctx.save();
   ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = opts.lineWidth ?? 2;
+  if (opts.dash) {
+    ctx.setLineDash(opts.dash);
+  }
   ctx.beginPath();
   points.forEach((pt, idx) => {
     const xFrac = (pt.t - x0) / (x1 - x0 || 1);
@@ -915,17 +937,20 @@ function drawLine(ctx, points, color, x0, x1, yMin, yMax, dims) {
     else ctx.lineTo(x, y);
   });
   ctx.stroke();
+  ctx.restore();
 }
 
-function updatePumpHistoryChart(pumpPoint, inflowPoint) {
+function updatePumpHistoryChart(pumpPoint, inflowPoint, vacuumPoint) {
   if (!pumpFetchGuard) {
     if (pumpPoint) addHistoryPoint(pumpHistory, pumpPoint.v, pumpPoint.t);
     if (inflowPoint) addHistoryPoint(inflowHistory, inflowPoint.v, inflowPoint.t);
+    if (vacuumPoint) addHistoryPoint(vacuumHistory, vacuumPoint.v, vacuumPoint.t);
   }
 
   const latestTs = Math.max(
     pumpHistory.length ? pumpHistory[pumpHistory.length - 1].t : 0,
-    inflowHistory.length ? inflowHistory[inflowHistory.length - 1].t : 0
+    inflowHistory.length ? inflowHistory[inflowHistory.length - 1].t : 0,
+    vacuumHistory.length ? vacuumHistory[vacuumHistory.length - 1].t : 0
   );
 
   const canvas = document.getElementById("pump-history-canvas");
@@ -939,6 +964,7 @@ function updatePumpHistoryChart(pumpPoint, inflowPoint) {
 
   pruneToWindow(pumpHistory, flowHistoryWindowSec);
   pruneToWindow(inflowHistory, flowHistoryWindowSec);
+  pruneToWindow(vacuumHistory, flowHistoryWindowSec);
   // Fit to container width on each draw for responsiveness.
   const desiredWidth = canvas.clientWidth || canvas.width || 600;
   if (canvas.width !== desiredWidth) {
@@ -954,7 +980,7 @@ function updatePumpHistoryChart(pumpPoint, inflowPoint) {
 
   // Layout padding for axes/labels
   const padLeft = 52;
-  const padRight = 10;
+  const padRight = 52;
   const padTop = 10;
   const padBottom = 30;
   const plotW = canvas.width - padLeft - padRight;
@@ -1002,8 +1028,38 @@ function updatePumpHistoryChart(pumpPoint, inflowPoint) {
   ctx.fillText("gph", 0, 0);
   ctx.restore();
 
+  const vacuumMin = VACUUM_Y_MIN;
+  const vacuumMax = VACUUM_Y_MAX;
+  const vacuumTicks = buildTicks(vacuumMin, vacuumMax, VACUUM_TICK_SEGMENTS);
+  const rightAxisX = canvas.width - padRight;
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.beginPath();
+  vacuumTicks.forEach((val) => {
+    const frac = (val - vacuumMin) / (vacuumMax - vacuumMin || 1);
+    const y = padTop + plotH - frac * plotH;
+    ctx.moveTo(rightAxisX, y);
+    ctx.lineTo(rightAxisX + 4, y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = "#a7afbf";
+  ctx.textAlign = "left";
+  vacuumTicks.forEach((val) => {
+    const frac = (val - vacuumMin) / (vacuumMax - vacuumMin || 1);
+    const y = padTop + plotH - frac * plotH;
+    ctx.fillText(val.toString(), rightAxisX + 6, y);
+  });
+  ctx.save();
+  ctx.translate(canvas.width - 12, padTop + plotH / 2);
+  ctx.rotate(Math.PI / 2);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = VACUUM_COLOR;
+  ctx.fillText("inHg", 0, 0);
+  ctx.restore();
+
   ctx.textBaseline = "top";
   ctx.textAlign = "center";
+  ctx.fillStyle = "#a7afbf";
   const endLabel = new Date(now);
   const startLabel = new Date(start);
   const fmt = (d) =>
@@ -1014,10 +1070,11 @@ function updatePumpHistoryChart(pumpPoint, inflowPoint) {
   ctx.fillText(`time (last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"})`, padLeft + plotW / 2, canvas.height - padBottom + 6);
 
   // Lines
+  drawLine(ctx, vacuumHistory, VACUUM_COLOR, start, now, vacuumMin, vacuumMax, { padLeft, padTop, plotW, plotH }, { dash: VACUUM_DASH, lineWidth: 1.5 });
   drawLine(ctx, pumpHistory, PUMP_COLOR, start, now, yMin, yMax, { padLeft, padTop, plotW, plotH });
   drawLine(ctx, inflowHistory, NET_COLOR, start, now, yMin, yMax, { padLeft, padTop, plotW, plotH });
 
-  if ((!pumpHistory.length) && (!inflowHistory.length)) {
+  if ((!pumpHistory.length) && (!inflowHistory.length) && (!vacuumHistory.length)) {
     drawCenteredMessage(canvas, "#1a1f28", "#888", "No flow data yet");
     if (note) note.textContent = `Showing last ${FLOW_WINDOWS[flowHistoryWindowSec.toString()] || "window"}`;
     return;
@@ -1201,6 +1258,8 @@ function recomputeStalenessAndRender() {
   const bTs = msFromIso(brookside?.last_sample_timestamp || brookside?.last_received_at);
   const rTs = msFromIso(roadside?.last_sample_timestamp || roadside?.last_received_at);
   const tankTs = averageMs(bTs, rTs);
+  const vacuumVal = toNumber(latestVacuum?.reading_inhg);
+  const vacuumTs = msFromIso(latestVacuum?.last_received_at || latestVacuum?.source_timestamp);
 
   updateTankCard("brookside", brookside, brooksideSec, brooksideThresh);
   updateTankCard("roadside",  roadside,  roadsideSec,  roadsideThresh);
@@ -1221,7 +1280,8 @@ function recomputeStalenessAndRender() {
   }
   updatePumpHistoryChart(
     pumpFlowVal != null && pumpTs != null ? { v: pumpFlowVal, t: pumpTs } : null,
-    overview?.inflowFlow != null && tankTs != null ? { v: overview.inflowFlow, t: tankTs } : null
+    overview?.inflowFlow != null && tankTs != null ? { v: overview.inflowFlow, t: tankTs } : null,
+    vacuumVal != null && vacuumTs != null ? { v: vacuumVal, t: vacuumTs } : null
   );
   updateEvapHistoryChart();
 
