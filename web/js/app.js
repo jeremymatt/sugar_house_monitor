@@ -854,7 +854,8 @@ async function refreshPumpHistory(windowSec) {
         .reverse()
         .forEach((p) => {
           const t = msFromIso(p.ts);
-          const v = toNumber(p.reading_inhg);
+          const raw = toNumber(p.reading_inhg);
+          const v = raw == null ? null : Math.abs(raw);
           if (t != null && v != null) vacuumHistory.unshift({ t, v });
         });
     }
@@ -1258,7 +1259,8 @@ function recomputeStalenessAndRender() {
   const bTs = msFromIso(brookside?.last_sample_timestamp || brookside?.last_received_at);
   const rTs = msFromIso(roadside?.last_sample_timestamp || roadside?.last_received_at);
   const tankTs = averageMs(bTs, rTs);
-  const vacuumVal = toNumber(latestVacuum?.reading_inhg);
+  const vacuumRaw = toNumber(latestVacuum?.reading_inhg);
+  const vacuumVal = vacuumRaw == null ? null : Math.abs(vacuumRaw);
   const vacuumTs = msFromIso(latestVacuum?.last_received_at || latestVacuum?.source_timestamp);
 
   updateTankCard("brookside", brookside, brooksideSec, brooksideThresh);
