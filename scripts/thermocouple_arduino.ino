@@ -1,9 +1,10 @@
 #include <Wire.h>
-// install the liquidcrystal i2c library by Frank de Brabander
+// install the hd44780 library by Bill Perry
 #include <Adafruit_I2CDevice.h>
 #include <Adafruit_I2CRegister.h>
 #include "Adafruit_MCP9600.h"
-#include <LiquidCrystal_I2C.h>
+#include <hd44780.h>
+#include <hd44780ioClass/hd44780_I2Cexp.h>
 #include <WiFiS3.h>
 #include <ArduinoHttpClient.h>
 #include <time.h>
@@ -44,6 +45,9 @@
 #ifndef SHM_WINDOW_SIZE_MINUTES
 #define SHM_WINDOW_SIZE_MINUTES 15
 #endif
+#ifndef SHM_I2C_CLOCK_HZ
+#define SHM_I2C_CLOCK_HZ 50000UL
+#endif
 
 const char WIFI_SSID[] = SHM_WIFI_SSID;
 const char WIFI_PASSWORD[] = SHM_WIFI_PASSWORD;
@@ -63,12 +67,12 @@ const unsigned long WIFI_CONNECT_TIMEOUT_MS = WIFI_RETRY_DELAY_MS * WIFI_ATTEMPT
 const unsigned long UPLOAD_RETRY_INTERVAL_MS = SHM_UPLOAD_RETRY_MS;
 const unsigned long STALE_WARNING_TOGGLE_MS = 2000UL;
 const unsigned long STALE_AFTER_MS = SAMPLE_INTERVAL_MS * 2;
+const unsigned long I2C_CLOCK_HZ = SHM_I2C_CLOCK_HZ;
 const int MCP_REINIT_RETRIES = 3;
 const int window_size_minutes = SHM_WINDOW_SIZE_MINUTES;
 const int WINDOW_BUFFER_MINUTES = SHM_WINDOW_SIZE_MINUTES * 4;
 const unsigned long MINUTE_MS = 60000UL;
 
-const uint8_t LCD_I2C_ADDRESS = 0x27;
 const uint8_t LCD_COLUMNS = 20;
 const uint8_t LCD_ROWS = 4;
 const uint8_t NET_STATUS_COL = LCD_COLUMNS - 4;
@@ -103,7 +107,7 @@ WiFiClient netClient;
 #endif
 
 Adafruit_MCP9600 mcp;
-LiquidCrystal_I2C lcd(LCD_I2C_ADDRESS, LCD_COLUMNS, LCD_ROWS);
+hd44780_I2Cexp lcd;
 bool lcdReady = false;
 
 /* Set and print ambient resolution */
@@ -143,11 +147,6 @@ unsigned long currentMinuteStartMs = 0;
 
 inline float C_to_F(float c) {
   return c * 9.0 / 5.0 + 32.0;
-}
-
-bool i2cDevicePresent(uint8_t address) {
-  Wire.beginTransmission(address);
-  return Wire.endTransmission() == 0;
 }
 
 bool recoverI2cBus() {
@@ -203,21 +202,38 @@ bool recoverI2cBus() {
 #endif
 }
 
-void reinitLcd() {
-  lcd.init();
-  lcd.backlight();
-  lcd.clear();
-  lcd.createChar(LCD_ARROW_UP, lcdArrowUp);
-  lcd.createChar(LCD_ARROW_DOWN, lcdArrowDown);
+int beginLcd() {
+  const int status = lcd.begin(LCD_COLUMNS, LCD_ROWS);
+  if (status == 0) {
+    lcd.backlight();
+    lcd.clear();
+    lcd.createChar(LCD_ARROW_UP, lcdArrowUp);
+    lcd.createChar(LCD_ARROW_DOWN, lcdArrowDown);
+  }
+  return status;
+}
+
+bool reinitLcd() {
+  const int status = beginLcd();
+  if (status != 0) {
+    Serial.print("LCD reinit failed (status=");
+    Serial.print(status);
+    Serial.println(")");
+    lcdReady = false;
+    return false;
+  }
+  return true;
 }
 
 void initLcd() {
-  if (!i2cDevicePresent(LCD_I2C_ADDRESS)) {
-    Serial.println("LCD not found; continuing without display");
+  const int status = beginLcd();
+  if (status != 0) {
+    Serial.print("LCD not found or init failed (status=");
+    Serial.print(status);
+    Serial.println(")");
     lcdReady = false;
     return;
   }
-  reinitLcd();
   lcdReady = true;
   Serial.println("LCD initialized");
 }
@@ -510,13 +526,14 @@ bool recoverMcp() {
   const bool busRecovered = recoverI2cBus();
   delay(5);
   Wire.begin();
-  Wire.setClock(100000);  // slow down I2C for stability
+  Wire.setClock(I2C_CLOCK_HZ);
 #ifdef WIRE_HAS_TIMEOUT
   Wire.setWireTimeout(2500, true);
 #endif
   if (busRecovered && lcdReady) {
-    reinitLcd();
-    Serial.println("LCD reinitialized after I2C recovery");
+    if (reinitLcd()) {
+      Serial.println("LCD reinitialized after I2C recovery");
+    }
   }
   for (int attempt = 1; attempt <= MCP_REINIT_RETRIES; attempt++) {
     if (initMcp(false)) {
@@ -691,7 +708,7 @@ void setup()
 
   netClient.setTimeout(15000);
   Wire.begin();
-  Wire.setClock(100000);
+  Wire.setClock(I2C_CLOCK_HZ);
 #ifdef WIRE_HAS_TIMEOUT
   Wire.setWireTimeout(2500, true);
 #endif
