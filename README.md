@@ -18,6 +18,15 @@ Live/Simulated monitoring for Brookside/Roadside tanks, transfer pump, evaporato
 ### Pump Pi
 - Captures pump start/stop events, computes run/interval/gph, uploads to server (`pump_events` table).
 - Debug is handled by Tank Pi using `real_data/pump_times.csv`.
+- enable SPI with `sudo raspi-config nonint do_spi 0`
+- to install numpy on a pi zero:
+    * `sudo apt-get install dphys-swapfile -y`
+    * `sudo apt remove systemd-zram-generator -y` <== try running and cancel if it warns that other packages depend on it
+    * `sudo dphys-swapfile swapoff`
+    * `sudo vi /etc/dphys-swapfile`
+    * Edit swapfile line `CONF_SWAPSIZE=2048`
+    * `sudo dphys-swapfile setup`
+    * `sudo dphys-swapfile swapon`
 
 #### Pump Pi state machine (P1/P2/P3 truth table)
 - P1 = tank_full input, P2 = manual_start input, P3 = tank_empty input; states are `pumping`, `manual_pumping`, and `not_pumping`.
@@ -61,9 +70,11 @@ Live/Simulated monitoring for Brookside/Roadside tanks, transfer pump, evaporato
 1. Enable UART (hardware serial) with raspi-config:
     * `sudo raspi-config nonint do_serial_cons 1`
     * `sudo raspi-config nonint do_serial_hw 0`
+1. Enable I2C:
+    * `sudo raspi-config nonint do_i2c 0`
 1. Enable a second UART port:
     * `sudo vi /boot/firmware/config.txt`
-    * Ensure one `dtoverlay` is enabled:
+    * Ensure one `dtoverlay` is enabled: `dtoverlay=uart5,txd5_pin=12,rxd5_pin=13`
     ```
     enable_uart=1
     # dtoverlay=uart2   #TX: GPIO0 /   RX: GPIO1
