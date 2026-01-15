@@ -7,7 +7,7 @@ function table_exists(PDO $db, string $table): bool {
     return (bool) $stmt->fetch();
 }
 
-// Simple JSON endpoint to return pump and tank net flow history for the last N seconds.
+// Simple JSON endpoint to return pump, tank net flow, and vacuum history for the last N seconds.
 // Inputs (query params):
 //   window_sec (default 21600 = 6h)
 
@@ -18,6 +18,7 @@ if ($windowSec <= 0) {
 }
 $pumpDbPath = resolve_repo_path($env['PUMP_DB_PATH'] ?? '');
 $tankDbPath = resolve_repo_path($env['TANK_DB_PATH'] ?? '');
+$vacuumDbPath = resolve_repo_path($env['VACUUM_DB_PATH'] ?? $env['PUMP_DB_PATH'] ?? $env['TANK_DB_PATH'] ?? '');
 
 // Determine the latest timestamp across pump + tank streams, use that as the anchor.
 $latestTs = null;
@@ -50,6 +51,21 @@ if ($tankDbPath && file_exists($tankDbPath)) {
     if ($check->fetch()) {
         $stmt = $tankDb->query(
             "SELECT MAX(source_timestamp) AS max_ts FROM tank_readings WHERE flow_gph IS NOT NULL"
+        );
+        if ($row = $stmt->fetch()) {
+            $t = iso_to_ts($row['max_ts'] ?? null);
+            if ($t && ($latestTs === null || $t > $latestTs)) $latestTs = $t;
+        }
+    }
+}
+
+$vacuumRows = [];
+if ($vacuumDbPath && file_exists($vacuumDbPath)) {
+    $vacuumDb = connect_sqlite($vacuumDbPath);
+    $check = $vacuumDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='vacuum_readings'");
+    if ($check->fetch()) {
+        $stmt = $vacuumDb->query(
+            "SELECT MAX(source_timestamp) AS max_ts FROM vacuum_readings WHERE reading_inhg IS NOT NULL"
         );
         if ($row = $stmt->fetch()) {
             $t = iso_to_ts($row['max_ts'] ?? null);
@@ -144,10 +160,31 @@ if ($tankDbPath && file_exists($tankDbPath)) {
     }
 }
 
+if ($vacuumDbPath && file_exists($vacuumDbPath)) {
+    $vacuumDb = connect_sqlite($vacuumDbPath);
+    $check = $vacuumDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='vacuum_readings'");
+    if ($check->fetch()) {
+        $stmt = $vacuumDb->prepare(
+            'SELECT source_timestamp AS ts, reading_inhg
+             FROM vacuum_readings
+             WHERE source_timestamp >= :cutoff AND reading_inhg IS NOT NULL
+             ORDER BY source_timestamp'
+        );
+        $stmt->execute([':cutoff' => $cutoffIso]);
+        foreach ($stmt as $row) {
+            $vacuumRows[] = [
+                'ts' => $row['ts'],
+                'reading_inhg' => $row['reading_inhg'],
+            ];
+        }
+    }
+}
+
 respond_json([
     'status' => 'ok',
     'pump' => $pumpRows,
     'net' => $netRows,
     'inflow' => $inflowRows,
+    'vacuum' => $vacuumRows,
     'window_sec' => $windowSec,
 ]);

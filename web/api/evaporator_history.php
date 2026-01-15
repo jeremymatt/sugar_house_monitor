@@ -3,6 +3,13 @@ require_once __DIR__ . '/common.php';
 
 $env = require_server_env();
 $dbPath = resolve_repo_path($env['EVAPORATOR_DB_PATH'] ?? 'data/evaporator.db');
+$stackDbPath = resolve_repo_path(
+    $env['STACK_TEMP_DB_PATH']
+        ?? $env['VACUUM_DB_PATH']
+        ?? $env['PUMP_DB_PATH']
+        ?? $env['TANK_DB_PATH']
+        ?? ''
+);
 $db = connect_sqlite($dbPath);
 
 $minOptions = [0, 100, 200, 300, 400, 500];
@@ -145,6 +152,21 @@ $stmt = $db->query('SELECT MAX(sample_timestamp) AS max_ts FROM evaporator_flow'
 if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $latestTs = $row['max_ts'] ? strtotime($row['max_ts']) : null;
 }
+if ($stackDbPath && file_exists($stackDbPath)) {
+    $stackDb = connect_sqlite($stackDbPath);
+    $check = $stackDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='stack_temperatures'");
+    if ($check->fetch()) {
+        $stmt = $stackDb->query(
+            "SELECT MAX(source_timestamp) AS max_ts FROM stack_temperatures WHERE stack_temp_f IS NOT NULL"
+        );
+        if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $stackTs = $row['max_ts'] ? strtotime($row['max_ts']) : null;
+            if ($stackTs && ($latestTs === null || $stackTs > $latestTs)) {
+                $latestTs = $stackTs;
+            }
+        }
+    }
+}
 $cutoffTs = $latestTs ? $latestTs - $windowSec : (time() - $windowSec);
 $cutoffIso = gmdate('c', $cutoffTs);
 
@@ -163,6 +185,27 @@ foreach ($stmt as $row) {
         'draw_off_tank' => $row['draw_off_tank'],
         'pump_in_tank' => $row['pump_in_tank'],
     ];
+}
+
+$stackHistoryRows = [];
+if ($stackDbPath && file_exists($stackDbPath)) {
+    $stackDb = connect_sqlite($stackDbPath);
+    $check = $stackDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='stack_temperatures'");
+    if ($check->fetch()) {
+        $stmt = $stackDb->prepare(
+            'SELECT source_timestamp, stack_temp_f
+             FROM stack_temperatures
+             WHERE source_timestamp >= :cutoff AND stack_temp_f IS NOT NULL
+             ORDER BY source_timestamp'
+        );
+        $stmt->execute([':cutoff' => $cutoffIso]);
+        foreach ($stmt as $row) {
+            $stackHistoryRows[] = [
+                'ts' => $row['source_timestamp'],
+                'stack_temp_f' => $row['stack_temp_f'],
+            ];
+        }
+    }
 }
 
 $latest = null;
@@ -192,4 +235,5 @@ respond_json([
     'window_sec_used' => $windowSec,
     'latest' => $latest,
     'history' => $historyRows,
+    'stack_history' => $stackHistoryRows,
 ]);

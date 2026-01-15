@@ -68,6 +68,7 @@ COLORS = {
     "brookside": (0, 90, 140),   # blue (darker)
     "roadside": (180, 70, 0),    # orange (darker)
 }
+STACK_LINE = (90, 90, 90)  # dark gray dashed line for stack temp
 
 try:
     import pygame.freetype as pg_ft
@@ -103,6 +104,12 @@ class EvapPoint:
     t_ms: int
     flow: float
     draw_off: str
+
+
+@dataclass
+class StackPoint:
+    t_ms: int
+    temp_f: float
 
 
 @dataclass
@@ -155,7 +162,9 @@ def ms_from_iso(ts: Optional[str]) -> Optional[int]:
     return int(dt.timestamp() * 1000) if dt else None
 
 
-def fetch_state(preferred_window_sec: Optional[int]) -> Tuple[PlotSettings, List[EvapPoint], EvapStatus]:
+def fetch_state(
+    preferred_window_sec: Optional[int],
+) -> Tuple[PlotSettings, List[EvapPoint], List[StackPoint], EvapStatus]:
     cache_bust = int(time.time())
     status_payload = fetch_json(STATUS_URL, params={"t": cache_bust}) or {}
     stack_payload = fetch_json(STACK_STATUS_URL, params={"t": cache_bust}) or {}
@@ -179,6 +188,7 @@ def fetch_state(preferred_window_sec: Optional[int]) -> Tuple[PlotSettings, List
 
     # History
     points: List[EvapPoint] = []
+    stack_points: List[StackPoint] = []
     for row in history_payload.get("history") or []:
         t_ms = ms_from_iso(row.get("ts"))
         flow = row.get("evaporator_flow_gph")
@@ -190,6 +200,18 @@ def fetch_state(preferred_window_sec: Optional[int]) -> Tuple[PlotSettings, List
         except (TypeError, ValueError):
             continue
         points.append(EvapPoint(t_ms=t_ms, flow=f, draw_off=draw_off))
+
+    stack_points: List[StackPoint] = []
+    for row in history_payload.get("stack_history") or []:
+        t_ms = ms_from_iso(row.get("ts"))
+        temp = row.get("stack_temp_f")
+        if t_ms is None or temp is None:
+            continue
+        try:
+            val = float(temp)
+        except (TypeError, ValueError):
+            continue
+        stack_points.append(StackPoint(t_ms=t_ms, temp_f=val))
 
     # Latest status
     latest = status_payload or {}
@@ -226,7 +248,7 @@ def fetch_state(preferred_window_sec: Optional[int]) -> Tuple[PlotSettings, List
         stack_temp_f=stack_temp,
     )
 
-    return settings, points, status
+    return settings, points, stack_points, status
 
 
 # ---- RENDERING ----
@@ -309,9 +331,56 @@ def draw_text(surface, text, pos, size=20, color=TEXT_MAIN, bold=False):
         return
 
 
-def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
+def auto_bounds(values: List[float]) -> Optional[Tuple[float, float]]:
+    if not values:
+        return None
+    min_val = min(values)
+    max_val = max(values)
+    if min_val == max_val:
+        min_val -= 1
+        max_val += 1
+    pad = max(2.0, (max_val - min_val) * 0.1)
+    return min_val - pad, max_val + pad
+
+
+def draw_dashed_line(surface, color, start, end, dash_len, gap_len, width):
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    dist = math.hypot(dx, dy)
+    if dist <= 0:
+        return
+    dash_len = max(1, int(dash_len))
+    gap_len = max(1, int(gap_len))
+    step = dash_len + gap_len
+    progress = 0.0
+    while progress < dist:
+        seg_start = progress
+        seg_end = min(progress + dash_len, dist)
+        x1 = start[0] + (dx * (seg_start / dist))
+        y1 = start[1] + (dy * (seg_start / dist))
+        x2 = start[0] + (dx * (seg_end / dist))
+        y2 = start[1] + (dy * (seg_end / dist))
+        pygame.draw.line(surface, color, (x1, y1), (x2, y2), width)
+        progress += step
+
+
+def draw_dashed_polyline(surface, color, points, dash_len, gap_len, width):
+    for idx in range(1, len(points)):
+        draw_dashed_line(surface, color, points[idx - 1], points[idx], dash_len, gap_len, width)
+
+
+def draw_chart(
+    surface,
+    rect,
+    settings: PlotSettings,
+    points: List[EvapPoint],
+    stack_points: List[StackPoint],
+):
     pygame.draw.rect(surface, CARD_BG, rect, border_radius=scale_ui(12))
-    if not points:
+    y_min = settings.y_min
+    y_max = settings.y_max if settings.y_max > y_min else y_min + 1
+    window_ms = settings.window_sec * 1000
+    if not points and not stack_points:
         draw_text(
             surface,
             "No evaporator data",
@@ -321,23 +390,36 @@ def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
         )
         return
 
-    y_min = settings.y_min
-    y_max = settings.y_max if settings.y_max > y_min else y_min + 1
-    window_ms = settings.window_sec * 1000
-    latest_t = points[-1].t_ms
+    latest_t = max(
+        points[-1].t_ms if points else 0,
+        stack_points[-1].t_ms if stack_points else 0,
+    )
+    if latest_t <= 0:
+        draw_text(
+            surface,
+            "No evaporator data",
+            (rect.x + scale_ui(10), rect.y + scale_ui(10)),
+            size=18,
+            color=TEXT_MUTED,
+        )
+        return
     start_t = latest_t - window_ms
     pts = [p for p in points if p.t_ms >= start_t]
-    if not pts:
+    stack_pts = [p for p in stack_points if p.t_ms >= start_t]
+    if points and not pts:
         pts = points[-100:]  # fallback
         start_t = pts[0].t_ms
         latest_t = pts[-1].t_ms
+        stack_pts = [p for p in stack_points if p.t_ms >= start_t]
 
     pad_left = scale_ui(45)
-    pad_right = scale_ui(8)
+    pad_right = scale_ui(40)
     pad_top = scale_ui(12)
-    pad_bottom = scale_ui(36)
+    pad_bottom = scale_ui(30)
     plot_w = rect.width - pad_left - pad_right
     plot_h = rect.height - pad_top - pad_bottom
+
+    stack_bounds = auto_bounds([p.temp_f for p in stack_pts])
 
     tick_size = 14
     tick_gap = scale_ui(2)
@@ -346,7 +428,7 @@ def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
 
     # Grid + ticks
     x_ticks = 5
-    x_label_y = rect.y + pad_top + plot_h + scale_ui(2)
+    x_label_y = rect.y + pad_top + plot_h + scale_ui(0)
     for i in range(x_ticks + 1):
         x = rect.x + pad_left + (i / x_ticks) * plot_w
         pygame.draw.line(
@@ -380,12 +462,28 @@ def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
             color=AXIS_LABEL,
         )
 
+    if stack_bounds:
+        stack_min, stack_max = stack_bounds
+        right_axis_x = rect.x + pad_left + plot_w
+        for i in range(y_ticks + 1):
+            y_val = stack_min + (i / y_ticks) * (stack_max - stack_min)
+            y = rect.y + pad_top + plot_h - (i / y_ticks) * plot_h
+            pygame.draw.line(
+                surface,
+                AXIS_GRID,
+                (right_axis_x, y),
+                (right_axis_x + scale_ui(4), y),
+                grid_width,
+            )
+            draw_text(
+                surface,
+                f"{y_val:.0f}",
+                (right_axis_x + scale_ui(6), y - scale_ui(8)),
+                size=tick_size,
+                color=AXIS_LABEL,
+            )
+
     # Axes labels
-    label_y = rect.y + pad_top + plot_h / 2 - scale_ui(10)
-    gph_surface = pygame.Surface((scale_ui(40), scale_ui(20)), pygame.SRCALPHA)
-    draw_text(gph_surface, "gph", (0, 0), size=14, color=AXIS_LABEL, bold=True)
-    gph_rot = pygame.transform.rotate(gph_surface, 90)
-    surface.blit(gph_rot, (rect.x + scale_ui(4), label_y))
     draw_text(
         surface,
         f"last {settings.window_sec // 3600}h",
@@ -400,6 +498,22 @@ def draw_chart(surface, rect, settings: PlotSettings, points: List[EvapPoint]):
         x = rect.x + pad_left + x_frac * plot_w
         y = rect.y + pad_top + (1 - y_frac) * plot_h
         return int(x), int(y)
+
+    if stack_bounds and stack_pts:
+        stack_min, stack_max = stack_bounds
+
+        def to_stack_xy(pt: StackPoint) -> Tuple[int, int]:
+            x_frac = (pt.t_ms - start_t) / max(1, (latest_t - start_t))
+            y_frac = (pt.temp_f - stack_min) / max(1e-6, (stack_max - stack_min))
+            x = rect.x + pad_left + x_frac * plot_w
+            y = rect.y + pad_top + (1 - y_frac) * plot_h
+            return int(x), int(y)
+
+        stack_width = max(1, scale_ui(2))
+        dash_len = scale_ui(6)
+        gap_len = scale_ui(4)
+        stack_xy = [to_stack_xy(p) for p in stack_pts]
+        draw_dashed_polyline(surface, STACK_LINE, stack_xy, dash_len, gap_len, stack_width)
 
     flow_width = max(1, scale_ui(2))
     for idx in range(1, len(pts)):
@@ -567,7 +681,7 @@ def main():
             try:
                 fetched = fetch_state(settings.window_sec if settings else None)
                 if fetched:
-                    settings, points, status = fetched
+                    settings, points, stack_points, status = fetched
             except Exception as exc:
                 debug_log(f"fetch_state error: {exc}")
             last_fetch = now
@@ -588,7 +702,7 @@ def main():
             SCREEN_WIDTH - outer_margin * 2,
             status_height,
         )
-        draw_chart(screen, chart_rect, settings, points)
+        draw_chart(screen, chart_rect, settings, points, stack_points)
         draw_status(screen, status_rect, status)
 
         pygame.display.flip()
