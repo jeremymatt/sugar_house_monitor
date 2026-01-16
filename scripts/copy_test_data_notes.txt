@@ -1,0 +1,14 @@
+dh_m958u5@vps10240:~/git/sugar_house_monitor/sample_run/long_term_bench_data/data$ cp ./* ~/git/sugar_house_monitor/data/
+cp: -r not specified; omitting directory './logs'
+dh_m958u5@vps10240:~/git/sugar_house_monitor/sample_run/long_term_bench_data/data$ 
+
+
+
+cp ~/git/sugar_house_monitor/sample_run/long_term_bench_data/web/data/* ~/git/sugar_house_monitor/web/data/
+cp ~/git/sugar_house_monitor/sample_run/long_term_bench_data/data/* ~/git/sugar_house_monitor/data/ -r
+
+
+
+cp ~/git/sugar_house_monitor/sample_run/web/data/* ~/git/sugar_house_monitor/web/data/
+cp ~/git/sugar_house_monitor/sample_run/data/* ~/git/sugar_house_monitor/data/ -r
+rm ~/git/sugar_house_monitor/data/stack_temp.db
