@@ -45,6 +45,16 @@ HISTORY_URL = os.environ.get(
     "DISPLAY_HISTORY_URL", f"{API_BASE}/evaporator_history.php"
 )
 REFRESH_SEC = float(os.environ.get("DISPLAY_REFRESH_SEC", "15"))
+HISTORY_SCOPE = os.environ.get("DISPLAY_HISTORY_SCOPE", "display").strip().lower() or "display"
+WINDOW_OVERRIDE_SEC = os.environ.get("DISPLAY_WINDOW_OVERRIDE_SEC", "").strip()
+WINDOW_OVERRIDE = None
+if WINDOW_OVERRIDE_SEC:
+    try:
+        parsed = int(WINDOW_OVERRIDE_SEC)
+        if parsed > 0:
+            WINDOW_OVERRIDE = parsed
+    except ValueError:
+        WINDOW_OVERRIDE = None
 RAW_PLOT_BINS = os.environ.get("DISPLAY_NUM_PLOT_BINS") or os.environ.get("NUM_PLOT_BINS")
 PLOT_BINS = None
 if RAW_PLOT_BINS:
@@ -55,7 +65,7 @@ if RAW_PLOT_BINS:
     except ValueError:
         PLOT_BINS = None
 WINDOW_DEFAULT = 2 * 60 * 60  # 2h
-YMIN_DEFAULT = 200.0
+YMIN_DEFAULT = 0.0
 YMAX_DEFAULT = 600.0
 TANKS_EMPTYING_THRESHOLD = -10.0
 RESERVE_GALLONS = 150.0
@@ -171,17 +181,15 @@ def ms_from_iso(ts: Optional[str]) -> Optional[int]:
     return int(dt.timestamp() * 1000) if dt else None
 
 
-def fetch_state(
-    preferred_window_sec: Optional[int],
-) -> Tuple[PlotSettings, List[EvapPoint], List[StackPoint], EvapStatus]:
+def fetch_state() -> Tuple[PlotSettings, List[EvapPoint], List[StackPoint], EvapStatus]:
     cache_bust = int(time.time())
     status_payload = fetch_json(STATUS_URL, params={"t": cache_bust}) or {}
     stack_payload = fetch_json(STACK_STATUS_URL, params={"t": cache_bust}) or {}
     brook_status = fetch_json(f"{BASE_URL}/data/status_brookside.json", params={"t": cache_bust}) or {}
     road_status = fetch_json(f"{BASE_URL}/data/status_roadside.json", params={"t": cache_bust}) or {}
-    history_params = {"t": cache_bust}
-    if preferred_window_sec:
-        history_params["window_sec"] = preferred_window_sec
+    history_params = {"t": cache_bust, "scope": HISTORY_SCOPE}
+    if WINDOW_OVERRIDE is not None:
+        history_params["window_sec"] = WINDOW_OVERRIDE
     if PLOT_BINS:
         history_params["num_bins"] = PLOT_BINS
     history_payload = fetch_json(HISTORY_URL, params=history_params) or {}
@@ -690,7 +698,7 @@ def main():
         now = time.time()
         if now - last_fetch >= REFRESH_SEC:
             try:
-                fetched = fetch_state(settings.window_sec if settings else None)
+                fetched = fetch_state()
                 if fetched:
                     settings, points, stack_points, status = fetched
             except Exception as exc:

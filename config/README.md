@@ -6,6 +6,7 @@ Real runtime secrets live in this folder but are ignored by git. Copy or rename 
 - `config/tank_pi.env`
 - `config/pump_pi.env`
 - `config/display_pi.env`
+- `config/shm_admin.ini`
 
 Python modules look for `config/` relative to the repo root by default. You can point services somewhere else by exporting `SUGAR_CONFIG_DIR=/path/to/config` before execution.
 

@@ -2,6 +2,10 @@
 require_once __DIR__ . '/common.php';
 
 $env = require_server_env();
+$scope = $_GET['scope'] ?? $_POST['scope'] ?? 'web';
+if ($scope !== 'display') {
+    $scope = 'web';
+}
 $dbPath = resolve_repo_path($env['EVAPORATOR_DB_PATH'] ?? 'data/evaporator.db');
 $stackDbPath = resolve_repo_path(
     $env['STACK_TEMP_DB_PATH']
@@ -42,6 +46,15 @@ function ensure_tables(PDO $db): void {
             updated_at TEXT NOT NULL
         )'
     );
+    $db->exec(
+        'CREATE TABLE IF NOT EXISTS display_plot_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            y_axis_min REAL NOT NULL,
+            y_axis_max REAL NOT NULL,
+            window_sec INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        )'
+    );
     $stmt = $db->query('SELECT 1 FROM plot_settings WHERE id = 1');
     if (!$stmt->fetch()) {
         $now = gmdate('c');
@@ -50,10 +63,18 @@ function ensure_tables(PDO $db): void {
              VALUES (1, 0.0, 600.0, 7200, '{$now}')"
         );
     }
+    $stmt = $db->query('SELECT 1 FROM display_plot_settings WHERE id = 1');
+    if (!$stmt->fetch()) {
+        $now = gmdate('c');
+        $db->exec(
+            "INSERT INTO display_plot_settings (id, y_axis_min, y_axis_max, window_sec, updated_at)
+             VALUES (1, 0.0, 600.0, 7200, '{$now}')"
+        );
+    }
 }
 
-function load_settings(PDO $db): array {
-    $stmt = $db->query('SELECT y_axis_min, y_axis_max, window_sec FROM plot_settings WHERE id = 1');
+function load_settings(PDO $db, string $table): array {
+    $stmt = $db->query("SELECT y_axis_min, y_axis_max, window_sec FROM {$table} WHERE id = 1");
     if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         return [
             'y_axis_min' => (float) $row['y_axis_min'],
@@ -94,10 +115,14 @@ function is_allowed_value($value, array $options): bool {
 }
 
 ensure_tables($db);
+$settingsTable = $scope === 'display' ? 'display_plot_settings' : 'plot_settings';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
 if ($method === 'POST') {
     ensure_post();
+    if ($scope === 'display') {
+        respond_error('Display settings are managed via shm_admin', 403);
+    }
     $payload = decode_json_body();
     $yMin = isset($payload['y_axis_min']) ? floatval($payload['y_axis_min']) : null;
     $yMax = isset($payload['y_axis_max']) ? floatval($payload['y_axis_max']) : null;
@@ -116,13 +141,13 @@ if ($method === 'POST') {
     [$yMin, $yMax] = reconcile_bounds($yMin, $yMax, $minOptions, $maxOptions);
 
     $stmt = $db->prepare(
-        'INSERT INTO plot_settings (id, y_axis_min, y_axis_max, window_sec, updated_at)
+        "INSERT INTO {$settingsTable} (id, y_axis_min, y_axis_max, window_sec, updated_at)
          VALUES (1, :min, :max, :win, :ts)
          ON CONFLICT(id) DO UPDATE SET
             y_axis_min=excluded.y_axis_min,
             y_axis_max=excluded.y_axis_max,
             window_sec=excluded.window_sec,
-            updated_at=excluded.updated_at'
+            updated_at=excluded.updated_at"
     );
     $stmt->execute([
         ':min' => $yMin,
@@ -141,11 +166,13 @@ if ($method === 'POST') {
     ]);
 }
 
-$settings = load_settings($db);
+$settings = load_settings($db, $settingsTable);
 $windowSec = $settings['window_sec'];
-$windowOverride = isset($_GET['window_sec']) ? intval($_GET['window_sec']) : null;
-if ($windowOverride && in_array($windowOverride, $windowOptions, true)) {
-    $windowSec = $windowOverride;
+if ($scope === 'web') {
+    $windowOverride = isset($_GET['window_sec']) ? intval($_GET['window_sec']) : null;
+    if ($windowOverride && in_array($windowOverride, $windowOptions, true)) {
+        $windowSec = $windowOverride;
+    }
 }
 
 $latestTs = null;

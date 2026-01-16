@@ -80,7 +80,7 @@ Live/Simulated monitoring for Brookside/Roadside tanks, transfer pump, evaporato
 1. Clone https://github.com/jeremymatt/sugar_house_monitor to `~/git/`
 1. `ln -s ~/git/sugar_house_monitor/web ~/mattsmaplesyrup.com/sugar_house_monitor` to expose the web assets/API under the site
 
-## Repository layout (2024 refactor)
+## Repository layout
 
 ```
 git/sugar_house_monitor/
