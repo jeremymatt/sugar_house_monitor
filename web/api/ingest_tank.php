@@ -46,6 +46,7 @@ $db->exec(
         UNIQUE(tank_id, source_timestamp)
     )'
 );
+$db->exec('CREATE INDEX IF NOT EXISTS idx_tank_readings_source_ts ON tank_readings(source_timestamp)');
 ensure_column($db, 'tank_readings', 'max_volume_gal', 'REAL');
 ensure_column($db, 'tank_readings', 'level_percent', 'REAL');
 ensure_column($db, 'tank_readings', 'depth_outlier', 'INTEGER');
