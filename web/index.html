@@ -15,6 +15,7 @@
       --text-muted: #a7afbf;
       --danger: #ff5f5f;
       --danger-soft: rgba(255, 95, 95, 0.15);
+      --warn: #f2d15c;
       --ok: #4caf50;
     }
 
@@ -293,8 +294,19 @@
       bottom: 0;
       left: 0;
       right: 0;
-      background: linear-gradient(to top, rgba(94,184,107,0.9), rgba(94,184,107,0.15));
       transition: height 0.5s ease-out;
+    }
+
+    .storage-fill.storage-ok {
+      background: linear-gradient(to top, rgba(76,175,80,0.9), rgba(76,175,80,0.15));
+    }
+
+    .storage-fill.storage-warn {
+      background: linear-gradient(to top, rgba(242,209,92,0.9), rgba(242,209,92,0.15));
+    }
+
+    .storage-fill.storage-bad {
+      background: linear-gradient(to top, rgba(255,95,95,0.9), rgba(255,95,95,0.15));
     }
 
     .storage-bar-label {

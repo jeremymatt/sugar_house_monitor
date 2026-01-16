@@ -808,9 +808,10 @@ function updateStorageItem(prefix, data) {
   if (!fill || !percentElem || !usedElem || !availElem) return;
 
   const total = toNumber(data?.total_bytes);
-  const used = toNumber(data?.used_bytes);
-  const free = toNumber(data?.free_bytes);
-  if (total == null || used == null || free == null || total <= 0) {
+  const usedRaw = toNumber(data?.used_bytes);
+  const freeRaw = toNumber(data?.free_bytes);
+  fill.classList.remove("storage-ok", "storage-warn", "storage-bad");
+  if (total == null || total <= 0 || (usedRaw == null && freeRaw == null)) {
     fill.style.height = "0%";
     percentElem.textContent = "--%";
     usedElem.textContent = "--";
@@ -818,11 +819,20 @@ function updateStorageItem(prefix, data) {
     return;
   }
 
-  const pct = Math.max(0, Math.min(100, (used / total) * 100));
+  const free = freeRaw != null ? freeRaw : Math.max(0, total - (usedRaw ?? 0));
+  const used = usedRaw != null ? usedRaw : Math.max(0, total - free);
+  const pct = Math.max(0, Math.min(100, (1 - free / total) * 100));
   fill.style.height = `${pct.toFixed(0)}%`;
   percentElem.textContent = `${pct.toFixed(0)}%`;
   usedElem.textContent = formatStorageGb(used);
   availElem.textContent = formatStorageGb(free);
+  if (pct < 50) {
+    fill.classList.add("storage-ok");
+  } else if (pct <= 75) {
+    fill.classList.add("storage-warn");
+  } else {
+    fill.classList.add("storage-bad");
+  }
 }
 
 
