@@ -979,6 +979,10 @@ class TankPiApp:
         self.debug_clock: Optional[SyntheticClock] = None
         self.debug_records: Dict[str, List[TVF.DebugSample]] = {}
         self.tank_processes: Dict[str, Process] = {}
+        self._tank_restart_lock = threading.Lock()
+        self._tank_restart_in_progress: Dict[str, bool] = {
+            name: False for name in TVF.tank_names
+        }
         self.lcd_process: Optional[Process] = None
         self.collector_thread: Optional[threading.Thread] = None
         self.pump_thread: Optional[threading.Thread] = None
@@ -1339,24 +1343,44 @@ class TankPiApp:
         )
 
     def _restart_tank_controller(self, tank_name: str) -> None:
-        proc = self.tank_processes.get(tank_name)
-        if proc and proc.is_alive():
-            try:
-                proc.terminate()
-                proc.join(timeout=1)
-            except Exception:
-                pass
-        self._set_tank_health_grace(
-            tank_name,
-            self._last_clock,
-            self._last_tank_records,
-        )
-        self._start_tank_controller(
-            tank_name,
-            self._last_measurement_params,
-            self._last_clock,
-            self._last_tank_records.get(tank_name) if self._last_tank_records else None,
-        )
+        with self._tank_restart_lock:
+            if self._tank_restart_in_progress.get(tank_name):
+                LOGGER.info("Restart already in progress for %s; skipping.", tank_name)
+                return
+            self._tank_restart_in_progress[tank_name] = True
+        try:
+            proc = self.tank_processes.get(tank_name)
+            if proc and proc.is_alive():
+                try:
+                    proc.terminate()
+                    proc.join(timeout=2)
+                except Exception:
+                    pass
+                if proc.is_alive():
+                    LOGGER.warning(
+                        "%s tank controller still alive, killing (pid=%s)",
+                        tank_name,
+                        proc.pid,
+                    )
+                    try:
+                        proc.kill()
+                        proc.join(timeout=2)
+                    except Exception:
+                        pass
+            self._set_tank_health_grace(
+                tank_name,
+                self._last_clock,
+                self._last_tank_records,
+            )
+            self._start_tank_controller(
+                tank_name,
+                self._last_measurement_params,
+                self._last_clock,
+                self._last_tank_records.get(tank_name) if self._last_tank_records else None,
+            )
+        finally:
+            with self._tank_restart_lock:
+                self._tank_restart_in_progress[tank_name] = False
 
     def _check_tank_health(self) -> None:
         if not self._last_measurement_params:
@@ -1626,12 +1650,7 @@ class TankPiApp:
                     proc.exitcode,
                 )
                 self._log_controller_restart(tank_name, "process died")
-            self._start_tank_controller(
-                tank_name,
-                self.measurement_params,
-                self.debug_clock,
-                (self.debug_records or {}).get(tank_name),
-            )
+            self._restart_tank_controller(tank_name)
 
     def request_shutdown(self) -> None:
         """Signal the app to begin shutdown and wake any waiting loops."""
