@@ -171,7 +171,20 @@ if ($stackDbPath && file_exists($stackDbPath)) {
 $cutoffTs = $latestTs ? $latestTs - $windowSec : (time() - $windowSec);
 $cutoffIso = gmdate('c', $cutoffTs);
 
-$historyRows = [];
+$evapBinner = init_series_binner(
+    $cutoffTs,
+    $windowSec,
+    $numBins,
+    'evaporator_flow_gph',
+    ['draw_off_tank', 'pump_in_tank']
+);
+$stackBinner = init_series_binner(
+    $cutoffTs,
+    $windowSec,
+    $numBins,
+    'stack_temp_f'
+);
+
 $stmt = $db->prepare(
     'SELECT sample_timestamp, evaporator_flow_gph, draw_off_tank, pump_in_tank
      FROM evaporator_flow
@@ -180,15 +193,14 @@ $stmt = $db->prepare(
 );
 $stmt->execute([':cutoff' => $cutoffIso]);
 foreach ($stmt as $row) {
-    $historyRows[] = [
+    series_binner_add($evapBinner, [
         'ts' => $row['sample_timestamp'],
         'evaporator_flow_gph' => $row['evaporator_flow_gph'],
         'draw_off_tank' => $row['draw_off_tank'],
         'pump_in_tank' => $row['pump_in_tank'],
-    ];
+    ]);
 }
 
-$stackHistoryRows = [];
 if ($stackDbPath && file_exists($stackDbPath)) {
     $stackDb = connect_sqlite($stackDbPath);
     $check = $stackDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='stack_temperatures'");
@@ -200,13 +212,13 @@ if ($stackDbPath && file_exists($stackDbPath)) {
              ORDER BY source_timestamp'
         );
         $stmt->execute([':cutoff' => $cutoffIso]);
-foreach ($stmt as $row) {
-    $stackHistoryRows[] = [
-        'ts' => $row['source_timestamp'],
-        'stack_temp_f' => $row['stack_temp_f'],
-    ];
-}
-}
+        foreach ($stmt as $row) {
+            series_binner_add($stackBinner, [
+                'ts' => $row['source_timestamp'],
+                'stack_temp_f' => $row['stack_temp_f'],
+            ]);
+        }
+    }
 }
 
 $latest = null;
@@ -230,21 +242,8 @@ if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     ];
 }
 
-$historyRows = bin_time_series(
-    $historyRows,
-    'evaporator_flow_gph',
-    $cutoffTs,
-    $windowSec,
-    $numBins,
-    ['draw_off_tank', 'pump_in_tank']
-);
-$stackHistoryRows = bin_time_series(
-    $stackHistoryRows,
-    'stack_temp_f',
-    $cutoffTs,
-    $windowSec,
-    $numBins
-);
+$historyRows = series_binner_finalize($evapBinner);
+$stackHistoryRows = series_binner_finalize($stackBinner);
 
 respond_json([
     'status' => 'ok',

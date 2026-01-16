@@ -188,6 +188,126 @@ function bin_time_series(
     return $output;
 }
 
+function init_series_binner(
+    int $cutoffTs,
+    int $windowSec,
+    int $numBins,
+    string $valueKey,
+    array $carryKeys = []
+): array {
+    $allowBins = $numBins > 0 && $windowSec > 0;
+    return [
+        'cutoff_ts' => $cutoffTs,
+        'window_sec' => $windowSec,
+        'num_bins' => $numBins,
+        'bin_sec' => $allowBins ? compute_bin_seconds($windowSec, $numBins) : 0,
+        'value_key' => $valueKey,
+        'carry_keys' => $carryKeys,
+        'allow_bins' => $allowBins,
+        'use_bins' => false,
+        'raw' => [],
+        'bins' => [],
+    ];
+}
+
+function series_binner_add(array &$state, array $row): void {
+    $valueKey = $state['value_key'];
+    if (!array_key_exists('ts', $row) || !array_key_exists($valueKey, $row)) {
+        return;
+    }
+    $value = $row[$valueKey];
+    if ($value === null || $value === '' || !is_numeric($value)) {
+        return;
+    }
+    if (!$state['allow_bins']) {
+        $state['raw'][] = $row;
+        return;
+    }
+    if (!$state['use_bins']) {
+        $state['raw'][] = $row;
+        if (count($state['raw']) > $state['num_bins']) {
+            $state['use_bins'] = true;
+            foreach ($state['raw'] as $rawRow) {
+                series_binner_add_to_bins($state, $rawRow);
+            }
+            $state['raw'] = [];
+        }
+        return;
+    }
+    series_binner_add_to_bins($state, $row);
+}
+
+function series_binner_add_to_bins(array &$state, array $row): void {
+    $tsRaw = $row['ts'] ?? null;
+    if (!$tsRaw) {
+        return;
+    }
+    $ts = strtotime($tsRaw);
+    if ($ts === false) {
+        return;
+    }
+    $offset = $ts - $state['cutoff_ts'];
+    if ($offset < 0) {
+        return;
+    }
+    $binSec = $state['bin_sec'];
+    if ($binSec <= 0) {
+        return;
+    }
+    $idx = (int) floor($offset / $binSec);
+    if ($idx < 0) {
+        return;
+    }
+    if ($idx >= $state['num_bins']) {
+        $idx = $state['num_bins'] - 1;
+    }
+    if (!isset($state['bins'][$idx])) {
+        $state['bins'][$idx] = [
+            'sum' => 0.0,
+            'count' => 0,
+            'last_ts' => null,
+            'carry' => [],
+        ];
+    }
+    $valueKey = $state['value_key'];
+    $state['bins'][$idx]['sum'] += floatval($row[$valueKey]);
+    $state['bins'][$idx]['count'] += 1;
+    if ($state['bins'][$idx]['last_ts'] === null || $ts >= $state['bins'][$idx]['last_ts']) {
+        $state['bins'][$idx]['last_ts'] = $ts;
+        foreach ($state['carry_keys'] as $key) {
+            if (array_key_exists($key, $row) && $row[$key] !== null) {
+                $state['bins'][$idx]['carry'][$key] = $row[$key];
+            }
+        }
+    }
+}
+
+function series_binner_finalize(array $state): array {
+    if (!$state['use_bins']) {
+        return $state['raw'];
+    }
+    if (!$state['bins']) {
+        return [];
+    }
+    ksort($state['bins']);
+    $output = [];
+    foreach ($state['bins'] as $idx => $bin) {
+        if (!$bin['count']) {
+            continue;
+        }
+        $centerTs = $state['cutoff_ts'] + ($idx * $state['bin_sec']) + ($state['bin_sec'] / 2);
+        $entry = [
+            'ts' => gmdate('c', (int) round($centerTs)),
+            $state['value_key'] => $bin['sum'] / $bin['count'],
+        ];
+        foreach ($bin['carry'] as $key => $val) {
+            $entry[$key] = $val;
+        }
+        $output[] = $entry;
+    }
+    return $output;
+}
+
 function ensure_api_key(array $env): void {
     $headers = function_exists('getallheaders') ? getallheaders() : [];
     $provided = $headers['X-API-Key']

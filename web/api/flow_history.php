@@ -29,7 +29,6 @@ function iso_to_ts(?string $iso): ?int {
     return $ts === false ? null : $ts;
 }
 
-$pumpRows = [];
 if ($pumpDbPath && file_exists($pumpDbPath)) {
     $pumpDb = connect_sqlite($pumpDbPath);
     $check = $pumpDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='pump_events'");
@@ -44,8 +43,6 @@ if ($pumpDbPath && file_exists($pumpDbPath)) {
     }
 }
 
-$netRows = [];
-$inflowRows = [];
 if ($tankDbPath && file_exists($tankDbPath)) {
     $tankDb = connect_sqlite($tankDbPath);
     $check = $tankDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='tank_readings'");
@@ -60,7 +57,6 @@ if ($tankDbPath && file_exists($tankDbPath)) {
     }
 }
 
-$vacuumRows = [];
 if ($vacuumDbPath && file_exists($vacuumDbPath)) {
     $vacuumDb = connect_sqlite($vacuumDbPath);
     $check = $vacuumDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='vacuum_readings'");
@@ -78,6 +74,11 @@ if ($vacuumDbPath && file_exists($vacuumDbPath)) {
 $cutoffTs = $latestTs ? $latestTs - $windowSec : (time() - $windowSec);
 $cutoffIso = gmdate('c', $cutoffTs);
 
+$pumpBinner = init_series_binner($cutoffTs, $windowSec, $numBins, 'flow_gph');
+$netBinner = init_series_binner($cutoffTs, $windowSec, $numBins, 'flow_gph');
+$inflowBinner = init_series_binner($cutoffTs, $windowSec, $numBins, 'flow_gph');
+$vacuumBinner = init_series_binner($cutoffTs, $windowSec, $numBins, 'reading_inhg');
+
 if ($pumpDbPath && file_exists($pumpDbPath)) {
     $pumpDb = connect_sqlite($pumpDbPath);
     $check = $pumpDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='pump_events'");
@@ -90,10 +91,10 @@ if ($pumpDbPath && file_exists($pumpDbPath)) {
         );
         $stmt->execute([':cutoff' => $cutoffIso]);
         foreach ($stmt as $row) {
-            $pumpRows[] = [
+            series_binner_add($pumpBinner, [
                 'ts' => $row['ts'],
                 'flow_gph' => $row['flow_gph'],
-            ];
+            ]);
         }
     }
 }
@@ -109,54 +110,38 @@ if ($tankDbPath && file_exists($tankDbPath)) {
              ORDER BY source_timestamp'
         );
         $stmt->execute([':cutoff' => $cutoffIso]);
-        $byTank = ['brookside' => [], 'roadside' => []];
-        foreach ($stmt as $row) {
-            $tankId = $row['tank_id'];
-            if (!isset($byTank[$tankId])) continue;
-            $byTank[$tankId][] = [
-                'ts' => $row['source_timestamp'],
-                'flow_gph' => $row['flow_gph'],
-                'depth_outlier' => $row['depth_outlier'] ?? null,
-            ];
-        }
-        // Build net flow using last-known flows at each event timestamp.
-        $events = [];
-        foreach ($byTank['brookside'] as $row) {
-            $events[] = ['ts' => $row['ts'], 'tank' => 'brookside', 'flow' => $row['flow_gph'], 'outlier' => $row['depth_outlier']];
-        }
-        foreach ($byTank['roadside'] as $row) {
-            $events[] = ['ts' => $row['ts'], 'tank' => 'roadside', 'flow' => $row['flow_gph'], 'outlier' => $row['depth_outlier']];
-        }
-        usort($events, function ($a, $b) {
-            $ta = strtotime($a['ts']);
-            $tb = strtotime($b['ts']);
-            if ($ta === $tb) return 0;
-            return $ta < $tb ? -1 : 1;
-        });
         $bFlow = null;
         $rFlow = null;
-        foreach ($events as $ev) {
-            $flow = $ev['flow'];
-            $isOutlier = isset($ev['outlier']) && $ev['outlier'];
+        foreach ($stmt as $row) {
+            $tankId = $row['tank_id'];
+            if ($tankId !== 'brookside' && $tankId !== 'roadside') {
+                continue;
+            }
+            $flow = $row['flow_gph'];
+            $isOutlier = isset($row['depth_outlier']) && $row['depth_outlier'];
             if ($flow === null || $flow === '' || $isOutlier) {
                 continue; // keep last known valid flow
             }
             $flowVal = floatval($flow);
-            if ($ev['tank'] === 'brookside') $bFlow = $flowVal;
-            if ($ev['tank'] === 'roadside') $rFlow = $flowVal;
+            if ($tankId === 'brookside') {
+                $bFlow = $flowVal;
+            } else {
+                $rFlow = $flowVal;
+            }
             if ($bFlow === null && $rFlow === null) {
                 continue;
             }
             $net = ($bFlow ?? 0.0) + ($rFlow ?? 0.0);
             $inflow = max($bFlow ?? 0.0, 0.0) + max($rFlow ?? 0.0, 0.0);
-            $netRows[] = [
-                'ts' => $ev['ts'],
+            $ts = $row['source_timestamp'];
+            series_binner_add($netBinner, [
+                'ts' => $ts,
                 'flow_gph' => $net,
-            ];
-            $inflowRows[] = [
-                'ts' => $ev['ts'],
+            ]);
+            series_binner_add($inflowBinner, [
+                'ts' => $ts,
                 'flow_gph' => $inflow,
-            ];
+            ]);
         }
     }
 }
@@ -173,18 +158,18 @@ if ($vacuumDbPath && file_exists($vacuumDbPath)) {
         );
         $stmt->execute([':cutoff' => $cutoffIso]);
         foreach ($stmt as $row) {
-            $vacuumRows[] = [
+            series_binner_add($vacuumBinner, [
                 'ts' => $row['ts'],
                 'reading_inhg' => $row['reading_inhg'],
-            ];
+            ]);
         }
     }
 }
 
-$pumpRows = bin_time_series($pumpRows, 'flow_gph', $cutoffTs, $windowSec, $numBins);
-$netRows = bin_time_series($netRows, 'flow_gph', $cutoffTs, $windowSec, $numBins);
-$inflowRows = bin_time_series($inflowRows, 'flow_gph', $cutoffTs, $windowSec, $numBins);
-$vacuumRows = bin_time_series($vacuumRows, 'reading_inhg', $cutoffTs, $windowSec, $numBins);
+$pumpRows = series_binner_finalize($pumpBinner);
+$netRows = series_binner_finalize($netBinner);
+$inflowRows = series_binner_finalize($inflowBinner);
+$vacuumRows = series_binner_finalize($vacuumBinner);
 
 respond_json([
     'status' => 'ok',
