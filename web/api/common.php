@@ -256,7 +256,13 @@ function apply_storage_entry(array &$storage, string $key, array $payload, strin
 }
 
 function load_storage_status(array $env): array {
-    return read_json_file(storage_status_path($env));
+    $path = storage_status_path($env);
+    if (!file_exists($path)) {
+        $payload = ['generated_at' => gmdate('c')];
+        write_json_file($path, $payload);
+        return $payload;
+    }
+    return read_json_file($path);
 }
 
 function save_storage_status(array $env, array $storage): void {
