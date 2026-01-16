@@ -226,7 +226,11 @@ function write_json_file(string $path, array $payload): void {
         return;
     }
     file_put_contents($tmp, json_encode($payload), LOCK_EX);
-    rename($tmp, $path);
+    @chmod($tmp, 0644);
+    if (!rename($tmp, $path)) {
+        return;
+    }
+    @chmod($path, 0644);
 }
 
 function apply_storage_entry(array &$storage, string $key, array $payload, string $timestamp): bool {
