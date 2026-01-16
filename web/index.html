@@ -268,6 +268,62 @@
       color: var(--text-muted);
     }
 
+    .storage-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1.25rem;
+    }
+
+    .storage-item {
+      text-align: center;
+    }
+
+    .storage-bar {
+      position: relative;
+      height: 140px;
+      border-radius: 12px;
+      border: 1px solid var(--card-border);
+      overflow: hidden;
+      background: radial-gradient(circle at top, #222b3a, #10141c 70%);
+      margin-top: 0.75rem;
+    }
+
+    .storage-fill {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(to top, rgba(94,184,107,0.9), rgba(94,184,107,0.15));
+      transition: height 0.5s ease-out;
+    }
+
+    .storage-bar-label {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+      color: var(--text-main);
+      text-shadow: 0 2px 6px rgba(0,0,0,0.5);
+    }
+
+    .storage-values {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .storage-value {
+      display: flex;
+      flex-direction: column;
+      gap: 0.1rem;
+      text-align: left;
+    }
+
     .last-updated {
       font-size: 0.8rem;
       color: var(--text-muted);
@@ -303,6 +359,9 @@
 
     @media (max-width: 900px) {
       .boiling-grid {
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      }
+      .storage-grid {
         grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       }
     }
@@ -372,6 +431,71 @@
           <span class="metric-label">Pump Monitor</span>
           <span class="metric-value" id="monitor-pump-status">–</span>
           <span class="metric-note" id="monitor-pump-note">Awaiting heartbeat</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="storage-card">
+      <div class="card-header">
+        <div>
+          <h2>Storage Utilization</h2>
+          <div class="card-subtitle">Tank Pi, Pump Pi, and server disk usage</div>
+        </div>
+      </div>
+
+      <div class="storage-grid">
+        <div class="storage-item">
+          <h3 class="small">Tank Pi</h3>
+          <div class="storage-bar">
+            <div class="storage-fill" id="storage-tank-fill" style="height:0%;"></div>
+            <div class="storage-bar-label" id="storage-tank-percent">--%</div>
+          </div>
+          <div class="storage-values">
+            <div class="storage-value">
+              <span>Used</span>
+              <span id="storage-tank-used">--</span>
+            </div>
+            <div class="storage-value">
+              <span>Avail</span>
+              <span id="storage-tank-avail">--</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="storage-item">
+          <h3 class="small">Pump Pi</h3>
+          <div class="storage-bar">
+            <div class="storage-fill" id="storage-pump-fill" style="height:0%;"></div>
+            <div class="storage-bar-label" id="storage-pump-percent">--%</div>
+          </div>
+          <div class="storage-values">
+            <div class="storage-value">
+              <span>Used</span>
+              <span id="storage-pump-used">--</span>
+            </div>
+            <div class="storage-value">
+              <span>Avail</span>
+              <span id="storage-pump-avail">--</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="storage-item">
+          <h3 class="small">Server</h3>
+          <div class="storage-bar">
+            <div class="storage-fill" id="storage-server-fill" style="height:0%;"></div>
+            <div class="storage-bar-label" id="storage-server-percent">--%</div>
+          </div>
+          <div class="storage-values">
+            <div class="storage-value">
+              <span>Used</span>
+              <span id="storage-server-used">--</span>
+            </div>
+            <div class="storage-value">
+              <span>Avail</span>
+              <span id="storage-server-avail">--</span>
+            </div>
+          </div>
         </div>
       </div>
     </section>

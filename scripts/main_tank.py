@@ -13,8 +13,10 @@ import csv
 import math
 import json
 import logging
+import os
 import queue
 import random
+import shutil
 import signal
 import sqlite3
 import sys
@@ -563,6 +565,7 @@ class UploadWorker:
         self.vacuum_batch = int(env.get("VACUUM_UPLOAD_BATCH_SIZE", "8"))
         self.vacuum_interval = int(env.get("VACUUM_UPLOAD_INTERVAL_SECONDS", "30"))
         self.heartbeat_interval = float(env.get("UPLOAD_HEARTBEAT_SECONDS", "120"))
+        self.disk_usage_path = env.get("DISK_USAGE_PATH", "~")
         self.retention_days = float_or_none(env.get("DB_RETENTION_DAYS"))
         default_prune_interval = float(
             env.get("DB_PRUNE_INTERVAL_SECONDS", str(DEFAULT_PRUNE_INTERVAL_SECONDS))
@@ -737,10 +740,26 @@ class UploadWorker:
         try:
             url = build_url(self.api_base, "ingest_nodata.php")
             payload = {"stream": stream}
+            if stream == "tank":
+                payload.update(self._disk_usage_payload())
             resp = post_json(url, payload, self.api_key)
             LOGGER.info("Sent %s handshake (resp=%s)", stream, resp.get("status"))
         except error.URLError as exc:
             log_http_error(f"{stream.capitalize()} handshake failed", exc)
+
+    def _disk_usage_payload(self) -> Dict[str, object]:
+        path = os.path.expanduser(self.disk_usage_path or "~")
+        try:
+            usage = shutil.disk_usage(path)
+        except Exception as exc:
+            LOGGER.warning("Disk usage read failed for %s: %s", path, exc)
+            return {}
+        return {
+            "disk_total_bytes": usage.total,
+            "disk_used_bytes": usage.used,
+            "disk_free_bytes": usage.free,
+            "disk_path": path,
+        }
 
     def _upload_vacuum(self) -> bool:
         rows = self.db.fetch_unsent_vacuum(self.vacuum_batch)
@@ -807,6 +826,10 @@ class UploadWorker:
             vac_backlog,
             error_backlog,
         )
+        try:
+            self._send_handshake("tank")
+        except Exception:
+            LOGGER.exception("Tank storage heartbeat failed")
 
 
 @dataclass

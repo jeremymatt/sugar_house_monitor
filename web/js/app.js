@@ -21,6 +21,7 @@ const EVAP_STATUS_FILE = "status_evaporator.json";
 const VACUUM_STATUS_FILE = "status_vacuum.json";
 const STACK_STATUS_FILE = "status_stack.json";
 const MONITOR_STATUS_FILE = "status_monitor.json";
+const STORAGE_STATUS_FILE = "status_storage.json";
 const FLOW_HISTORY_ENDPOINT =
   window.location.pathname.includes("/sugar_house_monitor") ||
   window.location.hostname.includes("mattsmaplesyrup.com")
@@ -102,6 +103,7 @@ let latestEvaporator = null;
 let latestVacuum = null;
 let latestStackTemps = null;
 let latestMonitor = null;
+let latestStorage = null;
 let lastGeneratedAt = null;
 let lastFetchError = false;
 let lastPumpFlow = null;
@@ -180,6 +182,13 @@ function formatPercent(val) {
   if (num == null) return "–";
   return `${num.toFixed(0)}%`;
 }
+
+function formatStorageGb(bytes) {
+  if (bytes == null || !isFinite(bytes)) return "--";
+  const gb = bytes / (1024 ** 3);
+  return `${Math.round(gb)}G`;
+}
+
 
 function formatEta(fullEta, emptyEta) {
   const full = fullEta ? `Full: ${formatDateTime(fullEta)}` : null;
@@ -780,6 +789,43 @@ function updateMonitorCard(data) {
   apply(pumpStatusElem, pumpNoteElem, data?.pumpSec, true);
 }
 
+function updateStorageCard(storage) {
+  const targets = [
+    { key: "tank_pi", prefix: "storage-tank" },
+    { key: "pump_pi", prefix: "storage-pump" },
+    { key: "server", prefix: "storage-server" },
+  ];
+  targets.forEach(({ key, prefix }) => {
+    updateStorageItem(prefix, storage ? storage[key] : null);
+  });
+}
+
+function updateStorageItem(prefix, data) {
+  const fill = document.getElementById(`${prefix}-fill`);
+  const percentElem = document.getElementById(`${prefix}-percent`);
+  const usedElem = document.getElementById(`${prefix}-used`);
+  const availElem = document.getElementById(`${prefix}-avail`);
+  if (!fill || !percentElem || !usedElem || !availElem) return;
+
+  const total = toNumber(data?.total_bytes);
+  const used = toNumber(data?.used_bytes);
+  const free = toNumber(data?.free_bytes);
+  if (total == null || used == null || free == null || total <= 0) {
+    fill.style.height = "0%";
+    percentElem.textContent = "--%";
+    usedElem.textContent = "--";
+    availElem.textContent = "--";
+    return;
+  }
+
+  const pct = Math.max(0, Math.min(100, (used / total) * 100));
+  fill.style.height = `${pct.toFixed(0)}%`;
+  percentElem.textContent = `${pct.toFixed(0)}%`;
+  usedElem.textContent = formatStorageGb(used);
+  availElem.textContent = formatStorageGb(free);
+}
+
+
 function addHistoryPoint(arr, value, tsMs) {
   if (value == null || !isFinite(value)) return;
   if (tsMs == null || !isFinite(tsMs)) return;
@@ -1370,6 +1416,7 @@ function recomputeStalenessAndRender() {
     pumpSec: pumpMonitorSec,
     pumpFatal,
   });
+  updateStorageCard(latestStorage);
   const evapFlowVal = toNumber(latestEvaporator?.evaporator_flow_gph);
   const evapTs = msFromIso(latestEvaporator?.sample_timestamp || latestEvaporator?.last_received_at);
   const stackTempVal = toNumber(latestStackTemps?.stack_temp_f);
@@ -1436,6 +1483,7 @@ async function fetchStatusOnce() {
       fetchStatusFile(STACK_STATUS_FILE),
       fetchStatusFile(MONITOR_STATUS_FILE),
       fetchStatusFile(EVAP_STATUS_FILE),
+      fetchStatusFile(STORAGE_STATUS_FILE),
     ]);
     const getVal = (idx) => (settled[idx].status === "fulfilled" ? settled[idx].value : null);
     const brookside = getVal(0);
@@ -1445,6 +1493,7 @@ async function fetchStatusOnce() {
     const stackTemps = getVal(4);
     const monitor = getVal(5);
     const evapStatus = getVal(6);
+    const storage = getVal(7);
     let pump = pumpRaw;
     if (pump && pump.gallons_per_hour == null && lastPumpFlow != null) {
       pump = { ...pump, gallons_per_hour: lastPumpFlow };
@@ -1457,6 +1506,7 @@ async function fetchStatusOnce() {
     latestVacuum = vacuum;
     latestStackTemps = stackTemps;
     latestMonitor = monitor;
+    latestStorage = storage;
     latestEvaporator = evapStatus || latestEvaporator;
     if (evapSettingsPending && evapStatus?.plot_settings) {
       const incoming = coerceEvapSettings(evapStatus.plot_settings);
@@ -1470,7 +1520,16 @@ async function fetchStatusOnce() {
     }
     syncEvapControls();
     syncPumpControls();
-    lastGeneratedAt = computeLatestGenerated([brookside, roadside, pump, vacuum, stackTemps, monitor, latestEvaporator]);
+    lastGeneratedAt = computeLatestGenerated([
+      brookside,
+      roadside,
+      pump,
+      vacuum,
+      stackTemps,
+      monitor,
+      latestEvaporator,
+      storage,
+    ]);
     recomputeStalenessAndRender();
   } catch (err) {
     lastFetchError = true;
