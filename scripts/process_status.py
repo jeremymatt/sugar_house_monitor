@@ -6,7 +6,9 @@ This script is triggered automatically by the ingest PHP endpoints.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import time
 from statistics import median
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -23,6 +25,8 @@ def open_db(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
@@ -208,6 +212,31 @@ PUMP_LOW_THRESHOLD = 5.0
 PUMP_MATCH_TOLERANCE = 0.5
 DEFAULT_PLOT_SETTINGS = (0.0, 600.0, 2 * 60 * 60)  # y_min, y_max, window_sec
 NO_TANK = "---"
+PROCESS_STATUS_LOCK = "data/process_status.lock"
+PROCESS_STATUS_LOCK_TIMEOUT_SECONDS = 15 * 60
+
+
+def acquire_process_lock(path: Path, timeout_seconds: int) -> bool:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                age = time.time() - path.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if age > timeout_seconds:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    continue
+                continue
+            return False
+        else:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(str(os.getpid()))
+            return True
 
 
 def parse_iso(ts: Optional[str]) -> Optional[datetime]:
@@ -1062,4 +1091,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    lock_path = repo_path_from_config(PROCESS_STATUS_LOCK)
+    if acquire_process_lock(lock_path, PROCESS_STATUS_LOCK_TIMEOUT_SECONDS):
+        try:
+            main()
+        finally:
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass

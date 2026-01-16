@@ -411,6 +411,7 @@ function connect_sqlite(string $path): PDO {
     $pdo = new PDO('sqlite:' . $path);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->exec('PRAGMA foreign_keys = ON');
+    $pdo->exec('PRAGMA journal_mode = WAL');
     $pdo->exec('PRAGMA busy_timeout = 5000');
     return $pdo;
 }
@@ -438,9 +439,15 @@ function update_monitor(PDO $db, string $stream, string $timestamp): void {
 }
 
 function trigger_status_refresh(): void {
-    $cmd = escapeshellcmd('python3 ' . REPO_ROOT . '/scripts/process_status.py');
-    exec($cmd, $output, $code);
-    if ($code !== 0) {
-        error_log('process_status.py failed: ' . implode("\n", $output));
+    $script = REPO_ROOT . '/scripts/process_status.py';
+    $cmd = 'python3 ' . escapeshellarg($script);
+    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+        exec($cmd, $output, $code);
+        if ($code !== 0) {
+            error_log('process_status.py failed: ' . implode("\n", $output));
+        }
+        return;
     }
+    // Run async to keep ingest responses fast.
+    exec($cmd . ' > /dev/null 2>&1 &');
 }
