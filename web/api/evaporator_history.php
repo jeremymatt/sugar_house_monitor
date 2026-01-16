@@ -10,6 +10,7 @@ $stackDbPath = resolve_repo_path(
         ?? $env['TANK_DB_PATH']
         ?? ''
 );
+$numBins = resolve_num_bins($env, 2000, $_GET['num_bins'] ?? null);
 $db = connect_sqlite($dbPath);
 
 $minOptions = [0, 100, 200, 300, 400, 500];
@@ -199,13 +200,13 @@ if ($stackDbPath && file_exists($stackDbPath)) {
              ORDER BY source_timestamp'
         );
         $stmt->execute([':cutoff' => $cutoffIso]);
-        foreach ($stmt as $row) {
-            $stackHistoryRows[] = [
-                'ts' => $row['source_timestamp'],
-                'stack_temp_f' => $row['stack_temp_f'],
-            ];
-        }
-    }
+foreach ($stmt as $row) {
+    $stackHistoryRows[] = [
+        'ts' => $row['source_timestamp'],
+        'stack_temp_f' => $row['stack_temp_f'],
+    ];
+}
+}
 }
 
 $latest = null;
@@ -228,6 +229,22 @@ if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         'roadside_flow_gph' => $row['roadside_flow_gph'],
     ];
 }
+
+$historyRows = bin_time_series(
+    $historyRows,
+    'evaporator_flow_gph',
+    $cutoffTs,
+    $windowSec,
+    $numBins,
+    ['draw_off_tank', 'pump_in_tank']
+);
+$stackHistoryRows = bin_time_series(
+    $stackHistoryRows,
+    'stack_temp_f',
+    $cutoffTs,
+    $windowSec,
+    $numBins
+);
 
 respond_json([
     'status' => 'ok',

@@ -7,6 +7,7 @@ Type=simple
 User=__USER__
 WorkingDirectory=__REPO_ROOT__
 Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-__REPO_ROOT__/config/display_pi.env
 ExecStart=__VENV_PATH__/bin/python __REPO_ROOT__/scripts/main_display.py
 Restart=always
 RestartSec=2

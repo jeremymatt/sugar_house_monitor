@@ -31,4 +31,5 @@ Create the venv and install dependencies:
 ```
 
 ## Runtime config
-The display reads its configuration from environment variables (e.g. `DISPLAY_API_BASE`, `DISPLAY_REFRESH_SEC`). See `scripts/main_display.py` for defaults.
+The display reads its configuration from environment variables (e.g. `DISPLAY_API_BASE`, `DISPLAY_REFRESH_SEC`, `NUM_PLOT_BINS`). See `scripts/main_display.py` for defaults.
+If you create `config/display_pi.env`, the systemd unit will load it automatically.

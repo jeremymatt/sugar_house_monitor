@@ -66,6 +66,128 @@ function resolve_repo_path(string $path): string {
     return REPO_ROOT . '/' . ltrim($path, '/');
 }
 
+function parse_positive_int($value, int $default): int {
+    if ($value === null) {
+        return $default;
+    }
+    if (is_string($value)) {
+        $value = trim($value);
+    }
+    if ($value === '') {
+        return $default;
+    }
+    if (!is_numeric($value)) {
+        return $default;
+    }
+    $intVal = intval($value);
+    return $intVal > 0 ? $intVal : $default;
+}
+
+function resolve_num_bins(array $env, int $default, $override = null): int {
+    $numBins = parse_positive_int($env['NUM_PLOT_BINS'] ?? null, $default);
+    if ($override !== null) {
+        $numBins = parse_positive_int($override, $numBins);
+    }
+    return $numBins;
+}
+
+function compute_bin_seconds(int $windowSec, int $numBins): int {
+    if ($windowSec <= 0 || $numBins <= 0) {
+        return 0;
+    }
+    return max(1, (int) ceil($windowSec / $numBins));
+}
+
+function bin_time_series(
+    array $rows,
+    string $valueKey,
+    int $cutoffTs,
+    int $windowSec,
+    int $numBins,
+    array $carryKeys = []
+): array {
+    if ($numBins <= 0 || $windowSec <= 0) {
+        return $rows;
+    }
+    if (count($rows) <= $numBins) {
+        return $rows;
+    }
+
+    $binSec = compute_bin_seconds($windowSec, $numBins);
+    if ($binSec <= 0) {
+        return $rows;
+    }
+
+    $bins = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $tsRaw = $row['ts'] ?? null;
+        if (!$tsRaw) {
+            continue;
+        }
+        $ts = strtotime($tsRaw);
+        if ($ts === false) {
+            continue;
+        }
+        $value = $row[$valueKey] ?? null;
+        if ($value === null || $value === '') {
+            continue;
+        }
+        if (!is_numeric($value)) {
+            continue;
+        }
+        $offset = $ts - $cutoffTs;
+        if ($offset < 0) {
+            continue;
+        }
+        $idx = (int) floor($offset / $binSec);
+        if ($idx < 0) {
+            continue;
+        }
+        if ($idx >= $numBins) {
+            $idx = $numBins - 1;
+        }
+        if (!isset($bins[$idx])) {
+            $bins[$idx] = [
+                'sum' => 0.0,
+                'count' => 0,
+                'last_ts' => null,
+                'carry' => [],
+            ];
+        }
+        $bins[$idx]['sum'] += floatval($value);
+        $bins[$idx]['count'] += 1;
+        if ($bins[$idx]['last_ts'] === null || $ts >= $bins[$idx]['last_ts']) {
+            $bins[$idx]['last_ts'] = $ts;
+            foreach ($carryKeys as $key) {
+                if (array_key_exists($key, $row) && $row[$key] !== null) {
+                    $bins[$idx]['carry'][$key] = $row[$key];
+                }
+            }
+        }
+    }
+
+    ksort($bins);
+    $output = [];
+    foreach ($bins as $idx => $bin) {
+        if (!$bin['count']) {
+            continue;
+        }
+        $centerTs = $cutoffTs + ($idx * $binSec) + ($binSec / 2);
+        $entry = [
+            'ts' => gmdate('c', (int) round($centerTs)),
+            $valueKey => $bin['sum'] / $bin['count'],
+        ];
+        foreach ($bin['carry'] as $key => $val) {
+            $entry[$key] = $val;
+        }
+        $output[] = $entry;
+    }
+    return $output;
+}
+
 function ensure_api_key(array $env): void {
     $headers = function_exists('getallheaders') ? getallheaders() : [];
     $provided = $headers['X-API-Key']

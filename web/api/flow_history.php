@@ -16,6 +16,7 @@ $windowSec = isset($_GET['window_sec']) ? intval($_GET['window_sec']) : 21600;
 if ($windowSec <= 0) {
     $windowSec = 21600;
 }
+$numBins = resolve_num_bins($env, 2000, $_GET['num_bins'] ?? null);
 $pumpDbPath = resolve_repo_path($env['PUMP_DB_PATH'] ?? '');
 $tankDbPath = resolve_repo_path($env['TANK_DB_PATH'] ?? '');
 $vacuumDbPath = resolve_repo_path($env['VACUUM_DB_PATH'] ?? $env['PUMP_DB_PATH'] ?? $env['TANK_DB_PATH'] ?? '');
@@ -179,6 +180,11 @@ if ($vacuumDbPath && file_exists($vacuumDbPath)) {
         }
     }
 }
+
+$pumpRows = bin_time_series($pumpRows, 'flow_gph', $cutoffTs, $windowSec, $numBins);
+$netRows = bin_time_series($netRows, 'flow_gph', $cutoffTs, $windowSec, $numBins);
+$inflowRows = bin_time_series($inflowRows, 'flow_gph', $cutoffTs, $windowSec, $numBins);
+$vacuumRows = bin_time_series($vacuumRows, 'reading_inhg', $cutoffTs, $windowSec, $numBins);
 
 respond_json([
     'status' => 'ok',

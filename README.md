@@ -19,7 +19,7 @@ Live/Simulated monitoring for Brookside/Roadside tanks, transfer pump, evaporato
 - Captures pump start/stop events, computes run/interval/gph, uploads to server (`pump_events` table).
 - Debug is handled by Tank Pi using `real_data/pump_times.csv`.
 - enable SPI with `sudo raspi-config nonint do_spi 0`
-- to install numpy on a pi zero, enable use system site packages in the venv and don't install numpy because it crashes
+- **NOTE:** If installing on a pi zero, enable use system site packages in the venv and use the native numpy version because building the wheel for numpy exceeds available system resources and it crashes.
 
 #### Pump Pi state machine (P1/P2/P3 truth table)
 - P1 = tank_full input, P2 = manual_start input, P3 = tank_empty input; states are `pumping`, `manual_pumping`, and `not_pumping`.

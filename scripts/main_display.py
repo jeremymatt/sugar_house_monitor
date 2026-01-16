@@ -45,6 +45,15 @@ HISTORY_URL = os.environ.get(
     "DISPLAY_HISTORY_URL", f"{API_BASE}/evaporator_history.php"
 )
 REFRESH_SEC = float(os.environ.get("DISPLAY_REFRESH_SEC", "15"))
+RAW_PLOT_BINS = os.environ.get("DISPLAY_NUM_PLOT_BINS") or os.environ.get("NUM_PLOT_BINS")
+PLOT_BINS = None
+if RAW_PLOT_BINS:
+    try:
+        parsed = int(RAW_PLOT_BINS)
+        if parsed > 0:
+            PLOT_BINS = parsed
+    except ValueError:
+        PLOT_BINS = None
 WINDOW_DEFAULT = 2 * 60 * 60  # 2h
 YMIN_DEFAULT = 200.0
 YMAX_DEFAULT = 600.0
@@ -173,6 +182,8 @@ def fetch_state(
     history_params = {"t": cache_bust}
     if preferred_window_sec:
         history_params["window_sec"] = preferred_window_sec
+    if PLOT_BINS:
+        history_params["num_bins"] = PLOT_BINS
     history_payload = fetch_json(HISTORY_URL, params=history_params) or {}
 
     # Settings
