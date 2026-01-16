@@ -566,6 +566,7 @@ class UploadWorker:
         self.vacuum_interval = int(env.get("VACUUM_UPLOAD_INTERVAL_SECONDS", "30"))
         self.heartbeat_interval = float(env.get("UPLOAD_HEARTBEAT_SECONDS", "120"))
         self.disk_usage_path = env.get("DISK_USAGE_PATH", "~")
+        self.storage_heartbeat_interval = float(env.get("STORAGE_HEARTBEAT_SECONDS", "300"))
         self.retention_days = float_or_none(env.get("DB_RETENTION_DAYS"))
         default_prune_interval = float(
             env.get("DB_PRUNE_INTERVAL_SECONDS", str(DEFAULT_PRUNE_INTERVAL_SECONDS))
@@ -587,6 +588,7 @@ class UploadWorker:
         self._last_tank_handshake = now
         self._last_pump_handshake = now if self.pump_enabled else None
         self._next_heartbeat = now + self.heartbeat_interval
+        self._next_storage_heartbeat = now if self.storage_heartbeat_interval > 0 else None
         self._next_prune = now if self.retention_days and self.prune_interval > 0 else None
         self._next_error_upload = time.monotonic()
         if not self.pump_enabled:
@@ -696,7 +698,11 @@ class UploadWorker:
         ]
         try:
             url = build_url(self.api_base, "ingest_tank.php")
-            resp = post_json(url, {"readings": readings}, self.api_key)
+            payload = {"readings": readings}
+            storage_payload = self._maybe_storage_payload(time.monotonic())
+            if storage_payload:
+                payload.update(storage_payload)
+            resp = post_json(url, payload, self.api_key)
             LOGGER.info("Uploaded %s tank readings (resp=%s)", len(rows), resp.get("status"))
             self.db.mark_tank_acked([row["id"] for row in rows])
         except error.URLError as exc:
@@ -741,11 +747,19 @@ class UploadWorker:
             url = build_url(self.api_base, "ingest_nodata.php")
             payload = {"stream": stream}
             if stream == "tank":
-                payload.update(self._disk_usage_payload())
+                payload.update(self._maybe_storage_payload(time.monotonic()))
             resp = post_json(url, payload, self.api_key)
             LOGGER.info("Sent %s handshake (resp=%s)", stream, resp.get("status"))
         except error.URLError as exc:
             log_http_error(f"{stream.capitalize()} handshake failed", exc)
+
+    def _maybe_storage_payload(self, now: float) -> Dict[str, object]:
+        if not self.storage_heartbeat_interval or self.storage_heartbeat_interval <= 0:
+            return {}
+        if self._next_storage_heartbeat is not None and now < self._next_storage_heartbeat:
+            return {}
+        self._next_storage_heartbeat = now + self.storage_heartbeat_interval
+        return self._disk_usage_payload()
 
     def _disk_usage_payload(self) -> Dict[str, object]:
         path = os.path.expanduser(self.disk_usage_path or "~")
@@ -826,10 +840,6 @@ class UploadWorker:
             vac_backlog,
             error_backlog,
         )
-        try:
-            self._send_handshake("tank")
-        except Exception:
-            LOGGER.exception("Tank storage heartbeat failed")
 
 
 @dataclass

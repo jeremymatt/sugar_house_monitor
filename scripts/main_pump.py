@@ -884,9 +884,7 @@ class UploadWorker:
         self.error_batch = env_int(env, "ERROR_UPLOAD_BATCH_SIZE", ERROR_UPLOAD_BATCH_SIZE)
         self.error_interval = env_int(env, "ERROR_UPLOAD_INTERVAL_SECONDS", ERROR_UPLOAD_INTERVAL_SECONDS)
         self.handshake_interval = env_int(env, "HANDSHAKE_INTERVAL_SECONDS", HANDSHAKE_INTERVAL_SECONDS)
-        self.storage_heartbeat_interval = env_int(
-            env, "STORAGE_HEARTBEAT_SECONDS", self.handshake_interval
-        )
+        self.storage_heartbeat_interval = env_int(env, "STORAGE_HEARTBEAT_SECONDS", 300)
         self.disk_usage_path = env.get("DISK_USAGE_PATH", "~")
         self.retention_days = env_float(env, "DB_RETENTION_DAYS", 0.0)
         default_prune_interval = env_float(
@@ -901,7 +899,7 @@ class UploadWorker:
         self._last_pump_upload_attempt = now
         self._last_pump_pending = 0
         self._next_prune = now if self.retention_days > 0 and self.prune_interval > 0 else None
-        self._next_storage_heartbeat = now + max(self.storage_heartbeat_interval, 0)
+        self._next_storage_heartbeat = now if self.storage_heartbeat_interval > 0 else None
 
     def start(self) -> None:
         if self.threads and any(thread.is_alive() for thread in self.threads):
@@ -914,7 +912,7 @@ class UploadWorker:
         self._last_pump_upload_attempt = now
         self._last_pump_pending = 0
         self._next_prune = now if self.retention_days > 0 and self.prune_interval > 0 else None
-        self._next_storage_heartbeat = now + max(self.storage_heartbeat_interval, 0)
+        self._next_storage_heartbeat = now if self.storage_heartbeat_interval > 0 else None
         self.threads = [
             threading.Thread(target=self._pump_loop, daemon=True),
             threading.Thread(target=self._vacuum_loop, daemon=True),
@@ -974,11 +972,6 @@ class UploadWorker:
                 if now - self._last_pump_handshake >= self.handshake_interval:
                     self._send_handshake()
                     self._last_pump_handshake = now
-                    self._next_storage_heartbeat = now + max(self.storage_heartbeat_interval, 0)
-            if self.storage_heartbeat_interval > 0 and now >= self._next_storage_heartbeat:
-                self._send_handshake()
-                self._last_pump_handshake = now
-                self._next_storage_heartbeat = now + self.storage_heartbeat_interval
             self._last_pump_pending = pump_pending
             if self.stop_event.wait(1):
                 break
@@ -1130,13 +1123,21 @@ class UploadWorker:
         try:
             url = build_url(self.api_base, "ingest_nodata.php")
             payload = {"stream": "pump"}
-            payload.update(self._disk_usage_payload())
+            payload.update(self._maybe_storage_payload(time.monotonic()))
             resp = post_json(url, payload, self.api_key)
             LOGGER.info("Sent pump heartbeat (resp=%s)", resp.get("status"))
         except error.URLError as exc:
             log_http_error("Pump heartbeat failed", exc)
         except Exception as exc:  # pragma: no cover
             LOGGER.warning("Pump heartbeat failed: %s", exc)
+
+    def _maybe_storage_payload(self, now: float) -> Dict[str, object]:
+        if not self.storage_heartbeat_interval or self.storage_heartbeat_interval <= 0:
+            return {}
+        if self._next_storage_heartbeat is not None and now < self._next_storage_heartbeat:
+            return {}
+        self._next_storage_heartbeat = now + self.storage_heartbeat_interval
+        return self._disk_usage_payload()
 
     def _disk_usage_payload(self) -> Dict[str, object]:
         path = os.path.expanduser(self.disk_usage_path or "~")

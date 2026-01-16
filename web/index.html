@@ -435,70 +435,7 @@
       </div>
     </section>
 
-    <section class="card" id="storage-card">
-      <div class="card-header">
-        <div>
-          <h2>Storage Utilization</h2>
-          <div class="card-subtitle">Tank Pi, Pump Pi, and server disk usage</div>
-        </div>
-      </div>
-
-      <div class="storage-grid">
-        <div class="storage-item">
-          <h3 class="small">Tank Pi</h3>
-          <div class="storage-bar">
-            <div class="storage-fill" id="storage-tank-fill" style="height:0%;"></div>
-            <div class="storage-bar-label" id="storage-tank-percent">--%</div>
-          </div>
-          <div class="storage-values">
-            <div class="storage-value">
-              <span>Used</span>
-              <span id="storage-tank-used">--</span>
-            </div>
-            <div class="storage-value">
-              <span>Avail</span>
-              <span id="storage-tank-avail">--</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="storage-item">
-          <h3 class="small">Pump Pi</h3>
-          <div class="storage-bar">
-            <div class="storage-fill" id="storage-pump-fill" style="height:0%;"></div>
-            <div class="storage-bar-label" id="storage-pump-percent">--%</div>
-          </div>
-          <div class="storage-values">
-            <div class="storage-value">
-              <span>Used</span>
-              <span id="storage-pump-used">--</span>
-            </div>
-            <div class="storage-value">
-              <span>Avail</span>
-              <span id="storage-pump-avail">--</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="storage-item">
-          <h3 class="small">Server</h3>
-          <div class="storage-bar">
-            <div class="storage-fill" id="storage-server-fill" style="height:0%;"></div>
-            <div class="storage-bar-label" id="storage-server-percent">--%</div>
-          </div>
-          <div class="storage-values">
-            <div class="storage-value">
-              <span>Used</span>
-              <span id="storage-server-used">--</span>
-            </div>
-            <div class="storage-value">
-              <span>Avail</span>
-              <span id="storage-server-avail">--</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
+    
 
     <!-- Boiling status -->
     <section class="card" id="boiling-card">
@@ -714,6 +651,71 @@
 
       <div id="tanks-error" class="error-banner" style="display:none;">
         Unable to load tank data. Check network or Pi/server status.
+      </div>
+    </section>
+
+    <section class="card" id="storage-card">
+      <div class="card-header">
+        <div>
+          <h2>Storage Utilization</h2>
+          <div class="card-subtitle">Tank Pi, Pump Pi, and server disk usage</div>
+        </div>
+      </div>
+
+      <div class="storage-grid">
+        <div class="storage-item">
+          <h3 class="small">Tank Pi</h3>
+          <div class="storage-bar">
+            <div class="storage-fill" id="storage-tank-fill" style="height:0%;"></div>
+            <div class="storage-bar-label" id="storage-tank-percent">--%</div>
+          </div>
+          <div class="storage-values">
+            <div class="storage-value">
+              <span>Used</span>
+              <span id="storage-tank-used">--</span>
+            </div>
+            <div class="storage-value">
+              <span>Avail</span>
+              <span id="storage-tank-avail">--</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="storage-item">
+          <h3 class="small">Pump Pi</h3>
+          <div class="storage-bar">
+            <div class="storage-fill" id="storage-pump-fill" style="height:0%;"></div>
+            <div class="storage-bar-label" id="storage-pump-percent">--%</div>
+          </div>
+          <div class="storage-values">
+            <div class="storage-value">
+              <span>Used</span>
+              <span id="storage-pump-used">--</span>
+            </div>
+            <div class="storage-value">
+              <span>Avail</span>
+              <span id="storage-pump-avail">--</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="storage-item">
+          <h3 class="small">Server</h3>
+          <div class="storage-bar">
+            <div class="storage-fill" id="storage-server-fill" style="height:0%;"></div>
+            <div class="storage-bar-label" id="storage-server-percent">--%</div>
+          </div>
+          <div class="storage-values">
+            <div class="storage-value">
+              <span>Used</span>
+              <span id="storage-server-used">--</span>
+            </div>
+            <div class="storage-value">
+              <span>Avail</span>
+              <span id="storage-server-avail">--</span>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 

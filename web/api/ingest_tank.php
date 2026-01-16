@@ -121,6 +121,13 @@ foreach ($stmt as $row) {
 
 update_monitor($db, 'tank', $now);
 
+$storage = load_storage_status($env);
+$storageUpdated = apply_storage_entry($storage, 'tank_pi', $payload, $now);
+if ($storageUpdated) {
+    $storage['generated_at'] = $now;
+    save_storage_status($env, $storage);
+}
+
 respond_json([
     'status' => 'ok',
     'accepted' => $accepted,
