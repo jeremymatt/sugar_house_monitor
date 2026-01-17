@@ -240,10 +240,10 @@ function drawPlot(canvas, payload) {
   const ctx = canvas.getContext("2d");
   resizeCanvas(canvas);
   const { width, height } = canvas;
-  const padLeft = 60;
-  const padRight = payload.rightBounds ? 60 : 18;
+  const padLeft = 70;
+  const padRight = payload.rightBounds ? 70 : 18;
   const padTop = 20;
-  const padBottom = 32;
+  const padBottom = 42;
   const plotW = width - padLeft - padRight;
   const plotH = height - padTop - padBottom;
   const fontTick = "18px system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
@@ -304,7 +304,7 @@ function drawPlot(canvas, payload) {
 
     if (payload.rightLabel) {
       ctx.save();
-      ctx.translate(width - 12, padTop + plotH / 2);
+      ctx.translate(width - 10, padTop + plotH / 2);
       ctx.rotate(Math.PI / 2);
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
@@ -339,9 +339,9 @@ function drawPlot(canvas, payload) {
     ctx.fillText(formatTick(val, xRange), x, padTop + plotH + 6);
   });
   ctx.font = fontLabel;
-  ctx.fillText(`elapsed ${payload.unit}`, padLeft + plotW / 2, height - 18);
+  ctx.fillText(`elapsed ${payload.unit}`, padLeft + plotW / 2, height - 20);
   ctx.save();
-  ctx.translate(14, padTop + plotH / 2);
+  ctx.translate(10, padTop + plotH / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
