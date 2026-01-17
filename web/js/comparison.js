@@ -240,14 +240,14 @@ function drawPlot(canvas, payload) {
   const ctx = canvas.getContext("2d");
   resizeCanvas(canvas);
   const { width, height } = canvas;
-  const padLeft = 55;
-  const padRight = payload.rightBounds ? 55 : 18;
+  const padLeft = 60;
+  const padRight = payload.rightBounds ? 60 : 18;
   const padTop = 20;
   const padBottom = 32;
   const plotW = width - padLeft - padRight;
   const plotH = height - padTop - padBottom;
-  const fontTick = "20px system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
-  const fontLabel = "22px system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+  const fontTick = "18px system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+  const fontLabel = "20px system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#1a1f28";
@@ -444,7 +444,7 @@ async function refreshPlot() {
 
   const note = document.getElementById("comparison-note");
   if (note) {
-    note.textContent = `Window: ${unitValue} ${unit} (start + window)`;
+    note.textContent = "";
   }
 
   try {
