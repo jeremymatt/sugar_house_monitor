@@ -18,7 +18,13 @@ const LEFT_STREAMS = {
 };
 
 const RIGHT_STREAMS = {
-  vacuum: { label: "Vacuum (inHg)", color: "#cfd2d9", source: "flow", valueKey: "reading_inhg" },
+  vacuum: {
+    label: "Vacuum (inHg)",
+    color: "#cfd2d9",
+    source: "flow",
+    valueKey: "reading_inhg",
+    transform: (val) => -val,
+  },
   stack: { label: "Stack temp (F)", color: "#cfd2d9", source: "evap", valueKey: "stack_temp_f" },
 };
 
@@ -145,7 +151,7 @@ async function fetchJson(url) {
   return res.json();
 }
 
-function normalizeSeries(rows, valueKey, startMs, windowSec) {
+function normalizeSeries(rows, valueKey, startMs, windowSec, transform) {
   if (!Array.isArray(rows)) return [];
   const output = [];
   rows.forEach((row) => {
@@ -155,7 +161,8 @@ function normalizeSeries(rows, valueKey, startMs, windowSec) {
     if (!isFinite(ms)) return;
     const tSec = (ms - startMs) / 1000;
     if (tSec < 0 || tSec > windowSec) return;
-    const value = toNumber(row[valueKey]);
+    const valueRaw = toNumber(row[valueKey]);
+    const value = valueRaw == null ? null : transform ? transform(valueRaw) : valueRaw;
     if (value == null) return;
     output.push({ t: tSec, v: value });
   });
@@ -187,6 +194,20 @@ function buildTicks(min, max, count) {
     ticks.push(min + step * i);
   }
   return ticks;
+}
+
+function tickDecimals(range) {
+  const abs = Math.abs(range);
+  if (!isFinite(abs) || abs === 0) return 0;
+  if (abs <= 2) return 2;
+  if (abs <= 10) return 1;
+  return 0;
+}
+
+function formatTick(value, range) {
+  const decimals = tickDecimals(range);
+  const text = value.toFixed(decimals);
+  return text.replace(/^-0(\.0+)?$/, "0");
 }
 
 function resizeCanvas(canvas) {
@@ -225,6 +246,8 @@ function drawPlot(canvas, payload) {
   const padBottom = 32;
   const plotW = width - padLeft - padRight;
   const plotH = height - padTop - padBottom;
+  const fontTick = "20px system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+  const fontLabel = "22px system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#1a1f28";
@@ -234,11 +257,13 @@ function drawPlot(canvas, payload) {
     ctx.fillStyle = "#888";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    ctx.font = fontLabel;
     ctx.fillText("No data selected", width / 2, height / 2);
     return;
   }
 
   const leftTicks = buildTicks(payload.leftBounds.min, payload.leftBounds.max, Y_TICK_COUNT);
+  const leftRange = payload.leftBounds.max - payload.leftBounds.min;
   ctx.strokeStyle = "rgba(255,255,255,0.08)";
   ctx.lineWidth = 1;
   leftTicks.forEach((val, idx) => {
@@ -252,7 +277,8 @@ function drawPlot(canvas, payload) {
       ctx.fillStyle = "#a7afbf";
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
-      ctx.fillText(val.toFixed(0), padLeft - 8, y);
+      ctx.font = fontTick;
+      ctx.fillText(formatTick(val, leftRange), padLeft - 8, y);
     }
   });
 
@@ -265,13 +291,15 @@ function drawPlot(canvas, payload) {
 
   if (payload.rightBounds) {
     const rightTicks = buildTicks(payload.rightBounds.min, payload.rightBounds.max, Y_TICK_COUNT);
+    const rightRange = payload.rightBounds.max - payload.rightBounds.min;
     rightTicks.forEach((val) => {
       const frac = (val - payload.rightBounds.min) / (payload.rightBounds.max - payload.rightBounds.min || 1);
       const y = padTop + plotH - frac * plotH;
       ctx.fillStyle = "#a7afbf";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      ctx.fillText(val.toFixed(0), width - padRight + 8, y);
+      ctx.font = fontTick;
+      ctx.fillText(formatTick(val, rightRange), width - padRight + 8, y);
     });
 
     if (payload.rightLabel) {
@@ -281,6 +309,7 @@ function drawPlot(canvas, payload) {
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       ctx.fillStyle = "#cfd2d9";
+      ctx.font = fontLabel;
       ctx.fillText(payload.rightLabel, 0, 0);
       ctx.restore();
     }
@@ -290,6 +319,7 @@ function drawPlot(canvas, payload) {
   const unitSec = payload.unit === "minutes" ? 60 : payload.unit === "days" ? 86400 : 3600;
   const xMaxUnits = xMax / unitSec;
   const xTicks = buildTicks(0, xMaxUnits, X_TICK_COUNT);
+  const xRange = xMaxUnits;
   ctx.fillStyle = "#a7afbf";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
@@ -300,9 +330,15 @@ function drawPlot(canvas, payload) {
     ctx.lineTo(x, padTop + plotH + 4);
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
     ctx.stroke();
-    const label = val >= 10 ? val.toFixed(0) : val.toFixed(1);
-    ctx.fillText(label, x, padTop + plotH + 6);
+    ctx.beginPath();
+    ctx.moveTo(x, padTop);
+    ctx.lineTo(x, padTop + plotH);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.stroke();
+    ctx.font = fontTick;
+    ctx.fillText(formatTick(val, xRange), x, padTop + plotH + 6);
   });
+  ctx.font = fontLabel;
   ctx.fillText(`elapsed ${payload.unit}`, padLeft + plotW / 2, height - 18);
   ctx.save();
   ctx.translate(14, padTop + plotH / 2);
@@ -310,6 +346,7 @@ function drawPlot(canvas, payload) {
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.fillStyle = "#a7afbf";
+  ctx.font = fontLabel;
   ctx.fillText("gph", 0, 0);
   ctx.restore();
 
@@ -388,7 +425,7 @@ function normalizeWindowSeries(startIso, windowSec, data, selections) {
     const cfg = RIGHT_STREAMS[selections.rightAxis];
     const source = data[cfg.source];
     const rows = selections.rightAxis === "stack" ? source?.stack_history : source?.vacuum;
-    const points = normalizeSeries(rows, cfg.valueKey, startMs, windowSec);
+    const points = normalizeSeries(rows, cfg.valueKey, startMs, windowSec, cfg.transform);
     rightSeries = [{ key: selections.rightAxis, label: cfg.label, color: cfg.color, points }];
   }
 
