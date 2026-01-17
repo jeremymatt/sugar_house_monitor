@@ -24,6 +24,7 @@ $db->exec(
         UNIQUE(source_timestamp)
     )'
 );
+$db->exec('CREATE INDEX IF NOT EXISTS idx_vacuum_readings_source_ts ON vacuum_readings(source_timestamp)');
 
 $insert = $db->prepare(
     'INSERT INTO vacuum_readings (

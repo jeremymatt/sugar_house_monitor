@@ -34,6 +34,7 @@ $db->exec(
         UNIQUE(source_timestamp)
     )'
 );
+$db->exec('CREATE INDEX IF NOT EXISTS idx_stack_temperatures_source_ts ON stack_temperatures(source_timestamp)');
 
 $insert = $db->prepare(
     'INSERT INTO stack_temperatures (

@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Matt's Maple Syrup - Comparison Plotting</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    :root {
+      --bg: #101318;
+      --card-bg: #181d24;
+      --card-border: #262c36;
+      --accent: #f2a93b;
+      --accent-soft: rgba(242, 169, 59, 0.15);
+      --text-main: #f5f5f5;
+      --text-muted: #a7afbf;
+      --danger: #ff5f5f;
+      --ok: #4caf50;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #1d2430 0, #101318 50%);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+    }
+
+    .page {
+      width: 100%;
+      max-width: 1100px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 600;
+    }
+
+    .subtitle {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      margin-top: 0.35rem;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      padding: 1.25rem;
+      box-shadow: 0 18px 30px rgba(0, 0, 0, 0.35);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .grid {
+      display: grid;
+      gap: 1rem;
+    }
+
+    .grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    label {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    input,
+    select {
+      background: rgba(0, 0, 0, 0.25);
+      color: var(--text-main);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 0.35rem 0.45rem;
+      font-size: 0.9rem;
+    }
+
+    .inline {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .checkbox-row {
+      display: flex;
+      gap: 0.8rem;
+      flex-wrap: wrap;
+    }
+
+    .checkbox-row label {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.85rem;
+      color: var(--text-main);
+    }
+
+    .muted {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .optional {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-left: 0.35rem;
+    }
+
+    .plot-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .legend-line {
+      width: 24px;
+      height: 3px;
+      border-radius: 2px;
+      background: currentColor;
+    }
+
+    .legend-line.dashed {
+      background: transparent;
+      border-top: 3px dashed currentColor;
+      height: 0;
+    }
+
+    .canvas-wrap {
+      width: 100%;
+    }
+
+    canvas {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      display: block;
+      border-radius: 12px;
+      background: #1a1f28;
+      border: 1px solid var(--card-border);
+    }
+
+    .actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
+      align-items: center;
+    }
+
+    button {
+      background: var(--accent);
+      color: #111;
+      border: none;
+      border-radius: 10px;
+      padding: 0.45rem 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: transparent;
+      color: var(--text-main);
+      border: 1px solid var(--card-border);
+    }
+
+    @media (max-width: 900px) {
+      .grid-2,
+      .grid-3 {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <h1>Comparison Plotting</h1>
+      <div class="subtitle">Align multiple windows on elapsed time to compare trends.</div>
+    </header>
+
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <h2>Plot Controls</h2>
+          <div class="muted">Windows are start plus length. Secondary window is optional.</div>
+        </div>
+        <div class="actions">
+          <button class="secondary" id="reset-btn">Reset</button>
+        </div>
+      </div>
+
+      <div class="grid grid-3" style="margin-top:1rem;">
+        <div class="control-group">
+          <label>Window length</label>
+          <div class="inline">
+            <input id="window-value" type="number" min="0.1" step="0.1" value="6">
+            <select id="window-unit">
+              <option value="minutes">minutes</option>
+              <option value="hours" selected>hours</option>
+              <option value="days">days</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label>Number of bins <span class="optional">(optional)</span></label>
+          <input id="num-bins" type="number" min="10" step="10" placeholder="Use server default">
+          <div class="muted">Effective bins: <span id="num-bins-used">--</span></div>
+        </div>
+
+        <div class="control-group">
+          <label>Right axis stream</label>
+          <select id="right-axis">
+            <option value="none" selected>None</option>
+            <option value="vacuum">Vacuum (inHg)</option>
+            <option value="stack">Stack temp (F)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid grid-2" style="margin-top:1.25rem;">
+        <div class="control-group">
+          <label>Primary start (local time)</label>
+          <div class="inline" id="primary-start">
+            <select data-part="month"></select>
+            <select data-part="day"></select>
+            <select data-part="year"></select>
+            <select data-part="hour"></select>
+            <select data-part="minute"></select>
+          </div>
+        </div>
+        <div class="control-group">
+          <label>Secondary start <span class="optional">(optional)</span></label>
+          <div class="inline">
+            <label style="font-size:0.85rem;">
+              <input type="checkbox" id="secondary-enabled">
+              Enable secondary window
+            </label>
+          </div>
+          <div class="inline" id="secondary-start" style="margin-top:0.4rem; display:none;">
+            <select data-part="month"></select>
+            <select data-part="day"></select>
+            <select data-part="year"></select>
+            <select data-part="hour"></select>
+            <select data-part="minute"></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid" style="margin-top:1.25rem;">
+        <div class="control-group">
+          <label>Left axis streams</label>
+          <div class="checkbox-row">
+            <label><input type="checkbox" id="stream-pump" checked>Transfer pump flow</label>
+            <label><input type="checkbox" id="stream-inflow" checked>Tank inflow</label>
+            <label><input type="checkbox" id="stream-evap" checked>Evaporator flow</label>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="plot-wrapper">
+        <div class="legend" id="comparison-legend"></div>
+        <div class="canvas-wrap">
+          <canvas id="comparison-canvas" width="960" height="540" aria-label="Comparison plot"></canvas>
+        </div>
+        <div class="muted" id="comparison-note"></div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/sugar_house_monitor/js/comparison.js"></script>
+</body>
+</html>

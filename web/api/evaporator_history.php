@@ -15,6 +15,14 @@ $stackDbPath = resolve_repo_path(
         ?? ''
 );
 $numBins = resolve_num_bins($env, 2000, $_GET['num_bins'] ?? null);
+$startRaw = $_GET['start_ts'] ?? null;
+$startTs = null;
+if ($startRaw) {
+    $parsed = strtotime($startRaw);
+    if ($parsed !== false) {
+        $startTs = $parsed;
+    }
+}
 $db = connect_sqlite($dbPath);
 
 $minOptions = [0, 100, 200, 300, 400, 500];
@@ -37,6 +45,7 @@ function ensure_tables(PDO $db): void {
             created_at TEXT NOT NULL
         )'
     );
+    $db->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_evap_sample_timestamp ON evaporator_flow(sample_timestamp)');
     $db->exec(
         'CREATE TABLE IF NOT EXISTS plot_settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -176,27 +185,32 @@ if ($scope === 'web') {
 }
 
 $latestTs = null;
-$stmt = $db->query('SELECT MAX(sample_timestamp) AS max_ts FROM evaporator_flow');
-if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    $latestTs = $row['max_ts'] ? strtotime($row['max_ts']) : null;
-}
-if ($stackDbPath && file_exists($stackDbPath)) {
-    $stackDb = connect_sqlite($stackDbPath);
-    $check = $stackDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='stack_temperatures'");
-    if ($check->fetch()) {
-        $stmt = $stackDb->query(
-            "SELECT MAX(source_timestamp) AS max_ts FROM stack_temperatures WHERE stack_temp_f IS NOT NULL"
-        );
-        if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-            $stackTs = $row['max_ts'] ? strtotime($row['max_ts']) : null;
-            if ($stackTs && ($latestTs === null || $stackTs > $latestTs)) {
-                $latestTs = $stackTs;
+if ($startTs === null) {
+    $stmt = $db->query('SELECT MAX(sample_timestamp) AS max_ts FROM evaporator_flow');
+    if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $latestTs = $row['max_ts'] ? strtotime($row['max_ts']) : null;
+    }
+    if ($stackDbPath && file_exists($stackDbPath)) {
+        $stackDb = connect_sqlite($stackDbPath);
+        $check = $stackDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='stack_temperatures'");
+        if ($check->fetch()) {
+            $stmt = $stackDb->query(
+                "SELECT MAX(source_timestamp) AS max_ts FROM stack_temperatures WHERE stack_temp_f IS NOT NULL"
+            );
+            if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                $stackTs = $row['max_ts'] ? strtotime($row['max_ts']) : null;
+                if ($stackTs && ($latestTs === null || $stackTs > $latestTs)) {
+                    $latestTs = $stackTs;
+                }
             }
         }
     }
 }
-$cutoffTs = $latestTs ? $latestTs - $windowSec : (time() - $windowSec);
+$startTsUsed = $startTs ?? ($latestTs ? $latestTs - $windowSec : (time() - $windowSec));
+$endTsUsed = $startTs ? ($startTs + $windowSec) : ($latestTs ?? time());
+$cutoffTs = $startTsUsed;
 $cutoffIso = gmdate('c', $cutoffTs);
+$endIso = gmdate('c', $endTsUsed);
 
 $evapBinner = init_series_binner(
     $cutoffTs,
@@ -216,9 +230,10 @@ $stmt = $db->prepare(
     'SELECT sample_timestamp, evaporator_flow_gph, draw_off_tank, pump_in_tank
      FROM evaporator_flow
      WHERE sample_timestamp >= :cutoff
+       AND sample_timestamp <= :end
      ORDER BY sample_timestamp'
 );
-$stmt->execute([':cutoff' => $cutoffIso]);
+$stmt->execute([':cutoff' => $cutoffIso, ':end' => $endIso]);
 foreach ($stmt as $row) {
     series_binner_add($evapBinner, [
         'ts' => $row['sample_timestamp'],
@@ -235,10 +250,12 @@ if ($stackDbPath && file_exists($stackDbPath)) {
         $stmt = $stackDb->prepare(
             'SELECT source_timestamp, stack_temp_f
              FROM stack_temperatures
-             WHERE source_timestamp >= :cutoff AND stack_temp_f IS NOT NULL
+             WHERE source_timestamp >= :cutoff
+               AND source_timestamp <= :end
+               AND stack_temp_f IS NOT NULL
              ORDER BY source_timestamp'
         );
-        $stmt->execute([':cutoff' => $cutoffIso]);
+        $stmt->execute([':cutoff' => $cutoffIso, ':end' => $endIso]);
         foreach ($stmt as $row) {
             series_binner_add($stackBinner, [
                 'ts' => $row['source_timestamp'],
@@ -279,4 +296,7 @@ respond_json([
     'latest' => $latest,
     'history' => $historyRows,
     'stack_history' => $stackHistoryRows,
+    'start_ts_used' => $cutoffIso,
+    'end_ts_used' => $endIso,
+    'num_bins_used' => $numBins,
 ]);

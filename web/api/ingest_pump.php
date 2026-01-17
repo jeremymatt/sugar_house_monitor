@@ -26,6 +26,7 @@ $db->exec(
         UNIQUE(event_type, source_timestamp)
     )'
 );
+$db->exec('CREATE INDEX IF NOT EXISTS idx_pump_events_source_ts ON pump_events(source_timestamp)');
 
 $insert = $db->prepare(
     'INSERT INTO pump_events (

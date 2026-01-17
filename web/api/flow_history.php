@@ -17,6 +17,14 @@ if ($windowSec <= 0) {
     $windowSec = 21600;
 }
 $numBins = resolve_num_bins($env, 2000, $_GET['num_bins'] ?? null);
+$startRaw = $_GET['start_ts'] ?? null;
+$startTs = null;
+if ($startRaw) {
+    $parsed = strtotime($startRaw);
+    if ($parsed !== false) {
+        $startTs = $parsed;
+    }
+}
 $pumpDbPath = resolve_repo_path($env['PUMP_DB_PATH'] ?? '');
 $tankDbPath = resolve_repo_path($env['TANK_DB_PATH'] ?? '');
 $vacuumDbPath = resolve_repo_path($env['VACUUM_DB_PATH'] ?? $env['PUMP_DB_PATH'] ?? $env['TANK_DB_PATH'] ?? '');
@@ -29,50 +37,55 @@ function iso_to_ts(?string $iso): ?int {
     return $ts === false ? null : $ts;
 }
 
-if ($pumpDbPath && file_exists($pumpDbPath)) {
-    $pumpDb = connect_sqlite($pumpDbPath);
-    $check = $pumpDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='pump_events'");
-    if ($check->fetch()) {
-        $stmt = $pumpDb->query(
-            'SELECT MAX(source_timestamp) AS max_ts FROM pump_events WHERE gallons_per_hour IS NOT NULL'
-        );
-        if ($row = $stmt->fetch()) {
-            $t = iso_to_ts($row['max_ts'] ?? null);
-            if ($t && ($latestTs === null || $t > $latestTs)) $latestTs = $t;
+if ($startTs === null) {
+    if ($pumpDbPath && file_exists($pumpDbPath)) {
+        $pumpDb = connect_sqlite($pumpDbPath);
+        $check = $pumpDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='pump_events'");
+        if ($check->fetch()) {
+            $stmt = $pumpDb->query(
+                'SELECT MAX(source_timestamp) AS max_ts FROM pump_events WHERE gallons_per_hour IS NOT NULL'
+            );
+            if ($row = $stmt->fetch()) {
+                $t = iso_to_ts($row['max_ts'] ?? null);
+                if ($t && ($latestTs === null || $t > $latestTs)) $latestTs = $t;
+            }
+        }
+    }
+
+    if ($tankDbPath && file_exists($tankDbPath)) {
+        $tankDb = connect_sqlite($tankDbPath);
+        $check = $tankDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='tank_readings'");
+        if ($check->fetch()) {
+            $stmt = $tankDb->query(
+                "SELECT MAX(source_timestamp) AS max_ts FROM tank_readings WHERE flow_gph IS NOT NULL"
+            );
+            if ($row = $stmt->fetch()) {
+                $t = iso_to_ts($row['max_ts'] ?? null);
+                if ($t && ($latestTs === null || $t > $latestTs)) $latestTs = $t;
+            }
+        }
+    }
+
+    if ($vacuumDbPath && file_exists($vacuumDbPath)) {
+        $vacuumDb = connect_sqlite($vacuumDbPath);
+        $check = $vacuumDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='vacuum_readings'");
+        if ($check->fetch()) {
+            $stmt = $vacuumDb->query(
+                "SELECT MAX(source_timestamp) AS max_ts FROM vacuum_readings WHERE reading_inhg IS NOT NULL"
+            );
+            if ($row = $stmt->fetch()) {
+                $t = iso_to_ts($row['max_ts'] ?? null);
+                if ($t && ($latestTs === null || $t > $latestTs)) $latestTs = $t;
+            }
         }
     }
 }
 
-if ($tankDbPath && file_exists($tankDbPath)) {
-    $tankDb = connect_sqlite($tankDbPath);
-    $check = $tankDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='tank_readings'");
-    if ($check->fetch()) {
-        $stmt = $tankDb->query(
-            "SELECT MAX(source_timestamp) AS max_ts FROM tank_readings WHERE flow_gph IS NOT NULL"
-        );
-        if ($row = $stmt->fetch()) {
-            $t = iso_to_ts($row['max_ts'] ?? null);
-            if ($t && ($latestTs === null || $t > $latestTs)) $latestTs = $t;
-        }
-    }
-}
-
-if ($vacuumDbPath && file_exists($vacuumDbPath)) {
-    $vacuumDb = connect_sqlite($vacuumDbPath);
-    $check = $vacuumDb->query("SELECT name FROM sqlite_master WHERE type='table' AND name='vacuum_readings'");
-    if ($check->fetch()) {
-        $stmt = $vacuumDb->query(
-            "SELECT MAX(source_timestamp) AS max_ts FROM vacuum_readings WHERE reading_inhg IS NOT NULL"
-        );
-        if ($row = $stmt->fetch()) {
-            $t = iso_to_ts($row['max_ts'] ?? null);
-            if ($t && ($latestTs === null || $t > $latestTs)) $latestTs = $t;
-        }
-    }
-}
-
-$cutoffTs = $latestTs ? $latestTs - $windowSec : (time() - $windowSec);
+$startTsUsed = $startTs ?? ($latestTs ? $latestTs - $windowSec : (time() - $windowSec));
+$endTsUsed = $startTs ? ($startTs + $windowSec) : ($latestTs ?? time());
+$cutoffTs = $startTsUsed;
 $cutoffIso = gmdate('c', $cutoffTs);
+$endIso = gmdate('c', $endTsUsed);
 
 $pumpBinner = init_series_binner($cutoffTs, $windowSec, $numBins, 'flow_gph');
 $netBinner = init_series_binner($cutoffTs, $windowSec, $numBins, 'flow_gph');
@@ -86,10 +99,12 @@ if ($pumpDbPath && file_exists($pumpDbPath)) {
         $stmt = $pumpDb->prepare(
             'SELECT source_timestamp AS ts, gallons_per_hour AS flow_gph
              FROM pump_events
-             WHERE source_timestamp >= :cutoff AND gallons_per_hour IS NOT NULL
+             WHERE source_timestamp >= :cutoff
+               AND source_timestamp <= :end
+               AND gallons_per_hour IS NOT NULL
              ORDER BY source_timestamp'
         );
-        $stmt->execute([':cutoff' => $cutoffIso]);
+        $stmt->execute([':cutoff' => $cutoffIso, ':end' => $endIso]);
         foreach ($stmt as $row) {
             series_binner_add($pumpBinner, [
                 'ts' => $row['ts'],
@@ -107,9 +122,10 @@ if ($tankDbPath && file_exists($tankDbPath)) {
             'SELECT tank_id, source_timestamp, flow_gph, depth_outlier
              FROM tank_readings
              WHERE source_timestamp >= :cutoff
+               AND source_timestamp <= :end
              ORDER BY source_timestamp'
         );
-        $stmt->execute([':cutoff' => $cutoffIso]);
+        $stmt->execute([':cutoff' => $cutoffIso, ':end' => $endIso]);
         $bFlow = null;
         $rFlow = null;
         foreach ($stmt as $row) {
@@ -153,10 +169,12 @@ if ($vacuumDbPath && file_exists($vacuumDbPath)) {
         $stmt = $vacuumDb->prepare(
             'SELECT source_timestamp AS ts, reading_inhg
              FROM vacuum_readings
-             WHERE source_timestamp >= :cutoff AND reading_inhg IS NOT NULL
+             WHERE source_timestamp >= :cutoff
+               AND source_timestamp <= :end
+               AND reading_inhg IS NOT NULL
              ORDER BY source_timestamp'
         );
-        $stmt->execute([':cutoff' => $cutoffIso]);
+        $stmt->execute([':cutoff' => $cutoffIso, ':end' => $endIso]);
         foreach ($stmt as $row) {
             series_binner_add($vacuumBinner, [
                 'ts' => $row['ts'],
@@ -178,4 +196,7 @@ respond_json([
     'inflow' => $inflowRows,
     'vacuum' => $vacuumRows,
     'window_sec' => $windowSec,
+    'start_ts_used' => $cutoffIso,
+    'end_ts_used' => $endIso,
+    'num_bins_used' => $numBins,
 ]);
