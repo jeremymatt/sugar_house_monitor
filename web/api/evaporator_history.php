@@ -177,9 +177,9 @@ if ($method === 'POST') {
 
 $settings = load_settings($db, $settingsTable);
 $windowSec = $settings['window_sec'];
-if ($scope === 'web') {
-    $windowOverride = isset($_GET['window_sec']) ? intval($_GET['window_sec']) : null;
-    if ($windowOverride && in_array($windowOverride, $windowOptions, true)) {
+$windowOverride = isset($_GET['window_sec']) ? intval($_GET['window_sec']) : null;
+if ($windowOverride) {
+    if ($startTs !== null || ($scope === 'web' && in_array($windowOverride, $windowOptions, true))) {
         $windowSec = $windowOverride;
     }
 }
