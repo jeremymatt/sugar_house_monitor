@@ -948,7 +948,7 @@ async function refreshPumpHistory(windowSec) {
         .forEach((p) => {
           const t = msFromIso(p.ts);
           const raw = toNumber(p.reading_inhg);
-          const v = raw == null ? null : Math.abs(raw);
+          const v = raw == null ? null : -raw;
           if (t != null && v != null) vacuumHistory.unshift({ t, v });
         });
     }
