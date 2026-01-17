@@ -570,6 +570,9 @@ function attachListeners() {
     resetControls();
     scheduleRefresh();
   });
+  document.getElementById("refresh-btn").addEventListener("click", () => {
+    refreshPlot();
+  });
 }
 
 document.addEventListener("DOMContentLoaded", () => {
