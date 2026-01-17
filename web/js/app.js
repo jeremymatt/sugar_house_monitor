@@ -696,10 +696,11 @@ function updateOverviewCard(summary, vacuumData) {
   }
 
   const vacVal = toNumber(vacuumData?.reading_inhg);
+  const vacDisplay = vacVal != null ? -vacVal : null;
   const vacTs = vacuumData?.last_received_at || vacuumData?.source_timestamp;
   const vacStaleSec = vacTs ? secondsSinceLast(vacTs) : null;
   if (vacReadingElem) {
-    vacReadingElem.textContent = vacVal != null ? `${vacVal.toFixed(1)} inHg` : "–";
+    vacReadingElem.textContent = vacDisplay != null ? `${vacDisplay.toFixed(1)} inHg` : "–";
   }
   if (vacNoteElem) {
     if (vacStaleSec == null) {
