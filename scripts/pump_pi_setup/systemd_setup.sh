@@ -3,14 +3,15 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: systemd_setup.sh -on | -off
+Usage: systemd_setup.sh -on | -off | -full_off
 
   -on   Install/update unit files and enable auto-restart (production mode)
-  -off  Stop services and disable auto-restart (testing mode)
+  -off  Stop pump stack, keep ADC + watchdog running for hardware re-enable
+  -full_off  Stop all services (maintenance mode)
 USAGE
 }
 
-if [[ ${1:-} != "-on" && ${1:-} != "-off" ]]; then
+if [[ ${1:-} != "-on" && ${1:-} != "-off" && ${1:-} != "-full_off" ]]; then
   usage
   exit 1
 fi
@@ -36,6 +37,9 @@ SERVICE_GROUP="$(id -gn "${SERVICE_USER}" 2>/dev/null || echo "${SERVICE_USER}")
 
 VENV_PATH="${USER_HOME}/.venv"
 LOG_PATH="${USER_HOME}/pump_controller.log"
+ADC_SERVICE="sugar-adc.service"
+WATCHDOG_SERVICE="sugar-adc-watchdog.service"
+PUMP_SERVICES=("sugar-pump-controller.service" "sugar-vacuum.service" "sugar-uploader.service")
 
 render_unit() {
   local src="$1"
@@ -47,6 +51,42 @@ render_unit() {
     -e "s|__VENV_PATH__|${VENV_PATH}|g" \
     -e "s|__LOG_PATH__|${LOG_PATH}|g" \
     "${src}" > "${dst}"
+}
+
+wait_inactive() {
+  local retries=25
+  local delay=0.2
+  local unit
+  for unit in "$@"; do
+    for ((i=0; i<retries; i++)); do
+      if ! systemctl is-active --quiet "${unit}"; then
+        break
+      fi
+      sleep "${delay}"
+    done
+    if systemctl is-active --quiet "${unit}"; then
+      echo "Timed out waiting for ${unit} to stop" >&2
+      return 1
+    fi
+  done
+}
+
+wait_active() {
+  local retries=25
+  local delay=0.2
+  local unit
+  for unit in "$@"; do
+    for ((i=0; i<retries; i++)); do
+      if systemctl is-active --quiet "${unit}"; then
+        break
+      fi
+      sleep "${delay}"
+    done
+    if ! systemctl is-active --quiet "${unit}"; then
+      echo "Timed out waiting for ${unit} to start" >&2
+      return 1
+    fi
+  done
 }
 
 if [[ "$1" == "-on" ]]; then
@@ -63,11 +103,24 @@ if [[ "$1" == "-on" ]]; then
     render_unit "${LOGROTATE_SRC_DIR}/pump_controller" "${LOGROTATE_DST}"
   fi
   systemctl daemon-reload
+  systemctl disable --now "${WATCHDOG_SERVICE}" || true
+  wait_inactive "${WATCHDOG_SERVICE}"
   systemctl enable --now sugar-pump.target
   echo "Enabled sugar-pump.target (logs -> ${LOG_PATH})"
+elif [[ "$1" == "-off" ]]; then
+  systemctl disable --now sugar-pump.target || true
+  systemctl stop "${PUMP_SERVICES[@]}" || true
+  systemctl reset-failed "${PUMP_SERVICES[@]}" "${WATCHDOG_SERVICE}" sugar-pump.target || true
+  wait_inactive "${PUMP_SERVICES[@]}"
+  systemctl enable --now "${ADC_SERVICE}"
+  systemctl enable --now "${WATCHDOG_SERVICE}"
+  wait_active "${WATCHDOG_SERVICE}"
+  echo "Disabled sugar-pump.target; watchdog enabled"
 else
   systemctl disable --now sugar-pump.target || true
-  systemctl stop sugar-adc.service sugar-pump-controller.service sugar-vacuum.service sugar-uploader.service || true
-  systemctl reset-failed sugar-adc.service sugar-pump-controller.service sugar-vacuum.service sugar-uploader.service sugar-pump.target || true
-  echo "Disabled sugar-pump.target"
+  systemctl disable --now "${WATCHDOG_SERVICE}" || true
+  systemctl disable --now "${ADC_SERVICE}" || true
+  systemctl stop "${PUMP_SERVICES[@]}" || true
+  systemctl reset-failed "${ADC_SERVICE}" "${WATCHDOG_SERVICE}" "${PUMP_SERVICES[@]}" sugar-pump.target || true
+  echo "Disabled sugar-pump.target and stopped all services"
 fi

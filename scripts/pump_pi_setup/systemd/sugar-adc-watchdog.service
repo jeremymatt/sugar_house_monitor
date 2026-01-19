@@ -1,0 +1,19 @@
+[Unit]
+Description=Sugar House ADC Watchdog Service
+After=network.target sugar-adc.service
+Requires=sugar-adc.service
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__REPO_ROOT__
+Environment=PYTHONUNBUFFERED=1
+Environment=SUGAR_CONFIG_DIR=__REPO_ROOT__/config
+ExecStart=__VENV_PATH__/bin/python __REPO_ROOT__/scripts/adc_watchdog.py
+Restart=always
+RestartSec=2
+StandardOutput=append:__LOG_PATH__
+StandardError=append:__LOG_PATH__
+
+[Install]
+WantedBy=multi-user.target

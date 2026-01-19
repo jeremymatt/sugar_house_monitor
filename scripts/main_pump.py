@@ -48,6 +48,7 @@ ADC_DEBOUNCE_SAMPLES = 3
 ADC_DEBOUNCE_DELAY = 0.01  # seconds between debounce samples
 ADC_STALE_SECONDS = 2.0
 ADC_STALE_FATAL_SECONDS = 10.0
+CONTROL_HOLD_SECONDS = 5.0
 PUMP_CONTROL_PIN = 17  # BCM pin for optical relay control
 HANDSHAKE_INTERVAL_SECONDS = 150  # pump heartbeat cadence
 UPLOAD_BATCH_SIZE = 1
@@ -376,6 +377,9 @@ class MCP3008Reader:
             "tank_full": AnalogIn(mcp, MCP.P1),
             "manual_start": AnalogIn(mcp, MCP.P2),
             "tank_empty": AnalogIn(mcp, MCP.P3),
+            "service_on": AnalogIn(mcp, MCP.P5),
+            "service_off": AnalogIn(mcp, MCP.P6),
+            "clear_fatal": AnalogIn(mcp, MCP.P7),
         }
 
     def _load_calibration(self) -> None:
@@ -430,6 +434,9 @@ class MCP3008Reader:
             ("tank_full", "tank_full"),
             ("manual_start", "manual_start"),
             ("tank_empty", "tank_empty"),
+            ("service_on", "service_on"),
+            ("service_off", "service_off"),
+            ("clear_fatal", "clear_fatal"),
         ):
             samples = []
             high_votes = 0
@@ -443,6 +450,9 @@ class MCP3008Reader:
             avg_volts = float(np.mean(samples))
             volts[key] = avg_volts
             signals[key] = high_votes >= math.ceil(self.debounce_samples / 2)
+        if return_volts:
+            vacuum_raw = self.channels["vacuum"].value
+            volts["vacuum"] = self._voltage_from_raw(vacuum_raw)
         return (signals, volts) if return_volts else signals
 
 
@@ -471,6 +481,7 @@ class PumpController:
         error_threshold: int,
         loop_delay: float,
         adc_stale_fatal_seconds: Optional[float] = None,
+        control_hold_seconds: Optional[float] = None,
         debug_signal_log: bool = False,
     ):
         self.db = db
@@ -480,14 +491,32 @@ class PumpController:
         self.adc_stale_fatal_seconds = (
             float(adc_stale_fatal_seconds) if adc_stale_fatal_seconds is not None else float(error_threshold)
         )
+        hold_seconds = (
+            float(control_hold_seconds)
+            if control_hold_seconds is not None
+            else float(CONTROL_HOLD_SECONDS)
+        )
+        self.control_hold_seconds = max(0.0, hold_seconds)
         self.loop_delay = loop_delay
         self.debug_signal_log = debug_signal_log
+        self.systemd_setup_path = repo_path_from_config("scripts/pump_pi_setup/systemd_setup.sh")
+        self._systemd_lock = threading.Lock()
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self._last_signals: Dict[str, bool] = {}
         self._last_signal_log: Optional[Dict[str, bool]] = None
         self._last_signal_log_time: Optional[float] = None
+        self._control_hold_start: Dict[str, Optional[float]] = {
+            "service_on": None,
+            "service_off": None,
+            "clear_fatal": None,
+        }
+        self._control_hold_fired: Dict[str, bool] = {
+            "service_on": False,
+            "service_off": False,
+            "clear_fatal": False,
+        }
 
     def start(self, reader: MCP3008Reader) -> None:
         if self.thread and self.thread.is_alive():
@@ -505,7 +534,13 @@ class PumpController:
         with self.lock:
             return PumpState(**self.state.__dict__)
 
+    def _format_error_message(self, message: str) -> str:
+        if self.state.fatal_error and not message.startswith("[FATAL ERROR]"):
+            return f"[FATAL ERROR] {message}"
+        return message
+
     def _record_error(self, message: str) -> None:
+        message = self._format_error_message(message)
         now = time.time()
         should_log = False
         if message != self.state.last_error_message:
@@ -534,8 +569,7 @@ class PumpController:
             self.state.fatal_error = True
             self.state.current_state = "not_pumping"
             self.state.pump_start_time = None
-            self.state.last_error_message = "FATAL ERROR: STOPPING"
-            self._record_error(self.state.last_error_message)
+            self._record_error("FATAL ERROR: STOPPING")
         if not self.state.fatal_sent:
             payload = {
                 "event_type": "Fatal Error",
@@ -584,6 +618,67 @@ class PumpController:
         self.state.error_started_at = None
         self.state.last_error_count_logged = None
         self.state.adc_stale_started_at = None
+
+    def clear_fatal_error(self) -> None:
+        with self.lock:
+            if not self.state.fatal_error:
+                return
+            self.state.fatal_error = False
+            self.state.fatal_sent = False
+            self._reset_error_timer()
+        self._record_error("Cleared fatal error state")
+
+    def _spawn_systemd_setup(self, mode: str) -> None:
+        threading.Thread(
+            target=self._run_systemd_setup,
+            args=(mode,),
+            daemon=True,
+        ).start()
+
+    def _run_systemd_setup(self, mode: str) -> None:
+        if not self._systemd_lock.acquire(blocking=False):
+            LOGGER.info("Skipping systemd_setup.sh -%s; command already running", mode)
+            return
+        try:
+            script_path = self.systemd_setup_path
+            if not script_path.exists():
+                self._record_error(f"systemd_setup.sh not found at {script_path}")
+                return
+            cmd = ["sudo", "-n", "systemd-run", "--scope", "--quiet", str(script_path), f"-{mode}"]
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True)
+            except Exception as exc:
+                self._record_error(f"Failed to run systemd_setup.sh -{mode}: {exc}")
+                return
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip()
+                suffix = f": {detail}" if detail else ""
+                self._record_error(
+                    f"systemd_setup.sh -{mode} failed (code {result.returncode}){suffix}"
+                )
+        finally:
+            self._systemd_lock.release()
+
+    def _handle_control_holds(self, signals: Dict[str, bool]) -> None:
+        now = time.monotonic()
+        actions = {
+            "service_on": lambda: self._spawn_systemd_setup("on"),
+            "service_off": lambda: self._spawn_systemd_setup("off"),
+            "clear_fatal": self.clear_fatal_error,
+        }
+        for key, action in actions.items():
+            is_high = bool(signals.get(key))
+            start = self._control_hold_start[key]
+            if is_high:
+                if start is None:
+                    start = now
+                    self._control_hold_start[key] = start
+                if not self._control_hold_fired[key] and (now - start) >= self.control_hold_seconds:
+                    action()
+                    self._control_hold_fired[key] = True
+            else:
+                self._control_hold_start[key] = None
+                self._control_hold_fired[key] = False
 
     def _tank_full_event_handling(self, event_type: str) -> None:
         now = time.time()
@@ -660,6 +755,7 @@ class PumpController:
                 with self.lock:
                     self.state.adc_stale_started_at = None
                 self._last_signals = signals
+                self._handle_control_holds(signals)
                 now = time.time()
                 if self.debug_signal_log:
                     if (
@@ -668,14 +764,27 @@ class PumpController:
                         or (self._last_signal_log_time is None)
                         or (now - self._last_signal_log_time) >= 1.0
                     ):
+                        def logic_flag(key: str) -> str:
+                            return "T" if signals.get(key) else "F"
+
+                        def volts_value(key: str) -> float:
+                            return float(volts.get(key, 0.0) or 0.0)
+
                         LOGGER.info(
-                            "Signals: tank_full=%s (%.2fv) manual_start=%s (%.2fv) tank_empty=%s (%.2fv)",
-                            signals.get("tank_full"),
-                            volts.get("tank_full"),
-                            signals.get("manual_start"),
-                            volts.get("manual_start"),
-                            signals.get("tank_empty"),
-                            volts.get("tank_empty"),
+                            "Signals: Vac=(%.2fv) | tf=%s:(%.2fv) | ms=%s:(%.2fv) | te=%s:(%.2fv) | on=%s:(%.2fv) | off=%s:(%.2fv) | rst=%s:(%.2fv)",
+                            volts_value("vacuum"),
+                            logic_flag("tank_full"),
+                            volts_value("tank_full"),
+                            logic_flag("manual_start"),
+                            volts_value("manual_start"),
+                            logic_flag("tank_empty"),
+                            volts_value("tank_empty"),
+                            logic_flag("service_on"),
+                            volts_value("service_on"),
+                            logic_flag("service_off"),
+                            volts_value("service_off"),
+                            logic_flag("clear_fatal"),
+                            volts_value("clear_fatal"),
                         )
                         self._last_signal_log = dict(signals)
                         self._last_signal_log_time = now
@@ -1205,6 +1314,7 @@ class PumpApp:
         self.vacuum_refresh_rate = env_float(env, "VACUUM_REFRESH_RATE", VACUUM_REFRESH_RATE)
         self.pump_control_pin = env_int(env, "PUMP_CONTROL_PIN", PUMP_CONTROL_PIN)
         self.adc_stale_fatal_seconds = env_float(env, "ADC_STALE_FATAL_SECONDS", ADC_STALE_FATAL_SECONDS)
+        self.control_hold_seconds = env_float(env, "CONTROL_HOLD_SECONDS", CONTROL_HOLD_SECONDS)
         verbose_log = env_bool(env, "VERBOSE", False)
         debug_signal_log = verbose_log or env_bool(env, "DEBUG_SIGNAL_LOG", DEBUG_SIGNAL_LOG)
         self.reader = MCP3008Reader(
@@ -1220,6 +1330,7 @@ class PumpApp:
             error_threshold=self.error_threshold,
             loop_delay=self.loop_delay,
             adc_stale_fatal_seconds=self.adc_stale_fatal_seconds,
+            control_hold_seconds=self.control_hold_seconds,
             debug_signal_log=debug_signal_log,
         )
         self.relay = PumpRelay(self.pump_control_pin)

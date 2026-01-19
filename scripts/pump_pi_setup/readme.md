@@ -16,6 +16,7 @@ Systemd supervises each process directly. A custom supervisor script is optional
 - `sugar-pump-controller.service`: reads cached samples and drives the relay + state machine.
 - `sugar-vacuum.service`: computes slow vacuum averages from cached samples.
 - `sugar-uploader.service`: uploads pump events, vacuum readings, and error logs.
+- `sugar-adc-watchdog.service`: monitors cached ADC signals and runs `systemd_setup.sh -on` on a rising service_on edge when the pump stack is off.
 
 ## Quick start
 Production mode (enable auto-restart):
@@ -23,9 +24,20 @@ Production mode (enable auto-restart):
 sudo /home/pump/sugar_house_monitor/scripts/pump_pi_setup/systemd_setup.sh -on
 ```
 
-Testing mode (disable auto-restart, run manually):
+Watchdog mode (stop pump stack, keep ADC + watchdog running for hardware re-enable):
 ```bash
 sudo /home/pump/sugar_house_monitor/scripts/pump_pi_setup/systemd_setup.sh -off
+```
+
+Maintenance mode (stop everything, including ADC + watchdog):
+```bash
+sudo /home/pump/sugar_house_monitor/scripts/pump_pi_setup/systemd_setup.sh -full_off
+```
+
+Use `-full_off` before editing `scripts/adc_service.py` or MCP3008 wiring so SPI access is fully stopped.
+
+If you want to run the monolith manually, use `-full_off` first:
+```bash
 python /home/pump/sugar_house_monitor/scripts/main_pump.py
 ```
 
@@ -33,6 +45,13 @@ To restart the pump controller after entering fatal error state:
 ```bash
 sudo systemctl restart sugar-pump-controller.service
 ```
+You can also clear the fatal state via ADC channel P7 (see "ADC control pins" below).
+
+## ADC control pins
+These MCP3008 channels trigger service actions after they stay high for at least `CONTROL_HOLD_SECONDS` (default 5 seconds), using the same boolean threshold as the other inputs (`ADC_BOOL_THRESHOLD_V`):
+- P5: `systemd_setup.sh -on` (enable/start services)
+- P6: `systemd_setup.sh -off` (disable/stop services)
+- P7: clear the pump controller fatal error state
 
 ## Unit templates
 Unit templates live in `scripts/pump_pi_setup/systemd/`. The `systemd_setup.sh` script installs them into `/etc/systemd/system` and fills in the repo path, user, venv path, and log location.

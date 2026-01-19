@@ -14,6 +14,7 @@ from fault_handler import setup_faulthandler
 from main_pump import (
     ADC_STALE_FATAL_SECONDS,
     ADC_STALE_SECONDS,
+    CONTROL_HOLD_SECONDS,
     DEBUG_SIGNAL_LOG,
     ERROR_LOG_PATH,
     ERROR_THRESHOLD,
@@ -55,6 +56,12 @@ class CachedSignalReader:
         for key in ("tank_full", "manual_start", "tank_empty"):
             if key not in volts:
                 raise ADCStaleError(f"ADC cache missing volts for {key}")
+        for key in ("service_on", "service_off", "clear_fatal"):
+            signals.setdefault(key, False)
+            volts.setdefault(key, 0.0)
+        vacuum = payload.get("vacuum")
+        if isinstance(vacuum, dict) and vacuum.get("volts") is not None:
+            volts["vacuum"] = vacuum.get("volts")
         return (signals, volts) if return_volts else signals
 
 
@@ -69,6 +76,9 @@ class ControllerService:
         self.adc_stale_fatal_seconds = env_float(
             env, "ADC_STALE_FATAL_SECONDS", ADC_STALE_FATAL_SECONDS
         )
+        self.control_hold_seconds = env_float(
+            env, "CONTROL_HOLD_SECONDS", CONTROL_HOLD_SECONDS
+        )
         self.pump_control_pin = env_int(env, "PUMP_CONTROL_PIN", PUMP_CONTROL_PIN)
         self.reader = CachedSignalReader(resolve_cache_path(env), self.adc_stale_seconds)
         verbose_log = env_bool(env, "VERBOSE", False)
@@ -79,6 +89,7 @@ class ControllerService:
             error_threshold=self.error_threshold,
             loop_delay=self.loop_delay,
             adc_stale_fatal_seconds=self.adc_stale_fatal_seconds,
+            control_hold_seconds=self.control_hold_seconds,
             debug_signal_log=debug_signal_log,
         )
         self.relay = PumpRelay(self.pump_control_pin)
@@ -104,14 +115,19 @@ class ControllerService:
         self.watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
         self.watchdog_thread.start()
 
+    def _append_error(self, message: str) -> None:
+        if self.controller.get_state().fatal_error and not message.startswith("[FATAL ERROR]"):
+            message = f"[FATAL ERROR] {message}"
+        self.error_writer.append(message, source="pump_controller")
+
     def _watchdog_loop(self) -> None:
         while not self.stop_event.wait(5):
             if not (self.controller.thread and self.controller.thread.is_alive()):
-                self.error_writer.append("Restarting controller loop", source="pump_controller")
+                self._append_error("Restarting controller loop")
                 self.controller.stop()
                 self.controller.start(self.reader)
             if not (self.relay_worker.thread and self.relay_worker.thread.is_alive()):
-                self.error_writer.append("Restarting relay loop", source="pump_controller")
+                self._append_error("Restarting relay loop")
                 self.relay_worker.stop()
                 self.relay_worker.start()
 

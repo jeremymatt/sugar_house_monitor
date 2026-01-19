@@ -82,9 +82,16 @@ def main() -> None:
         LOGGER.error("Failed to initialize MCP3008: %s", exc)
         sys.exit(1)
 
+    signal_keys = (
+        "tank_full",
+        "manual_start",
+        "tank_empty",
+        "service_on",
+        "service_off",
+        "clear_fatal",
+    )
     bool_buffers: Dict[str, deque[int]] = {
-        name: deque(maxlen=max(1, debounce_samples))
-        for name in ("tank_full", "manual_start", "tank_empty")
+        name: deque(maxlen=max(1, debounce_samples)) for name in signal_keys
     }
 
     stop_event = threading.Event()
@@ -105,13 +112,16 @@ def main() -> None:
                 "tank_full": reader.channels["tank_full"].value,
                 "manual_start": reader.channels["manual_start"].value,
                 "tank_empty": reader.channels["tank_empty"].value,
+                "service_on": reader.channels["service_on"].value,
+                "service_off": reader.channels["service_off"].value,
+                "clear_fatal": reader.channels["clear_fatal"].value,
             }
-            for key in ("tank_full", "manual_start", "tank_empty"):
+            for key in signal_keys:
                 bool_buffers[key].append(raw[key])
 
             signals = {}
             volts = {}
-            for key in ("tank_full", "manual_start", "tank_empty"):
+            for key in signal_keys:
                 signal_value, avg_volts = _compute_signal(bool_buffers[key], reader, threshold_v)
                 signals[key] = signal_value
                 volts[key] = avg_volts
@@ -131,6 +141,9 @@ def main() -> None:
                     "tank_full": raw["tank_full"],
                     "manual_start": raw["manual_start"],
                     "tank_empty": raw["tank_empty"],
+                    "service_on": raw["service_on"],
+                    "service_off": raw["service_off"],
+                    "clear_fatal": raw["clear_fatal"],
                 },
                 "vacuum": {
                     "raw": vacuum_raw,
