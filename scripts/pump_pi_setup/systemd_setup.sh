@@ -53,6 +53,22 @@ render_unit() {
     "${src}" > "${dst}"
 }
 
+install_units() {
+  if [[ ! -d "${UNIT_SRC_DIR}" ]]; then
+    echo "Missing unit template directory: ${UNIT_SRC_DIR}" >&2
+    exit 1
+  fi
+  for unit in "${UNIT_SRC_DIR}"/*.service "${UNIT_SRC_DIR}"/*.target; do
+    [[ -e "${unit}" ]] || continue
+    dst="${UNIT_DST_DIR}/$(basename "${unit}")"
+    render_unit "${unit}" "${dst}"
+  done
+  if [[ -f "${LOGROTATE_SRC_DIR}/pump_controller" ]]; then
+    render_unit "${LOGROTATE_SRC_DIR}/pump_controller" "${LOGROTATE_DST}"
+  fi
+  systemctl daemon-reload
+}
+
 wait_inactive() {
   local retries=25
   local delay=0.2
@@ -90,24 +106,13 @@ wait_active() {
 }
 
 if [[ "$1" == "-on" ]]; then
-  if [[ ! -d "${UNIT_SRC_DIR}" ]]; then
-    echo "Missing unit template directory: ${UNIT_SRC_DIR}" >&2
-    exit 1
-  fi
-  for unit in "${UNIT_SRC_DIR}"/*.service "${UNIT_SRC_DIR}"/*.target; do
-    [[ -e "${unit}" ]] || continue
-    dst="${UNIT_DST_DIR}/$(basename "${unit}")"
-    render_unit "${unit}" "${dst}"
-  done
-  if [[ -f "${LOGROTATE_SRC_DIR}/pump_controller" ]]; then
-    render_unit "${LOGROTATE_SRC_DIR}/pump_controller" "${LOGROTATE_DST}"
-  fi
-  systemctl daemon-reload
+  install_units
   systemctl disable --now "${WATCHDOG_SERVICE}" || true
   wait_inactive "${WATCHDOG_SERVICE}"
   systemctl enable --now sugar-pump.target
   echo "Enabled sugar-pump.target (logs -> ${LOG_PATH})"
 elif [[ "$1" == "-off" ]]; then
+  install_units
   systemctl disable --now sugar-pump.target || true
   systemctl stop "${PUMP_SERVICES[@]}" || true
   systemctl reset-failed "${PUMP_SERVICES[@]}" "${WATCHDOG_SERVICE}" sugar-pump.target || true

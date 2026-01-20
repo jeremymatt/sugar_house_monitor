@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ADC watchdog that re-enables pump services on a rising service_on edge."""
+"""ADC watchdog that re-enables pump services after a sustained service_on signal."""
 from __future__ import annotations
 
 import logging
@@ -26,6 +26,7 @@ from main_pump import (
 )
 
 LOGGER = logging.getLogger("adc_watchdog")
+WATCHDOG_LOG_INTERVAL_SECONDS = 5.0
 
 
 class CachedSignalReader:
@@ -33,7 +34,7 @@ class CachedSignalReader:
         self.cache_path = cache_path
         self.max_age_seconds = max_age_seconds
 
-    def read_signals(self) -> Dict[str, bool]:
+    def read_signals(self) -> tuple[Dict[str, bool], Dict[str, float]]:
         try:
             payload = read_cache(self.cache_path)
         except Exception as exc:
@@ -42,11 +43,25 @@ class CachedSignalReader:
         if age > self.max_age_seconds:
             raise ADCStaleError(f"ADC cache stale ({age:.2f}s > {self.max_age_seconds:.2f}s)")
         signals = payload.get("signals")
+        volts = payload.get("volts")
         if not isinstance(signals, dict):
             raise ADCStaleError("ADC cache missing signals")
-        return {
-            "service_on": bool(signals.get("service_on")),
-        }
+        if not isinstance(volts, dict):
+            volts = {}
+        for key in (
+            "tank_full",
+            "manual_start",
+            "tank_empty",
+            "service_on",
+            "service_off",
+            "clear_fatal",
+        ):
+            signals.setdefault(key, False)
+            volts.setdefault(key, 0.0)
+        vacuum = payload.get("vacuum")
+        if isinstance(vacuum, dict) and vacuum.get("volts") is not None:
+            volts["vacuum"] = vacuum.get("volts")
+        return signals, volts
 
 
 class ADCWatchdogService:
@@ -60,12 +75,17 @@ class ADCWatchdogService:
         self.control_hold_seconds = max(
             0.0, env_float(env, "CONTROL_HOLD_SECONDS", CONTROL_HOLD_SECONDS)
         )
+        self.log_interval = max(
+            0.0, env_float(env, "WATCHDOG_LOG_INTERVAL_SECONDS", WATCHDOG_LOG_INTERVAL_SECONDS)
+        )
         self.systemd_setup_path = repo_path_from_config("scripts/pump_pi_setup/systemd_setup.sh")
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self._hold_start: Optional[float] = None
         self._hold_fired = False
         self._last_stale_log = 0.0
+        self._last_signal_log: Optional[Dict[str, bool]] = None
+        self._last_signal_log_time: Optional[float] = None
         self._systemd_lock = threading.Lock()
 
     def start(self) -> None:
@@ -125,7 +145,7 @@ class ADCWatchdogService:
     def _run(self) -> None:
         while not self.stop_event.wait(self.loop_delay):
             try:
-                signals = self.reader.read_signals()
+                signals, volts = self.reader.read_signals()
                 service_on = bool(signals.get("service_on"))
                 now = time.monotonic()
                 if service_on:
@@ -140,6 +160,36 @@ class ADCWatchdogService:
                 else:
                     self._hold_start = None
                     self._hold_fired = False
+                if self.log_interval == 0.0 or (
+                    self._last_signal_log is None
+                    or signals != self._last_signal_log
+                    or self._last_signal_log_time is None
+                    or (now - self._last_signal_log_time) >= self.log_interval
+                ):
+                    def logic_flag(key: str) -> str:
+                        return "T" if signals.get(key) else "F"
+
+                    def volts_value(key: str) -> float:
+                        return float(volts.get(key, 0.0) or 0.0)
+
+                    LOGGER.info(
+                        "[SYSTEM OFF] Signals: Vac=(%.2fv) | tf=%s:(%.2fv) | ms=%s:(%.2fv) | te=%s:(%.2fv) | on=%s:(%.2fv) | off=%s:(%.2fv) | rst=%s:(%.2fv)",
+                        volts_value("vacuum"),
+                        logic_flag("tank_full"),
+                        volts_value("tank_full"),
+                        logic_flag("manual_start"),
+                        volts_value("manual_start"),
+                        logic_flag("tank_empty"),
+                        volts_value("tank_empty"),
+                        logic_flag("service_on"),
+                        volts_value("service_on"),
+                        logic_flag("service_off"),
+                        volts_value("service_off"),
+                        logic_flag("clear_fatal"),
+                        volts_value("clear_fatal"),
+                    )
+                    self._last_signal_log = dict(signals)
+                    self._last_signal_log_time = now
             except ADCStaleError as exc:
                 now = time.time()
                 if (now - self._last_stale_log) >= 1.0:

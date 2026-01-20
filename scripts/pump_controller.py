@@ -34,6 +34,23 @@ from main_pump import (
 LOGGER = logging.getLogger("pump_controller")
 
 
+class FatalPrefixFilter(logging.Filter):
+    def __init__(self, controller: PumpController):
+        super().__init__()
+        self.controller = controller
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if self.controller.get_state().fatal_error:
+                message = record.getMessage()
+                if not message.startswith("[FATAL ERROR]"):
+                    record.msg = f"[FATAL ERROR] {message}"
+                    record.args = ()
+        except Exception:
+            pass
+        return True
+
+
 class CachedSignalReader:
     def __init__(self, cache_path, max_age_seconds: float):
         self.cache_path = cache_path
@@ -144,6 +161,7 @@ def main() -> None:
         sys.exit(1)
 
     service = ControllerService(env)
+    logging.getLogger().addFilter(FatalPrefixFilter(service.controller))
     setup_faulthandler("pump_controller", service.error_writer, service.db)
 
     def handle_signal(sig, frame):
