@@ -12,7 +12,6 @@ Responsibilities:
 from __future__ import annotations
 
 import argparse
-import getpass
 import json
 import logging
 import math
@@ -517,13 +516,6 @@ class PumpController:
         self.control_hold_seconds = max(0.0, hold_seconds)
         self.loop_delay = loop_delay
         self.debug_signal_log = debug_signal_log
-        self.service_user = (
-            os.environ.get("SERVICE_USER")
-            or os.environ.get("SUDO_USER")
-            or os.environ.get("USER")
-            or getpass.getuser()
-        )
-        self.systemd_setup_path = repo_path_from_config("scripts/pump_pi_setup/systemd_setup.sh")
         self._systemd_lock = threading.Lock()
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
@@ -664,30 +656,18 @@ class PumpController:
             LOGGER.info("Skipping systemd_setup.sh -%s; command already running", mode)
             return
         try:
-            script_path = self.systemd_setup_path
-            if not script_path.exists():
-                self._record_error(f"systemd_setup.sh not found at {script_path}")
-                return
-            cmd = [
-                "sudo",
-                "-n",
-                "systemd-run",
-                "--scope",
-                "--quiet",
-                f"--setenv=SERVICE_USER={self.service_user}",
-                str(script_path),
-                f"-{mode}",
-            ]
+            unit = f"sugar-pump-setup@{mode}.service"
+            cmd = ["sudo", "-n", "systemctl", "start", "--no-block", unit]
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True)
             except Exception as exc:
-                self._record_error(f"Failed to run systemd_setup.sh -{mode}: {exc}")
+                self._record_error(f"Failed to start {unit}: {exc}")
                 return
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout).strip()
                 suffix = f": {detail}" if detail else ""
                 self._record_error(
-                    f"systemd_setup.sh -{mode} failed (code {result.returncode}){suffix}"
+                    f"Failed to start {unit} (code {result.returncode}){suffix}"
                 )
         finally:
             self._systemd_lock.release()

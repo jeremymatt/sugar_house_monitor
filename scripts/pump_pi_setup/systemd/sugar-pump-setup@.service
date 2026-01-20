@@ -1,0 +1,10 @@
+[Unit]
+Description=Sugar House Pump Setup (%i)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=SERVICE_USER=__USER__
+ExecStart=__REPO_ROOT__/scripts/pump_pi_setup/systemd_setup.sh -%i
+
