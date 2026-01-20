@@ -12,6 +12,7 @@ Responsibilities:
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import logging
 import math
@@ -123,6 +124,23 @@ def env_bool(env: Dict[str, str], key: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+class FatalPrefixFilter(logging.Filter):
+    def __init__(self, controller: "PumpController"):
+        super().__init__()
+        self.controller = controller
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if self.controller.get_state().fatal_error:
+                message = record.getMessage()
+                if not message.startswith("[FATAL ERROR]"):
+                    record.msg = f"[FATAL ERROR] {message}"
+                    record.args = ()
+        except Exception:
+            pass
+        return True
 
 
 class ADCStaleError(RuntimeError):
@@ -499,6 +517,12 @@ class PumpController:
         self.control_hold_seconds = max(0.0, hold_seconds)
         self.loop_delay = loop_delay
         self.debug_signal_log = debug_signal_log
+        self.service_user = (
+            os.environ.get("SERVICE_USER")
+            or os.environ.get("SUDO_USER")
+            or os.environ.get("USER")
+            or getpass.getuser()
+        )
         self.systemd_setup_path = repo_path_from_config("scripts/pump_pi_setup/systemd_setup.sh")
         self._systemd_lock = threading.Lock()
         self.lock = threading.Lock()
@@ -644,7 +668,16 @@ class PumpController:
             if not script_path.exists():
                 self._record_error(f"systemd_setup.sh not found at {script_path}")
                 return
-            cmd = ["sudo", "-n", "systemd-run", "--scope", "--quiet", str(script_path), f"-{mode}"]
+            cmd = [
+                "sudo",
+                "-n",
+                "systemd-run",
+                "--scope",
+                "--quiet",
+                f"--setenv=SERVICE_USER={self.service_user}",
+                str(script_path),
+                f"-{mode}",
+            ]
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True)
             except Exception as exc:
@@ -1400,6 +1433,10 @@ def run_monolith() -> None:
     except Exception as exc:
         LOGGER.error("Failed to initialize pump app: %s", exc)
         sys.exit(1)
+
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        handler.addFilter(FatalPrefixFilter(app.controller))
 
     def handle_signal(sig, frame):
         LOGGER.info("Received signal %s, shutting down.", sig)

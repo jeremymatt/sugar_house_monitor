@@ -28,7 +28,7 @@ UNIT_DST_DIR="/etc/systemd/system"
 LOGROTATE_SRC_DIR="${SCRIPT_DIR}/logrotate"
 LOGROTATE_DST="/etc/logrotate.d/sugar-pump"
 
-SERVICE_USER="${SUDO_USER:-${USER}}"
+SERVICE_USER="${SERVICE_USER:-${SUDO_USER:-${USER}}}"
 USER_HOME="$(getent passwd "${SERVICE_USER}" | cut -d: -f6)"
 if [[ -z "${USER_HOME}" ]]; then
   USER_HOME="/home/${SERVICE_USER}"
