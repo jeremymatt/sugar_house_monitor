@@ -149,7 +149,7 @@ class ADCStaleError(RuntimeError):
 class PumpDatabase:
     def __init__(self, path: Path):
         self.path = path
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self._connect()
 
     def _connect(self) -> None:
@@ -517,7 +517,7 @@ class PumpController:
         self.loop_delay = loop_delay
         self.debug_signal_log = debug_signal_log
         self._systemd_lock = threading.Lock()
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self._last_signals: Dict[str, bool] = {}
