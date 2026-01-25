@@ -103,4 +103,4 @@ while True:
        last_end = end_raw
 
    # hang out and do nothing for a half second
-   time.sleep(0.05)
+   time.sleep(0.5)
