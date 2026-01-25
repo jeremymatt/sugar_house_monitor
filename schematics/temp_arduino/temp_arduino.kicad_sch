@@ -5,6 +5,263 @@
 	(uuid "70150ee0-efb7-4c77-92f3-87c41ebe8438")
 	(paper "A4")
 	(lib_symbols
+		(symbol "Device:Thermocouple"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "TC"
+				(at -3.048 3.81 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "Thermocouple"
+				(at -5.08 -4.064 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Footprint" ""
+				(at -14.605 1.27 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" "~"
+				(at -14.605 1.27 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "Thermocouple"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "thermocouple temperature sensor cold junction"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_fp_filters" "PIN?ARRAY* bornier* *Terminal?Block* Thermo*Couple*"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "Thermocouple_0_1"
+				(polyline
+					(pts
+						(xy -4.064 -1.016) (xy -4.318 -1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -3.556 -0.508) (xy -3.81 -0.762)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(circle
+					(center -3.048 0)
+					(radius 0.254)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type outline)
+					)
+				)
+				(polyline
+					(pts
+						(xy -3.048 0) (xy -3.302 -0.254)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -2.54 0.508) (xy -2.794 0.254)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -2.032 1.016) (xy -2.286 0.762)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.524 1.524) (xy -1.778 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.016 2.032) (xy -1.27 1.778)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -0.508 2.54) (xy -0.762 2.286)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 0 2.54) (xy -0.508 2.54)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 0 -2.54) (xy -0.254 -2.54)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 0.254 -2.54) (xy -0.508 -2.54) (xy -4.318 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "Thermocouple_1_1"
+				(pin passive line
+					(at 2.54 2.54 180)
+					(length 2.54)
+					(name "+"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 2.54 -2.54 180)
+					(length 2.54)
+					(name "-"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "MCU_Module:Arduino_UNO_R3"
 			(exclude_from_sim no)
 			(in_bom yes)
@@ -671,20 +928,22 @@
 			(exclude_from_sim no)
 			(in_bom yes)
 			(on_board yes)
-			(property "Reference" "U"
-				(at 0 0 0)
+			(property "Reference" "U2"
+				(at 10.16 -6.3499 0)
 				(effects
 					(font
 						(size 1.27 1.27)
 					)
+					(justify left)
 				)
 			)
-			(property "Value" ""
-				(at 0 0 0)
+			(property "Value" "20x4 Display"
+				(at 10.16 -8.8899 0)
 				(effects
 					(font
 						(size 1.27 1.27)
 					)
+					(justify left)
 				)
 			)
 			(property "Footprint" ""
@@ -731,7 +990,7 @@
 				(pin input line
 					(at 0 -3.81 0)
 					(length 2.54)
-					(name "GND"
+					(name "Vcc"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -749,7 +1008,7 @@
 				(pin input line
 					(at 0 -6.35 0)
 					(length 2.54)
-					(name "Vcc"
+					(name "SDA"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -767,7 +1026,7 @@
 				(pin input line
 					(at 0 -8.89 0)
 					(length 2.54)
-					(name "SDA"
+					(name "SCL"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -785,7 +1044,7 @@
 				(pin input line
 					(at 0 -11.43 0)
 					(length 2.54)
-					(name "SCL"
+					(name "GND"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -807,16 +1066,16 @@
 			(exclude_from_sim no)
 			(in_bom yes)
 			(on_board yes)
-			(property "Reference" "U"
-				(at 0 0 0)
+			(property "Reference" "U1"
+				(at 6.35 2.54 0)
 				(effects
 					(font
 						(size 1.27 1.27)
 					)
 				)
 			)
-			(property "Value" ""
-				(at 0 0 0)
+			(property "Value" "~"
+				(at 6.35 0 0)
 				(effects
 					(font
 						(size 1.27 1.27)
@@ -885,7 +1144,7 @@
 				(pin input line
 					(at -2.54 -6.35 0)
 					(length 2.54)
-					(name "GND"
+					(name "SDA"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -921,7 +1180,7 @@
 				(pin input line
 					(at -2.54 -11.43 0)
 					(length 2.54)
-					(name "SDA"
+					(name "GND"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -1045,7 +1304,7 @@
 					)
 				)
 				(pin input line
-					(at 15.24 -16.51 180)
+					(at 15.24 -17.78 180)
 					(length 2.54)
 					(name "-"
 						(effects
@@ -1067,341 +1326,280 @@
 		)
 	)
 	(junction
-		(at 161.29 113.03)
+		(at 166.37 66.04)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "0f76596c-487b-4870-b621-842ea7938f41")
+		(uuid "587e8531-3695-4c24-9203-ac48bb44d69f")
 	)
 	(junction
-		(at 139.7 88.9)
+		(at 168.91 86.36)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "20d481fb-fe20-459a-a78d-d23f359fa3cb")
+		(uuid "7a13f941-904c-4e41-a762-961115807fac")
 	)
 	(junction
-		(at 166.37 38.1)
+		(at 173.99 102.87)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "b62e62e1-a3e0-4546-aa62-b9f864bd2720")
+		(uuid "8024f36a-30ae-4451-beba-30583018837c")
 	)
 	(junction
-		(at 156.21 85.09)
+		(at 171.45 88.9)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "f5c6554b-460c-448b-9839-5036b9ddd2f4")
+		(uuid "b6aa31d0-8a56-44e8-ba74-e51efa9627e7")
 	)
 	(wire
 		(pts
-			(xy 166.37 77.47) (xy 166.37 38.1)
+			(xy 176.53 97.79) (xy 168.91 97.79)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "00714782-72e8-414f-8a40-6c80770878c4")
+		(uuid "10698889-1ae8-484c-aaad-b7e573c45ae2")
 	)
 	(wire
 		(pts
-			(xy 175.26 120.65) (xy 175.26 129.54)
+			(xy 151.13 105.41) (xy 151.13 104.14)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "02f53447-dc11-4ca8-9063-0071ceed5895")
+		(uuid "16080c05-cec7-4975-9040-1492ece8da5d")
 	)
 	(wire
 		(pts
-			(xy 151.13 82.55) (xy 151.13 88.9)
+			(xy 176.53 68.58) (xy 168.91 68.58)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "06180d57-9b8b-4ca7-b45e-c932d7a4ada0")
+		(uuid "17b7fe16-942e-4497-9fcd-450f30a6a909")
 	)
 	(wire
 		(pts
-			(xy 166.37 85.09) (xy 156.21 85.09)
+			(xy 194.31 74.93) (xy 198.12 74.93)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "075fe3ab-00be-4d65-b564-cd33a7a17a6f")
+		(uuid "19949384-0fd0-43e4-a801-41f89127e9b7")
 	)
 	(wire
 		(pts
-			(xy 146.05 85.09) (xy 146.05 86.36)
+			(xy 168.91 68.58) (xy 168.91 86.36)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "0e64baa3-d5cf-461c-863c-5c7ed698941c")
+		(uuid "225e4c1b-f77a-4eff-ab23-0472a72187d2")
 	)
 	(wire
 		(pts
-			(xy 176.53 115.57) (xy 176.53 104.14)
+			(xy 173.99 102.87) (xy 173.99 105.41)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "1ca5183e-2e6a-4629-b70a-c73ab0ab3d73")
+		(uuid "332c91ca-72bd-4008-b261-0dcf69ce19cc")
 	)
 	(wire
 		(pts
-			(xy 168.91 118.11) (xy 168.91 106.68)
+			(xy 168.91 86.36) (xy 161.29 86.36)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "20118b73-2340-42c3-a37f-d84b7f98496a")
+		(uuid "360b127d-26e9-4c65-ad2e-fa8114421767")
 	)
 	(wire
 		(pts
-			(xy 168.91 106.68) (xy 156.21 106.68)
+			(xy 176.53 95.25) (xy 166.37 95.25)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "34429432-7958-41b5-a266-34a020144289")
+		(uuid "43521e24-8e15-4e4b-be3a-e48428cb8bcf")
 	)
 	(wire
 		(pts
-			(xy 161.29 113.03) (xy 182.88 113.03)
+			(xy 176.53 73.66) (xy 173.99 73.66)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "4d94fa14-7a04-4e34-b86d-debf105965dd")
+		(uuid "5fa3ce19-eb4a-4c4c-b942-66be98217d23")
 	)
 	(wire
 		(pts
-			(xy 176.53 104.14) (xy 195.58 104.14)
+			(xy 153.67 49.53) (xy 153.67 50.8)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "4dceef7d-8273-4161-a199-7dcf27df47ae")
+		(uuid "7f5a9155-6cb6-4831-8b86-bae688fa4163")
 	)
 	(wire
 		(pts
-			(xy 119.38 118.11) (xy 119.38 104.14)
+			(xy 176.53 66.04) (xy 166.37 66.04)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "4df6503a-7b69-404b-9620-8db3df8331a8")
+		(uuid "8d0d5b29-b757-4aea-a0d4-dbf2586e597b")
 	)
 	(wire
 		(pts
-			(xy 139.7 88.9) (xy 129.54 88.9)
+			(xy 168.91 86.36) (xy 168.91 97.79)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "553b4702-df90-4a61-a5e6-8ee05e722bb6")
+		(uuid "903c4d40-fe7c-4a4c-8a09-21d6e4e99871")
 	)
 	(wire
 		(pts
-			(xy 166.37 80.01) (xy 161.29 80.01)
+			(xy 171.45 88.9) (xy 161.29 88.9)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "612f309c-bfd3-4d88-978c-6a172fd8ada9")
+		(uuid "9e85acd2-4fea-49b0-a802-19bb54a0e2d9")
 	)
 	(wire
 		(pts
-			(xy 151.13 88.9) (xy 139.7 88.9)
+			(xy 173.99 73.66) (xy 173.99 102.87)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "65a80f6e-4bb0-4695-abae-5534e505d4f0")
+		(uuid "a2a39061-9618-40a7-a547-00b875d5ee3d")
 	)
 	(wire
 		(pts
-			(xy 182.88 118.11) (xy 168.91 118.11)
+			(xy 194.31 80.01) (xy 198.12 80.01)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "75166e8e-ac1d-4716-9b21-37526d0d3a73")
+		(uuid "ab1fc6cd-6073-4005-98fa-ce3474658216")
 	)
 	(wire
 		(pts
-			(xy 195.58 104.14) (xy 195.58 38.1)
+			(xy 166.37 49.53) (xy 153.67 49.53)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "8770b692-7d98-43f9-8f53-7bcb18fdbc9d")
+		(uuid "b07318d2-88b1-43b6-80e0-d4ba62bcef5a")
 	)
 	(wire
 		(pts
-			(xy 161.29 118.11) (xy 119.38 118.11)
+			(xy 173.99 105.41) (xy 151.13 105.41)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "95f3521b-aa75-4a83-938e-4ffce5e09468")
+		(uuid "b6fde789-146e-4808-8527-791bb755275a")
 	)
 	(wire
 		(pts
-			(xy 139.7 129.54) (xy 139.7 88.9)
+			(xy 171.45 71.12) (xy 171.45 88.9)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "9f23df6e-4d3b-4153-a035-6f8f97b0bec1")
+		(uuid "d30ca4de-2fb4-4887-b7b7-e35ddc65dafa")
 	)
 	(wire
 		(pts
-			(xy 166.37 82.55) (xy 151.13 82.55)
+			(xy 176.53 71.12) (xy 171.45 71.12)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "a0681106-8b40-4896-abd5-e2b61734747a")
+		(uuid "d6517108-8297-4b42-950c-1471ea55b01e")
 	)
 	(wire
 		(pts
-			(xy 166.37 38.1) (xy 195.58 38.1)
+			(xy 173.99 102.87) (xy 176.53 102.87)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "a6445f57-ad4c-499a-9154-8ac5ddb7641f")
+		(uuid "db28ec6c-ada5-4d32-9b76-db8f30b3a584")
 	)
 	(wire
 		(pts
-			(xy 182.88 115.57) (xy 176.53 115.57)
+			(xy 171.45 88.9) (xy 171.45 100.33)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "a6c159b6-c14e-4f40-aa36-5ae058c3199d")
+		(uuid "dbcee8a4-a615-4d5b-8493-9d3092e1f202")
 	)
 	(wire
 		(pts
-			(xy 156.21 106.68) (xy 156.21 85.09)
+			(xy 176.53 100.33) (xy 171.45 100.33)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "b0c6fbd1-0d24-4f60-b10c-0e7b1dec8f5c")
+		(uuid "ea231a41-4ae8-4177-b2df-fa8de8c471cb")
 	)
 	(wire
 		(pts
-			(xy 182.88 120.65) (xy 175.26 120.65)
+			(xy 166.37 66.04) (xy 166.37 49.53)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "c3b03aad-de60-4775-afd5-34d6b37c7811")
+		(uuid "ea60645f-caaa-4db2-8ff0-c72e722db014")
 	)
 	(wire
 		(pts
-			(xy 161.29 113.03) (xy 161.29 118.11)
+			(xy 166.37 95.25) (xy 166.37 66.04)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "cd4e07a2-b81b-49a0-b621-1cdde9eb15f3")
-	)
-	(wire
-		(pts
-			(xy 121.92 38.1) (xy 166.37 38.1)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d10f4778-2d07-4f6e-ab8e-633b27ab92d2")
-	)
-	(wire
-		(pts
-			(xy 161.29 80.01) (xy 161.29 113.03)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d2d5148a-97d6-4a84-9354-3f6106ecce54")
-	)
-	(wire
-		(pts
-			(xy 121.92 38.1) (xy 121.92 50.8)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d609756f-7c9a-4d6a-b725-7e8e6f269ac4")
-	)
-	(wire
-		(pts
-			(xy 146.05 86.36) (xy 129.54 86.36)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e9facffd-a2c7-4724-89b8-cdf7a743218f")
-	)
-	(wire
-		(pts
-			(xy 156.21 85.09) (xy 146.05 85.09)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "f29083c5-3bf8-4c4e-a32e-e06c682d89ad")
-	)
-	(wire
-		(pts
-			(xy 175.26 129.54) (xy 139.7 129.54)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "fe868c6a-9ae9-49b5-a990-c291c509e4b2")
+		(uuid "f3f063f1-6d41-4f18-870e-764275cc1122")
 	)
 	(symbol
 		(lib_id "MCU_Module:Arduino_UNO_R3")
-		(at 116.84 76.2 0)
+		(at 148.59 76.2 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "0de18d6a-003d-48e7-8814-61ed8a36c261")
 		(property "Reference" "A1"
-			(at 124.0633 48.26 0)
+			(at 138.684 48.26 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1410,7 +1608,7 @@
 			)
 		)
 		(property "Value" "Arduino_UNO_R4(w/ wifi)"
-			(at 124.0633 50.8 0)
+			(at 147.828 89.662 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1419,7 +1617,7 @@
 			)
 		)
 		(property "Footprint" "Module:Arduino_UNO_R3"
-			(at 116.84 76.2 0)
+			(at 148.59 76.2 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1429,7 +1627,7 @@
 			)
 		)
 		(property "Datasheet" "https://www.arduino.cc/en/Main/arduinoBoardUno"
-			(at 116.84 76.2 0)
+			(at 148.59 76.2 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1438,7 +1636,7 @@
 			)
 		)
 		(property "Description" "Arduino UNO Microcontroller Module, release 3"
-			(at 116.84 76.2 0)
+			(at 148.59 76.2 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1553,7 +1751,7 @@
 	)
 	(symbol
 		(lib_id "shm_symbols:20x4_display")
-		(at 182.88 109.22 0)
+		(at 176.53 91.44 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1562,7 +1760,7 @@
 		(fields_autoplaced yes)
 		(uuid "769379ca-f907-4349-b175-fbecac337e56")
 		(property "Reference" "U2"
-			(at 193.04 115.5699 0)
+			(at 186.69 97.7899 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1570,8 +1768,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "~"
-			(at 193.04 118.1099 0)
+		(property "Value" "20x4 Display"
+			(at 186.69 100.3299 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1580,7 +1778,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 182.88 109.22 0)
+			(at 176.53 91.44 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1589,7 +1787,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 182.88 109.22 0)
+			(at 176.53 91.44 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1598,7 +1796,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 182.88 109.22 0)
+			(at 176.53 91.44 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1629,24 +1827,23 @@
 	)
 	(symbol
 		(lib_id "shm_symbols:MCP9600_i2c_thermocouple_board")
-		(at 168.91 73.66 0)
+		(at 179.07 62.23 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "8a82cfa1-f9ca-4f89-8f32-030f2debb4af")
 		(property "Reference" "U1"
-			(at 175.26 71.12 0)
+			(at 185.42 59.69 0)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
 			)
 		)
-		(property "Value" "~"
-			(at 175.26 73.66 0)
+		(property "Value" "MCP9600 i2c thermocouple board"
+			(at 195.58 62.992 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1654,7 +1851,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 168.91 73.66 0)
+			(at 179.07 62.23 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1663,7 +1860,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 168.91 73.66 0)
+			(at 179.07 62.23 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1672,7 +1869,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 168.91 73.66 0)
+			(at 179.07 62.23 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1717,6 +1914,77 @@
 			(project ""
 				(path "/70150ee0-efb7-4c77-92f3-87c41ebe8438"
 					(reference "U1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:Thermocouple")
+		(at 200.66 77.47 0)
+		(mirror y)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "b86f906a-9290-4f72-86a6-0228c6186fb5")
+		(property "Reference" "TC1"
+			(at 205.74 76.1999 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "Thermocouple"
+			(at 205.74 78.7399 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 215.265 76.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 215.265 76.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Thermocouple"
+			(at 200.66 77.47 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "6989113f-b9dc-4933-9963-1b23231be1be")
+		)
+		(pin "1"
+			(uuid "529f0a33-7a5b-4cba-9dc4-889bb7c71229")
+		)
+		(instances
+			(project ""
+				(path "/70150ee0-efb7-4c77-92f3-87c41ebe8438"
+					(reference "TC1")
 					(unit 1)
 				)
 			)
