@@ -254,6 +254,7 @@ function drawPlot(canvas, payload) {
   const plotH = height - padTop - padBottom;
   const fontTick = "18px system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
   const fontLabel = "20px system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+  const leftLabel = payload.leftLabel || "gph";
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#1a1f28";
@@ -353,7 +354,7 @@ function drawPlot(canvas, payload) {
   ctx.textBaseline = "top";
   ctx.fillStyle = "#a7afbf";
   ctx.font = fontLabel;
-  ctx.fillText("gph", 0, 0);
+  ctx.fillText(leftLabel, 0, 0);
   ctx.restore();
 
   const dims = { padLeft, padTop, plotW, plotH };
@@ -509,19 +510,33 @@ async function refreshPlot() {
       });
     }
 
-    updateLegend(legendSeries, legendRight);
-
-    const leftBounds = computeBounds(leftSeries.map((s) => s.points));
-    const rightBounds = rightSeries.length ? computeBounds(rightSeries.map((s) => s.points)) : null;
-    const canvas = document.getElementById("comparison-canvas");
+    let leftBounds = computeBounds(leftSeries.map((s) => s.points));
+    let rightBounds = rightSeries.length ? computeBounds(rightSeries.map((s) => s.points)) : null;
+    let leftLabel = "gph";
     let rightLabel = "";
     if (rightBounds && selections.rightAxis === "vacuum") rightLabel = "inHg";
     if (rightBounds && selections.rightAxis === "o2") rightLabel = "%";
     if (rightBounds && selections.rightAxis === "stack") rightLabel = "F";
+
+    if (!leftBounds && rightBounds) {
+      leftSeries.push(...rightSeries);
+      legendSeries.push(...legendRight);
+      rightSeries.length = 0;
+      legendRight.length = 0;
+      leftBounds = rightBounds;
+      leftLabel = rightLabel || leftLabel;
+      rightBounds = null;
+      rightLabel = "";
+    }
+
+    updateLegend(legendSeries, legendRight);
+
+    const canvas = document.getElementById("comparison-canvas");
     drawPlot(canvas, {
       windowSec,
       unit,
       leftBounds,
+      leftLabel,
       rightBounds,
       rightLabel,
       series: leftSeries,
