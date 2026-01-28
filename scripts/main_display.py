@@ -126,7 +126,11 @@ def debug_log(message: str) -> None:
 def save_snapshot(surface, path: str) -> None:
     if not path:
         return
-    tmp_path = f"{path}.tmp"
+    base, ext = os.path.splitext(path)
+    if not ext:
+        ext = ".png"
+        path = f"{base}{ext}"
+    tmp_path = f"{base}.tmp{ext}"
     try:
         dir_path = os.path.dirname(path)
         if dir_path:
