@@ -41,6 +41,9 @@ STATUS_URL = os.environ.get(
 STACK_STATUS_URL = os.environ.get(
     "DISPLAY_STACK_STATUS_URL", f"{BASE_URL}/data/status_stack.json"
 )
+O2_STATUS_URL = os.environ.get(
+    "DISPLAY_O2_STATUS_URL", f"{BASE_URL}/data/status_o2.json"
+)
 HISTORY_URL = os.environ.get(
     "DISPLAY_HISTORY_URL", f"{API_BASE}/evaporator_history.php"
 )
@@ -176,6 +179,7 @@ class EvapStatus:
     evap_flow: Optional[float]
     last_fire_min: Optional[float] = None
     stack_temp_f: Optional[float] = None
+    o2_percent: Optional[float] = None
 
 
 # ---- DATA FETCHING ----
@@ -220,6 +224,7 @@ def fetch_state() -> Tuple[PlotSettings, List[EvapPoint], List[StackPoint], Evap
     cache_bust = int(time.time())
     status_payload = fetch_json(STATUS_URL, params={"t": cache_bust}) or {}
     stack_payload = fetch_json(STACK_STATUS_URL, params={"t": cache_bust}) or {}
+    o2_payload = fetch_json(O2_STATUS_URL, params={"t": cache_bust}) or {}
     brook_status = fetch_json(f"{BASE_URL}/data/status_brookside.json", params={"t": cache_bust}) or {}
     road_status = fetch_json(f"{BASE_URL}/data/status_roadside.json", params={"t": cache_bust}) or {}
     history_params = {"t": cache_bust, "scope": HISTORY_SCOPE}
@@ -291,6 +296,13 @@ def fetch_state() -> Tuple[PlotSettings, List[EvapPoint], List[StackPoint], Evap
     except (TypeError, ValueError):
         stack_temp = None
 
+    o2_percent = None
+    try:
+        if o2_payload.get("o2_percent") is not None:
+            o2_percent = float(o2_payload.get("o2_percent"))
+    except (TypeError, ValueError):
+        o2_percent = None
+
     status = EvapStatus(
         sample_ts=latest.get("sample_timestamp"),
         draw_off=(latest.get("draw_off_tank") or "---").lower(),
@@ -300,6 +312,7 @@ def fetch_state() -> Tuple[PlotSettings, List[EvapPoint], List[StackPoint], Evap
         evap_flow=latest.get("evaporator_flow_gph"),
         last_fire_min=last_fire_min,
         stack_temp_f=stack_temp,
+        o2_percent=o2_percent,
     )
 
     return settings, points, stack_points, status
@@ -604,8 +617,8 @@ def draw_chart(
 def draw_status(surface, rect, status: EvapStatus):
     pygame.draw.rect(surface, CARD_BG, rect, border_radius=scale_ui(12))
     pad = scale_ui(6)
-    row_size = 19
-    row_gap = scale_ui(2)
+    row_size = 17
+    row_gap = scale_ui(1)
     row_step = scale_font(row_size) + row_gap
 
     divider_x = rect.centerx
@@ -666,15 +679,25 @@ def draw_status(surface, rect, status: EvapStatus):
         mins, secs = divmod(elapsed_sec, 60)
         last_update_str = f"{mins:02d}:{secs:02d}"
 
+    system_time_str = datetime.now().strftime("%I:%M %p")
+    if system_time_str.startswith("0"):
+        system_time_str = system_time_str[1:]
+
+    o2_str = "--"
+    if status.o2_percent is not None:
+        o2_str = f"{status.o2_percent:.1f}%"
+
     left_rows = [
         f"Evap Flow: {flow_str}",
         f"Draw off: {draw_off_str}",
         f"Pump in: {pump_in_str}",
+        f"Last fire: {last_fire_value}",
     ]
     right_rows = [
-        f"Last fire: {last_fire_value}",
         f"Stack temp: {stack_temp_str}",
-        f"Last Update: {last_update_str}",
+        f"O2: {o2_str}",
+        f"Time: {system_time_str}",
+        f"Last update: {last_update_str}",
     ]
 
     start_y = rect.y + pad
@@ -720,6 +743,7 @@ def main():
         evap_flow=None,
         last_fire_min=None,
         stack_temp_f=None,
+        o2_percent=None,
     )
     last_fetch = 0.0
     last_snapshot = 0.0
