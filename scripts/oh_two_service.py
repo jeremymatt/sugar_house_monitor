@@ -306,6 +306,14 @@ class O2Database:
             )
             return cur.fetchall()
 
+    def count_unsent(self) -> int:
+        with self.lock:
+            cur = self.conn.execute(
+                "SELECT COUNT(*) AS pending FROM o2_readings WHERE acked_by_server = 0"
+            )
+            row = cur.fetchone()
+            return int(row["pending"]) if row and row["pending"] is not None else 0
+
     def mark_acked(self, ids: List[int]) -> None:
         if not ids:
             return
@@ -349,6 +357,12 @@ class O2Sampler:
                     "source_timestamp": iso_now(),
                 }
                 self.db.insert_reading(payload)
+                LOGGER.info(
+                    "O2 sample: raw=%.0f volts=%.3f o2=%.3f%%",
+                    reading["raw_value"],
+                    reading["volts"],
+                    reading["o2_percent"],
+                )
                 self.led.set_error(False)
             except Exception as exc:  # pragma: no cover - hardware dependency
                 LOGGER.exception("O2 sample error: %s", exc)
@@ -413,6 +427,9 @@ class UploadWorker:
                 next_heartbeat = now + self.heartbeat_interval
 
     def _upload_once(self) -> None:
+        pending = self.db.count_unsent()
+        if pending > 0:
+            LOGGER.info("O2 upload backlog: %s reading(s) pending", pending)
         rows = self.db.fetch_unsent(self.batch_size)
         if not rows:
             return
