@@ -45,6 +45,18 @@ HISTORY_URL = os.environ.get(
     "DISPLAY_HISTORY_URL", f"{API_BASE}/evaporator_history.php"
 )
 REFRESH_SEC = float(os.environ.get("DISPLAY_REFRESH_SEC", "15"))
+SNAPSHOT_PATH = os.environ.get("DISPLAY_SNAPSHOT_PATH", "").strip() or "~/display_state.png"
+SNAPSHOT_PATH = os.path.expanduser(SNAPSHOT_PATH)
+SNAPSHOT_INTERVAL_RAW = os.environ.get("DISPLAY_SNAPSHOT_INTERVAL_SEC", "").strip()
+if SNAPSHOT_INTERVAL_RAW:
+    try:
+        SNAPSHOT_INTERVAL_SEC = float(SNAPSHOT_INTERVAL_RAW)
+    except ValueError:
+        SNAPSHOT_INTERVAL_SEC = REFRESH_SEC
+else:
+    SNAPSHOT_INTERVAL_SEC = REFRESH_SEC
+if SNAPSHOT_INTERVAL_SEC <= 0:
+    SNAPSHOT_INTERVAL_SEC = None
 HISTORY_SCOPE = os.environ.get("DISPLAY_HISTORY_SCOPE", "display").strip().lower() or "display"
 WINDOW_OVERRIDE_SEC = os.environ.get("DISPLAY_WINDOW_OVERRIDE_SEC", "").strip()
 WINDOW_OVERRIDE = None
@@ -109,6 +121,25 @@ _WARN_RENDER_FAIL = False
 def debug_log(message: str) -> None:
     if DEBUG:
         print(f"[display debug] {message}", file=sys.stderr, flush=True)
+
+
+def save_snapshot(surface, path: str) -> None:
+    if not path:
+        return
+    tmp_path = f"{path}.tmp"
+    try:
+        dir_path = os.path.dirname(path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
+        pygame.image.save(surface, tmp_path)
+        os.replace(tmp_path, path)
+    except Exception as exc:
+        debug_log(f"Snapshot save failed: {exc}")
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
 
 @dataclass
@@ -675,6 +706,7 @@ def main():
 
     settings = PlotSettings()
     points: List[EvapPoint] = []
+    stack_points: List[StackPoint] = []
     status = EvapStatus(
         sample_ts=None,
         draw_off="---",
@@ -686,6 +718,7 @@ def main():
         stack_temp_f=None,
     )
     last_fetch = 0.0
+    last_snapshot = 0.0
 
     running = True
     while running:
@@ -725,6 +758,9 @@ def main():
         draw_status(screen, status_rect, status)
 
         pygame.display.flip()
+        if SNAPSHOT_INTERVAL_SEC is not None and (now - last_snapshot) >= SNAPSHOT_INTERVAL_SEC:
+            save_snapshot(screen, SNAPSHOT_PATH)
+            last_snapshot = now
         clock.tick(30)
 
     pygame.quit()
