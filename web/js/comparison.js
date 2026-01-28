@@ -25,6 +25,12 @@ const RIGHT_STREAMS = {
     valueKey: "reading_inhg",
     transform: (val) => -val,
   },
+  o2: {
+    label: "O2 (%)",
+    color: "#f2a93b",
+    source: "flow",
+    valueKey: "o2_percent",
+  },
   stack: { label: "Stack temp (F)", color: "#cfd2d9", source: "evap", valueKey: "stack_temp_f" },
 };
 
@@ -393,7 +399,8 @@ function gatherSelections() {
 
 async function loadWindowData(startIso, windowSec, numBins, selections) {
   const wantsFlow = selections.leftStreams.some((s) => LEFT_STREAMS[s].source === "flow") ||
-    selections.rightAxis === "vacuum";
+    selections.rightAxis === "vacuum" ||
+    selections.rightAxis === "o2";
   const wantsEvap = selections.leftStreams.some((s) => LEFT_STREAMS[s].source === "evap") ||
     selections.rightAxis === "stack";
 
@@ -424,7 +431,14 @@ function normalizeWindowSeries(startIso, windowSec, data, selections) {
   if (selections.rightAxis && selections.rightAxis !== "none") {
     const cfg = RIGHT_STREAMS[selections.rightAxis];
     const source = data[cfg.source];
-    const rows = selections.rightAxis === "stack" ? source?.stack_history : source?.vacuum;
+    let rows = null;
+    if (selections.rightAxis === "stack") {
+      rows = source?.stack_history;
+    } else if (selections.rightAxis === "o2") {
+      rows = source?.o2;
+    } else {
+      rows = source?.vacuum;
+    }
     const points = normalizeSeries(rows, cfg.valueKey, startMs, windowSec, cfg.transform);
     rightSeries = [{ key: selections.rightAxis, label: cfg.label, color: cfg.color, points }];
   }
@@ -502,6 +516,7 @@ async function refreshPlot() {
     const canvas = document.getElementById("comparison-canvas");
     let rightLabel = "";
     if (rightBounds && selections.rightAxis === "vacuum") rightLabel = "inHg";
+    if (rightBounds && selections.rightAxis === "o2") rightLabel = "%";
     if (rightBounds && selections.rightAxis === "stack") rightLabel = "F";
     drawPlot(canvas, {
       windowSec,

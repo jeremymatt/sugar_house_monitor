@@ -5,6 +5,7 @@ Real runtime secrets live in this folder but are ignored by git. Copy or rename 
 - `config/server.env`
 - `config/tank_pi.env`
 - `config/pump_pi.env`
+- `config/oh_two_pi.env`
 - `config/display_pi.env`
 - `config/shm_admin.ini`
 

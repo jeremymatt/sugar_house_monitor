@@ -2,7 +2,7 @@
 Interactive helper that bootstraps config/*.env files.
 
 The script generates a shared API key and writes populated env files for the
-server, Tank Pi, and Pump Pi using the templates in config/example/.
+server, Tank Pi, Pump Pi, and O2 Pi using the templates in config/example/.
 """
 from __future__ import annotations
 
@@ -86,10 +86,28 @@ def main() -> None:
         """
     ).strip()
 
+    oh_two_env = textwrap.dedent(
+        f"""
+        ROLE=oh_two_pi
+        API_BASE_URL={api_base}/api
+        API_KEY={api_key}
+        DB_PATH=data/oh_two_pi.db
+        SAMPLE_INTERVAL_SECONDS=5
+        DEBOUNCE_SAMPLES=8
+        DEBOUNCE_SAMPLE_DELAY=0.05
+        UPLOAD_BATCH_SIZE=10
+        UPLOAD_INTERVAL_SECONDS=5
+        HANDSHAKE_INTERVAL_SECONDS=60
+        CALIBRATION_PATH=scripts/oh_two_cal.csv
+        LED_PIN=23
+        """
+    ).strip()
+
     targets = {
         "server.env": server_env,
         "tank_pi.env": tank_env,
         "pump_pi.env": pump_env,
+        "oh_two_pi.env": oh_two_env,
     }
 
     print(f"\nConfig root: {config_dir}")

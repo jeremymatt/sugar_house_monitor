@@ -271,7 +271,7 @@
 
     .storage-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 1.25rem;
     }
 
@@ -399,7 +399,7 @@
       <div class="card-header">
         <div>
           <h2>System Overview</h2>
-          <div class="card-subtitle">Combined tanks (flows only), vacuum, and stack temps</div>
+          <div class="card-subtitle">Combined tanks (flows only), vacuum, O2, and stack temps</div>
         </div>
       </div>
 
@@ -408,6 +408,11 @@
           <span class="metric-label">Vacuum</span>
           <span class="metric-value" id="vacuum-reading">–</span>
           <span class="metric-note" id="vacuum-reading-note">Awaiting data</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">O2</span>
+          <span class="metric-value" id="o2-reading">--</span>
+          <span class="metric-note" id="o2-reading-note">Awaiting data</span>
         </div>
         <div class="metric">
           <span class="metric-label">Total sap</span>
@@ -443,6 +448,11 @@
           <span class="metric-label">Pump Monitor</span>
           <span class="metric-value" id="monitor-pump-status">–</span>
           <span class="metric-note" id="monitor-pump-note">Awaiting heartbeat</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">O2 Monitor</span>
+          <span class="metric-value" id="monitor-oh-two-status">--</span>
+          <span class="metric-note" id="monitor-oh-two-note">Awaiting heartbeat</span>
         </div>
       </div>
     </section>
@@ -670,7 +680,7 @@
       <div class="card-header">
         <div>
           <h2>Storage Utilization</h2>
-          <div class="card-subtitle">Tank Pi, Pump Pi, and server disk usage</div>
+          <div class="card-subtitle">Tank Pi, Pump Pi, O2 Pi, and server disk usage</div>
         </div>
       </div>
 
@@ -707,6 +717,24 @@
             <div class="storage-value">
               <span>Avail</span>
               <span id="storage-pump-avail">--</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="storage-item">
+          <h3 class="small">O2 Pi</h3>
+          <div class="storage-bar">
+            <div class="storage-fill" id="storage-oh-two-fill" style="height:0%;"></div>
+            <div class="storage-bar-label" id="storage-oh-two-percent">--%</div>
+          </div>
+          <div class="storage-values">
+            <div class="storage-value">
+              <span>Used</span>
+              <span id="storage-oh-two-used">--</span>
+            </div>
+            <div class="storage-value">
+              <span>Avail</span>
+              <span id="storage-oh-two-avail">--</span>
             </div>
           </div>
         </div>

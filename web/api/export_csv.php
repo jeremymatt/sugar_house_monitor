@@ -2,7 +2,7 @@
 require_once __DIR__ . '/common.php';
 
 // Simple CSV export endpoint.
-// Query: type = brookside | roadside | pump | evaporator | vacuum
+// Query: type = brookside | roadside | pump | evaporator | vacuum | o2 | stacktemp
 
 $env = require_server_env();
 
@@ -10,6 +10,7 @@ $tankDbPath = resolve_repo_path($env['TANK_DB_PATH'] ?? '');
 $pumpDbPath = resolve_repo_path($env['PUMP_DB_PATH'] ?? '');
 $evapDbPath = resolve_repo_path($env['EVAPORATOR_DB_PATH'] ?? 'data/evaporator.db');
 $vacDbPath  = resolve_repo_path($env['VACUUM_DB_PATH'] ?? $pumpDbPath);
+$o2DbPath  = resolve_repo_path($env['O2_DB_PATH'] ?? 'data/o2_server.db');
 $stackDbPath = resolve_repo_path($env['STACK_TEMP_DB_PATH'] ?? $vacDbPath);
 
 $type = $_GET['type'] ?? '';
@@ -261,6 +262,37 @@ if ($type === 'vacuum') {
         fputcsv($out, [
             $row['source_timestamp'],
             $row['reading_inhg'],
+        ]);
+    }
+    fclose($out);
+    exit;
+}
+
+if ($type === 'o2' || $type === 'oh_two') {
+    $conn = connect_sqlite($o2DbPath);
+    $conn->exec(
+        'CREATE TABLE IF NOT EXISTS o2_readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            o2_percent REAL,
+            raw_value REAL,
+            volts REAL,
+            source_timestamp TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            UNIQUE(source_timestamp)
+        )'
+    );
+    $stmt = $conn->query(
+        'SELECT source_timestamp, o2_percent
+         FROM o2_readings
+         ORDER BY source_timestamp'
+    );
+    send_csv_headers('o2.csv');
+    $out = fopen('php://output', 'w');
+    fputcsv($out, ['timestamp','O2 (%)']);
+    foreach ($stmt as $row) {
+        fputcsv($out, [
+            $row['source_timestamp'],
+            $row['o2_percent'],
         ]);
     }
     fclose($out);

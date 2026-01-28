@@ -7,7 +7,7 @@ function table_exists(PDO $db, string $table): bool {
     return (bool) $stmt->fetch();
 }
 
-// Simple JSON endpoint to return pump, tank net flow, and vacuum history for the last N seconds.
+// Simple JSON endpoint to return pump, tank net flow, vacuum, and O2 history for the last N seconds.
 // Inputs (query params):
 //   window_sec (default 21600 = 6h)
 
@@ -28,6 +28,7 @@ if ($startRaw) {
 $pumpDbPath = resolve_repo_path($env['PUMP_DB_PATH'] ?? '');
 $tankDbPath = resolve_repo_path($env['TANK_DB_PATH'] ?? '');
 $vacuumDbPath = resolve_repo_path($env['VACUUM_DB_PATH'] ?? $env['PUMP_DB_PATH'] ?? $env['TANK_DB_PATH'] ?? '');
+$o2DbPath = resolve_repo_path($env['O2_DB_PATH'] ?? '');
 
 // Determine the latest timestamp across pump + tank streams, use that as the anchor.
 $latestTs = null;
@@ -79,6 +80,20 @@ if ($startTs === null) {
             }
         }
     }
+
+    if ($o2DbPath && file_exists($o2DbPath)) {
+        $o2Db = connect_sqlite($o2DbPath);
+        $check = $o2Db->query("SELECT name FROM sqlite_master WHERE type='table' AND name='o2_readings'");
+        if ($check->fetch()) {
+            $stmt = $o2Db->query(
+                "SELECT MAX(source_timestamp) AS max_ts FROM o2_readings WHERE o2_percent IS NOT NULL"
+            );
+            if ($row = $stmt->fetch()) {
+                $t = iso_to_ts($row['max_ts'] ?? null);
+                if ($t && ($latestTs === null || $t > $latestTs)) $latestTs = $t;
+            }
+        }
+    }
 }
 
 $startTsUsed = $startTs ?? ($latestTs ? $latestTs - $windowSec : (time() - $windowSec));
@@ -91,6 +106,7 @@ $pumpBinner = init_series_binner($cutoffTs, $windowSec, $numBins, 'flow_gph');
 $netBinner = init_series_binner($cutoffTs, $windowSec, $numBins, 'flow_gph');
 $inflowBinner = init_series_binner($cutoffTs, $windowSec, $numBins, 'flow_gph');
 $vacuumBinner = init_series_binner($cutoffTs, $windowSec, $numBins, 'reading_inhg');
+$o2Binner = init_series_binner($cutoffTs, $windowSec, $numBins, 'o2_percent');
 
 if ($pumpDbPath && file_exists($pumpDbPath)) {
     $pumpDb = connect_sqlite($pumpDbPath);
@@ -184,10 +200,33 @@ if ($vacuumDbPath && file_exists($vacuumDbPath)) {
     }
 }
 
+if ($o2DbPath && file_exists($o2DbPath)) {
+    $o2Db = connect_sqlite($o2DbPath);
+    $check = $o2Db->query("SELECT name FROM sqlite_master WHERE type='table' AND name='o2_readings'");
+    if ($check->fetch()) {
+        $stmt = $o2Db->prepare(
+            'SELECT source_timestamp AS ts, o2_percent
+             FROM o2_readings
+             WHERE source_timestamp >= :cutoff
+               AND source_timestamp <= :end
+               AND o2_percent IS NOT NULL
+             ORDER BY source_timestamp'
+        );
+        $stmt->execute([':cutoff' => $cutoffIso, ':end' => $endIso]);
+        foreach ($stmt as $row) {
+            series_binner_add($o2Binner, [
+                'ts' => $row['ts'],
+                'o2_percent' => $row['o2_percent'],
+            ]);
+        }
+    }
+}
+
 $pumpRows = series_binner_finalize($pumpBinner);
 $netRows = series_binner_finalize($netBinner);
 $inflowRows = series_binner_finalize($inflowBinner);
 $vacuumRows = series_binner_finalize($vacuumBinner);
+$o2Rows = series_binner_finalize($o2Binner);
 
 respond_json([
     'status' => 'ok',
@@ -195,6 +234,7 @@ respond_json([
     'net' => $netRows,
     'inflow' => $inflowRows,
     'vacuum' => $vacuumRows,
+    'o2' => $o2Rows,
     'window_sec' => $windowSec,
     'start_ts_used' => $cutoffIso,
     'end_ts_used' => $endIso,

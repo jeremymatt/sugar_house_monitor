@@ -131,6 +131,39 @@ def get_latest_vacuum_row(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
     return cur.fetchone()
 
 
+def get_latest_o2_row(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    if not table_exists(conn, "o2_readings"):
+        return None
+    cur = conn.execute(
+        """
+        SELECT *
+        FROM o2_readings
+        ORDER BY source_timestamp DESC
+        LIMIT 1
+        """
+    )
+    return cur.fetchone()
+
+
+def get_o2_average(conn: sqlite3.Connection, window_minutes: float) -> Optional[float]:
+    if not table_exists(conn, "o2_readings"):
+        return None
+    if window_minutes <= 0:
+        return None
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=window_minutes)).isoformat()
+    cur = conn.execute(
+        """
+        SELECT AVG(o2_percent) AS avg_o2
+        FROM o2_readings
+        WHERE source_timestamp >= ?
+          AND o2_percent IS NOT NULL
+        """,
+        (cutoff,),
+    )
+    row = cur.fetchone()
+    return row["avg_o2"] if row else None
+
+
 def get_latest_stack_temp_row(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
     if not table_exists(conn, "stack_temperatures"):
         return None
@@ -453,6 +486,7 @@ def prune_server_databases(
     pump_conn: sqlite3.Connection,
     vacuum_conn: sqlite3.Connection,
     stack_conn: sqlite3.Connection,
+    o2_conn: sqlite3.Connection,
     evap_conn: sqlite3.Connection,
 ) -> None:
     retention_days = parse_retention_days(env)
@@ -477,6 +511,7 @@ def prune_server_databases(
         "pump": prune_table_if_exists(pump_conn, "pump_events", "source_timestamp", cutoff),
         "vacuum": prune_table_if_exists(vacuum_conn, "vacuum_readings", "source_timestamp", cutoff),
         "stack": prune_table_if_exists(stack_conn, "stack_temperatures", "source_timestamp", cutoff),
+        "o2": prune_table_if_exists(o2_conn, "o2_readings", "source_timestamp", cutoff),
         "evap": prune_table_if_exists(evap_conn, "evaporator_flow", "sample_timestamp", cutoff),
     }
     try:
@@ -491,6 +526,7 @@ def prune_server_databases(
             ("pump", pump_conn),
             ("vacuum", vacuum_conn),
             ("stack", stack_conn),
+            ("o2", o2_conn),
             ("evap", evap_conn),
         ):
             if deletions.get(label, 0) <= 0:
@@ -941,8 +977,10 @@ def main() -> None:
     vacuum_conn = open_db(vacuum_db_path)
     stack_db_path = repo_path_from_config(env.get("STACK_TEMP_DB_PATH", env.get("VACUUM_DB_PATH", env["PUMP_DB_PATH"])))
     stack_conn = vacuum_conn if stack_db_path == vacuum_db_path else open_db(stack_db_path)
+    o2_db_path = repo_path_from_config(env.get("O2_DB_PATH", "data/o2_server.db"))
+    o2_conn = open_db(o2_db_path)
     ensure_evap_tables(evap_conn)
-    prune_server_databases(env, tank_conn, pump_conn, vacuum_conn, stack_conn, evap_conn)
+    prune_server_databases(env, tank_conn, pump_conn, vacuum_conn, stack_conn, o2_conn, evap_conn)
     plot_settings = load_plot_settings(evap_conn)
     tank_rows_all = list_all_tank_rows(tank_conn)
     pump_rows_all = list_all_pump_rows(pump_conn)
@@ -1046,6 +1084,20 @@ def main() -> None:
         if should_update_status(vac_path, vacuum_payload["source_timestamp"]):
             atomic_write(vac_path, vacuum_payload)
 
+    o2_row = get_latest_o2_row(o2_conn)
+    if o2_row:
+        window_minutes = to_float(env.get("NUM_MINS_TO_AVERAGE")) or 10.0
+        o2_payload = {
+            "generated_at": timestamp,
+            "o2_percent": get_o2_average(o2_conn, window_minutes),
+            "avg_window_minutes": window_minutes,
+            "source_timestamp": o2_row["source_timestamp"],
+            "last_received_at": o2_row["received_at"],
+        }
+        o2_path = status_base / "status_o2.json"
+        if should_update_status(o2_path, o2_payload["source_timestamp"]):
+            atomic_write(o2_path, o2_payload)
+
     stack_row = get_latest_stack_temp_row(stack_conn)
     if stack_row:
         stack_payload = {
@@ -1085,6 +1137,7 @@ def main() -> None:
         "generated_at": timestamp,
         "tank_monitor_last_received_at": get_latest_monitor_ts(tank_conn, "tank"),
         "pump_monitor_last_received_at": get_latest_monitor_ts(pump_conn, "pump"),
+        "oh_two_monitor_last_received_at": get_latest_monitor_ts(o2_conn, "oh_two"),
         "pump_fatal": pump_payload["pump_fatal"] if pump_row else None,
     }
     atomic_write(status_base / "status_monitor.json", monitor_payload)

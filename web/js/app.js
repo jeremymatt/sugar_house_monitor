@@ -19,6 +19,7 @@ const TANK_STATUS_FILES = {
 const PUMP_STATUS_FILE = "status_pump.json";
 const EVAP_STATUS_FILE = "status_evaporator.json";
 const VACUUM_STATUS_FILE = "status_vacuum.json";
+const O2_STATUS_FILE = "status_o2.json";
 const STACK_STATUS_FILE = "status_stack.json";
 const MONITOR_STATUS_FILE = "status_monitor.json";
 const STORAGE_STATUS_FILE = "status_storage.json";
@@ -84,6 +85,7 @@ const STALE_THRESHOLDS = {
 
 const MONITOR_STALE_SECONDS = 150; // 2.5 minutes
 const STACK_STALE_SECONDS = 120;   // stack/ambient readings should be frequent
+const O2_STALE_SECONDS = 120;
 
 // How often to refetch status files (in ms)
 const FETCH_INTERVAL_MS = 1_000; // 15s
@@ -101,6 +103,7 @@ let latestTanks = { brookside: null, roadside: null };
 let latestPump = null;
 let latestEvaporator = null;
 let latestVacuum = null;
+let latestO2 = null;
 let latestStackTemps = null;
 let latestMonitor = null;
 let latestStorage = null;
@@ -673,7 +676,7 @@ function computeOverviewSummary() {
   };
 }
 
-function updateOverviewCard(summary, vacuumData) {
+function updateOverviewCard(summary, vacuumData, o2Data) {
   const totalElem = document.getElementById("overview-total-gallons");
   const netFlowElem = document.getElementById("overview-net-flow");
   const overflowTimeElem = document.getElementById("overview-overflow-time");
@@ -681,6 +684,8 @@ function updateOverviewCard(summary, vacuumData) {
   const reserveElem = document.getElementById("overview-reserve");
   const vacReadingElem = document.getElementById("vacuum-reading");
   const vacNoteElem = document.getElementById("vacuum-reading-note");
+  const o2ReadingElem = document.getElementById("o2-reading");
+  const o2NoteElem = document.getElementById("o2-reading-note");
   if (reserveElem) reserveElem.textContent = `${RESERVE_GALLONS} gal`;
 
   if (!summary) {
@@ -714,6 +719,29 @@ function updateOverviewCard(summary, vacuumData) {
       vacNoteElem.textContent = `Updated • ${parts.join(" ")} ago`;
     }
   }
+  const o2Val = toNumber(o2Data?.o2_percent);
+  const o2Window = toNumber(o2Data?.avg_window_minutes);
+  const o2WindowLabel = o2Window != null ? `Avg ${Math.round(o2Window)}m` : "Avg";
+  const o2Ts = o2Data?.last_received_at || o2Data?.source_timestamp;
+  const o2StaleSec = o2Ts ? secondsSinceLast(o2Ts) : null;
+  if (o2ReadingElem) {
+    o2ReadingElem.textContent = o2Val != null ? `${o2Val.toFixed(1)}%` : "--";
+  }
+  if (o2NoteElem) {
+    if (!o2Data) {
+      o2NoteElem.textContent = "Awaiting data";
+    } else if (o2StaleSec == null) {
+      o2NoteElem.textContent = `${o2WindowLabel} - Updated --`;
+    } else {
+      const mins = Math.floor(o2StaleSec / 60);
+      const secs = Math.floor(o2StaleSec % 60);
+      const parts = [];
+      if (mins > 0) parts.push(`${mins}m`);
+      parts.push(`${secs}s`);
+      o2NoteElem.textContent = `${o2WindowLabel} - Updated ${parts.join(" ")} ago`;
+    }
+  }
+
 }
 
 function updateStackTemps(stackData, staleSec, thresholdSec) {
@@ -748,6 +776,8 @@ function updateMonitorCard(data) {
   const tankNoteElem = document.getElementById("monitor-tank-note");
   const pumpStatusElem = document.getElementById("monitor-pump-status");
   const pumpNoteElem = document.getElementById("monitor-pump-note");
+  const o2StatusElem = document.getElementById("monitor-oh-two-status");
+  const o2NoteElem = document.getElementById("monitor-oh-two-note");
   const pumpFatal = data?.pumpFatal === true;
 
   function apply(elem, noteElem, seconds, isPump = false) {
@@ -788,12 +818,14 @@ function updateMonitorCard(data) {
 
   apply(tankStatusElem, tankNoteElem, data?.tankSec);
   apply(pumpStatusElem, pumpNoteElem, data?.pumpSec, true);
+  apply(o2StatusElem, o2NoteElem, data?.ohTwoSec);
 }
 
 function updateStorageCard(storage) {
   const targets = [
     { key: "tank_pi", prefix: "storage-tank" },
     { key: "pump_pi", prefix: "storage-pump" },
+    { key: "oh_two_pi", prefix: "storage-oh-two" },
     { key: "server", prefix: "storage-server" },
   ];
   targets.forEach(({ key, prefix }) => {
@@ -1358,7 +1390,7 @@ function updateGlobalStatus(staleInfo) {
   const gen  = document.getElementById("generated-at");
 
   const anyError = staleInfo.error;
-  const anyStale = staleInfo.tanksStale || staleInfo.pumpStale || staleInfo.stackStale;
+  const anyStale = staleInfo.tanksStale || staleInfo.pumpStale || staleInfo.stackStale || staleInfo.o2Stale;
 
   if (anyError) {
     if (dot) dot.classList.add("stale");
@@ -1392,19 +1424,23 @@ function recomputeStalenessAndRender() {
   const roadsideSec  = roadside  ? secondsSinceLast(roadside.last_received_at  || roadside.last_sample_timestamp)  : null;
   const pumpSec      = pump      ? secondsSinceLast(pump.last_received_at      || pump.last_event_timestamp)      : null;
   const stackSec     = stack     ? secondsSinceLast(stack.last_received_at     || stack.source_timestamp)         : null;
+  const o2Sec        = latestO2  ? secondsSinceLast(latestO2.last_received_at  || latestO2.source_timestamp)      : null;
   const tankMonitorSec = monitor?.tank_monitor_last_received_at ? secondsSinceLast(monitor.tank_monitor_last_received_at) : null;
   const pumpMonitorSec = monitor?.pump_monitor_last_received_at ? secondsSinceLast(monitor.pump_monitor_last_received_at) : null;
+  const ohTwoMonitorSec = monitor?.oh_two_monitor_last_received_at ? secondsSinceLast(monitor.oh_two_monitor_last_received_at) : null;
   const pumpFatal = monitor?.pump_fatal === true;
 
   const brooksideThresh = STALE_THRESHOLDS.tank_brookside;
   const roadsideThresh  = STALE_THRESHOLDS.tank_roadside;
   const pumpThresh      = STALE_THRESHOLDS.pump;
   const stackThresh     = STACK_STALE_SECONDS;
+  const o2Thresh        = O2_STALE_SECONDS;
 
   const brooksideStale = brooksideSec != null && brooksideSec > brooksideThresh;
   const roadsideStale  = roadsideSec  != null && roadsideSec  > roadsideThresh;
   const pumpStale      = pumpSec      != null && pumpSec      > pumpThresh;
   const stackStale     = stackSec     != null && stackSec     > stackThresh;
+  const o2Stale        = o2Sec        != null && o2Sec        > o2Thresh;
 
   const overview = computeOverviewSummary();
   const pumpFlowVal = toNumber(pump?.gallons_per_hour ?? pump?.flow_gph);
@@ -1419,12 +1455,13 @@ function recomputeStalenessAndRender() {
   updateTankCard("brookside", brookside, brooksideSec, brooksideThresh);
   updateTankCard("roadside",  roadside,  roadsideSec,  roadsideThresh);
   updatePumpCard(pump, pumpSec, pumpThresh);
-  updateOverviewCard(overview, latestVacuum);
+  updateOverviewCard(overview, latestVacuum, latestO2);
   updateStackTemps(stack, stackSec, stackThresh);
   updateBoilingCard(latestEvaporator, overview);
   updateMonitorCard({
     tankSec: tankMonitorSec,
     pumpSec: pumpMonitorSec,
+    ohTwoSec: ohTwoMonitorSec,
     pumpFatal,
   });
   updateStorageCard(latestStorage);
@@ -1469,7 +1506,8 @@ function recomputeStalenessAndRender() {
     error: errorState,
     tanksStale: brooksideStale || roadsideStale,
     pumpStale: pumpStale,
-    stackStale: stackStale
+    stackStale: stackStale,
+    o2Stale: o2Stale
   });
 }
 
@@ -1491,6 +1529,7 @@ async function fetchStatusOnce() {
       fetchStatusFile(TANK_STATUS_FILES.roadside),
       fetchStatusFile(PUMP_STATUS_FILE),
       fetchStatusFile(VACUUM_STATUS_FILE),
+      fetchStatusFile(O2_STATUS_FILE),
       fetchStatusFile(STACK_STATUS_FILE),
       fetchStatusFile(MONITOR_STATUS_FILE),
       fetchStatusFile(EVAP_STATUS_FILE),
@@ -1501,10 +1540,11 @@ async function fetchStatusOnce() {
     const roadside = getVal(1);
     const pumpRaw = getVal(2);
     const vacuum = getVal(3);
-    const stackTemps = getVal(4);
-    const monitor = getVal(5);
-    const evapStatus = getVal(6);
-    const storage = getVal(7);
+    const o2 = getVal(4);
+    const stackTemps = getVal(5);
+    const monitor = getVal(6);
+    const evapStatus = getVal(7);
+    const storage = getVal(8);
     let pump = pumpRaw;
     if (pump && pump.gallons_per_hour == null && lastPumpFlow != null) {
       pump = { ...pump, gallons_per_hour: lastPumpFlow };
@@ -1515,6 +1555,7 @@ async function fetchStatusOnce() {
     latestTanks = { brookside, roadside };
     latestPump = pump;
     latestVacuum = vacuum;
+    latestO2 = o2;
     latestStackTemps = stackTemps;
     latestMonitor = monitor;
     latestStorage = storage;
@@ -1536,6 +1577,7 @@ async function fetchStatusOnce() {
       roadside,
       pump,
       vacuum,
+      o2,
       stackTemps,
       monitor,
       latestEvaporator,

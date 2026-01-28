@@ -7,14 +7,18 @@ ensure_api_key($env);
 $payload = decode_json_body();
 
 $stream = $payload['stream'] ?? null;
-if (!in_array($stream, ['tank', 'pump'], true)) {
-    respond_error('Invalid or missing stream (expected "tank" or "pump")', 400);
+if (!in_array($stream, ['tank', 'pump', 'oh_two'], true)) {
+    respond_error('Invalid or missing stream (expected "tank", "pump", or "oh_two")', 400);
 }
 
-// Route tank heartbeats to the tank DB and pump heartbeats to the pump DB.
-$dbPath = $stream === 'pump'
-    ? ($env['PUMP_DB_PATH'] ?? $env['TANK_DB_PATH'])
-    : $env['TANK_DB_PATH'];
+// Route heartbeats to the matching DB for each stream.
+if ($stream === 'pump') {
+    $dbPath = $env['PUMP_DB_PATH'] ?? $env['TANK_DB_PATH'];
+} elseif ($stream === 'oh_two') {
+    $dbPath = $env['O2_DB_PATH'] ?? $env['PUMP_DB_PATH'] ?? $env['TANK_DB_PATH'];
+} else {
+    $dbPath = $env['TANK_DB_PATH'];
+}
 
 $db = connect_sqlite(resolve_repo_path($dbPath));
 ensure_monitor_table($db);
@@ -23,7 +27,7 @@ update_monitor($db, $stream, $now);
 
 $storage = load_storage_status($env);
 $storageUpdated = false;
-$key = $stream === 'pump' ? 'pump_pi' : 'tank_pi';
+$key = $stream === 'pump' ? 'pump_pi' : ($stream === 'oh_two' ? 'oh_two_pi' : 'tank_pi');
 $storageUpdated = apply_storage_entry($storage, $key, $payload, $now) || $storageUpdated;
 
 $serverPath = $env['DISK_USAGE_PATH'] ?? REPO_ROOT;
