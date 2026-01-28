@@ -10,6 +10,7 @@ const EVAP_HISTORY_ENDPOINT =
   window.location.hostname.includes("mattsmaplesyrup.com")
     ? "/sugar_house_monitor/api/evaporator_history.php"
     : "/api/evaporator_history.php";
+const LAMBDA_SYMBOL = "\u03bb";
 
 const LEFT_STREAMS = {
   pump: { label: "Transfer pump flow", color: "#d55e00", source: "flow", valueKey: "flow_gph" },
@@ -26,7 +27,7 @@ const RIGHT_STREAMS = {
     transform: (val) => -val,
   },
   o2: {
-    label: "O2 (%)",
+    label: `O2 (${LAMBDA_SYMBOL})`,
     color: "#f2a93b",
     source: "flow",
     valueKey: "o2_percent",
@@ -515,7 +516,7 @@ async function refreshPlot() {
     let leftLabel = "gph";
     let rightLabel = "";
     if (rightBounds && selections.rightAxis === "vacuum") rightLabel = "inHg";
-    if (rightBounds && selections.rightAxis === "o2") rightLabel = "%";
+    if (rightBounds && selections.rightAxis === "o2") rightLabel = LAMBDA_SYMBOL;
     if (rightBounds && selections.rightAxis === "stack") rightLabel = "F";
 
     if (!leftBounds && rightBounds) {

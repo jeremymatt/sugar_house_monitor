@@ -103,6 +103,7 @@ COLORS = {
     "roadside": (180, 70, 0),    # orange (darker)
 }
 STACK_LINE = (90, 90, 90)  # dark gray dashed line for stack temp
+LAMBDA_SYMBOL = "\u03bb"
 
 try:
     import pygame.freetype as pg_ft
@@ -179,7 +180,7 @@ class EvapStatus:
     evap_flow: Optional[float]
     last_fire_min: Optional[float] = None
     stack_temp_f: Optional[float] = None
-    o2_percent: Optional[float] = None
+    o2_lambda: Optional[float] = None
 
 
 # ---- DATA FETCHING ----
@@ -296,12 +297,12 @@ def fetch_state() -> Tuple[PlotSettings, List[EvapPoint], List[StackPoint], Evap
     except (TypeError, ValueError):
         stack_temp = None
 
-    o2_percent = None
+    o2_lambda = None
     try:
         if o2_payload.get("o2_percent") is not None:
-            o2_percent = float(o2_payload.get("o2_percent"))
+            o2_lambda = float(o2_payload.get("o2_percent"))
     except (TypeError, ValueError):
-        o2_percent = None
+        o2_lambda = None
 
     status = EvapStatus(
         sample_ts=latest.get("sample_timestamp"),
@@ -312,7 +313,7 @@ def fetch_state() -> Tuple[PlotSettings, List[EvapPoint], List[StackPoint], Evap
         evap_flow=latest.get("evaporator_flow_gph"),
         last_fire_min=last_fire_min,
         stack_temp_f=stack_temp,
-        o2_percent=o2_percent,
+        o2_lambda=o2_lambda,
     )
 
     return settings, points, stack_points, status
@@ -684,8 +685,8 @@ def draw_status(surface, rect, status: EvapStatus):
         system_time_str = system_time_str[1:]
 
     o2_str = "--"
-    if status.o2_percent is not None:
-        o2_str = f"{status.o2_percent:.1f}%"
+    if status.o2_lambda is not None:
+        o2_str = f"{status.o2_lambda:.3f} ({LAMBDA_SYMBOL})"
 
     left_rows = [
         f"Evap Flow: {flow_str}",
@@ -743,7 +744,7 @@ def main():
         evap_flow=None,
         last_fire_min=None,
         stack_temp_f=None,
-        o2_percent=None,
+        o2_lambda=None,
     )
     last_fetch = 0.0
     last_snapshot = 0.0

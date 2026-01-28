@@ -69,6 +69,7 @@ const DRAW_OFF_COLORS = {
 const PUMP_COLOR = "#d55e00"; // pump line orange
 const NET_COLOR = "#0072b2";  // tank inflow line blue
 const VACUUM_COLOR = "#cfd2d9"; // vacuum line light gray
+const LAMBDA_SYMBOL = "\u03bb";
 
 // Flow thresholds (gph) and reserve volume (gal)
 const TANKS_FILLING_THRESHOLD = Number(window.TANKS_FILLING_THRESHOLD ?? 5);
@@ -725,7 +726,7 @@ function updateOverviewCard(summary, vacuumData, o2Data) {
   const o2Ts = o2Data?.last_received_at || o2Data?.source_timestamp;
   const o2StaleSec = o2Ts ? secondsSinceLast(o2Ts) : null;
   if (o2ReadingElem) {
-    o2ReadingElem.textContent = o2Val != null ? `${o2Val.toFixed(1)}%` : "--";
+    o2ReadingElem.textContent = o2Val != null ? `${o2Val.toFixed(3)} (${LAMBDA_SYMBOL})` : "--";
   }
   if (o2NoteElem) {
     if (!o2Data) {

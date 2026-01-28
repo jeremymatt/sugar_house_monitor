@@ -2,6 +2,7 @@
 """O2 sampling service for MCP3008 channel P0."""
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import os
@@ -193,10 +194,40 @@ class O2Reader:
             )
             return
         try:
-            data = np.loadtxt(self.calibration_path, delimiter=",", dtype=float, skiprows=1)
-            if data.ndim == 1 and data.size == 0:
+            with self.calibration_path.open(newline="") as handle:
+                reader = csv.reader(handle)
+                header = next(reader, None)
+                if not header:
+                    return
+                header_norm = [name.strip().lower() for name in header]
+                voltage_idx = header_norm.index("voltage") if "voltage" in header_norm else 0
+                value_idx = None
+                for key in ("lambda", "vacuum"):
+                    if key in header_norm:
+                        value_idx = header_norm.index(key)
+                        break
+                if value_idx is None:
+                    if len(header_norm) > 1:
+                        value_idx = 1
+                    else:
+                        LOGGER.warning(
+                            "Calibration file %s missing lambda column; using linear scale",
+                            self.calibration_path,
+                        )
+                        return
+                rows = []
+                for row in reader:
+                    if not row or len(row) <= max(voltage_idx, value_idx):
+                        continue
+                    try:
+                        voltage = float(row[voltage_idx])
+                        value = float(row[value_idx])
+                    except (TypeError, ValueError):
+                        continue
+                    rows.append((voltage, value))
+            if not rows:
                 return
-            data = np.array(sorted(data, key=lambda row: row[0]))
+            data = np.array(sorted(rows, key=lambda row: row[0]), dtype=float)
             self.calibration = data
         except Exception as exc:  # pragma: no cover
             LOGGER.warning("Failed to load calibration data: %s", exc)
@@ -221,11 +252,11 @@ class O2Reader:
                 time.sleep(self.debounce_delay)
         avg_raw = float(np.mean(raw_samples)) if raw_samples else 0.0
         avg_volts = self._voltage_from_raw(avg_raw)
-        o2_percent = self._o2_from_voltage(avg_volts)
+        o2_lambda = round(self._o2_from_voltage(avg_volts), 3)
         return {
             "raw_value": float(avg_raw),
             "volts": avg_volts,
-            "o2_percent": o2_percent,
+            "o2_percent": o2_lambda,
         }
 
 
@@ -358,7 +389,7 @@ class O2Sampler:
                 }
                 self.db.insert_reading(payload)
                 LOGGER.info(
-                    "O2 sample: raw=%.0f volts=%.3f o2=%.3f%%",
+                    "O2 sample: raw=%.0f volts=%.3f lambda=%.3f",
                     reading["raw_value"],
                     reading["volts"],
                     reading["o2_percent"],

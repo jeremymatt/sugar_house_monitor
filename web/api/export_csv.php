@@ -288,7 +288,7 @@ if ($type === 'o2' || $type === 'oh_two') {
     );
     send_csv_headers('o2.csv');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['timestamp','O2 (%)']);
+    fputcsv($out, ['timestamp','O2 (lambda)']);
     foreach ($stmt as $row) {
         fputcsv($out, [
             $row['source_timestamp'],
