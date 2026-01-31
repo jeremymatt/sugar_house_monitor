@@ -2,10 +2,13 @@
 """Pump controller service that reads cached ADC signals and drives the relay."""
 from __future__ import annotations
 
+import json
 import logging
+import os
 import signal
 import sys
 import threading
+import time
 from typing import Dict, Optional
 
 from adc_cache import cache_age_seconds, read_cache, resolve_cache_path
@@ -33,6 +36,9 @@ from main_pump import (
 )
 
 LOGGER = logging.getLogger("pump_controller")
+
+# Pump state cache for LED controller
+PUMP_STATE_CACHE_PATH = "/dev/shm/pump_state_cache.json"
 
 
 class CachedSignalReader:
@@ -66,6 +72,42 @@ class CachedSignalReader:
         return (signals, volts) if return_volts else signals
 
 
+class PumpStateCacheWriter:
+    """Writes pump controller state to shared memory cache for LED controller."""
+
+    def __init__(self, cache_path: str):
+        """Initialize cache writer.
+
+        Args:
+            cache_path: Path to write pump state cache JSON file
+        """
+        self.cache_path = cache_path
+
+    def write_state(self, state, adc_stale_fatal_seconds: float) -> None:
+        """Write pump state to cache file (atomic write).
+
+        Args:
+            state: PumpState object from controller
+            adc_stale_fatal_seconds: Fatal threshold for ADC staleness
+        """
+        payload = {
+            "timestamp": time.time(),
+            "current_state": state.current_state,
+            "fatal_error": state.fatal_error,
+            "adc_stale_started_at": state.adc_stale_started_at,
+            "adc_stale_fatal_seconds": adc_stale_fatal_seconds,
+        }
+
+        # Atomic write: write to temp file, then rename
+        temp_path = f"{self.cache_path}.tmp"
+        try:
+            with open(temp_path, "w") as f:
+                json.dump(payload, f)
+            os.replace(temp_path, self.cache_path)  # Atomic on POSIX
+        except Exception as exc:
+            LOGGER.warning("Failed to write pump state cache: %s", exc)
+
+
 class ControllerService:
     def __init__(self, env: Dict[str, str]):
         db_path = repo_path_from_config(env.get("DB_PATH", "data/pump_pi.db"))
@@ -95,6 +137,13 @@ class ControllerService:
         )
         self.relay = PumpRelay(self.pump_control_pin)
         self.relay_worker = PumpRelayWorker(self.relay, self.controller, self.loop_delay)
+
+        # State cache writer for LED controller
+        self.state_cache_writer = PumpStateCacheWriter(PUMP_STATE_CACHE_PATH)
+        # Attach to relay worker so it can write cache in its loop
+        self.relay_worker.state_cache_writer = self.state_cache_writer
+        self.relay_worker.adc_stale_fatal_seconds = self.adc_stale_fatal_seconds
+
         self.stop_event = threading.Event()
         self.watchdog_thread: Optional[threading.Thread] = None
 

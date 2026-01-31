@@ -39,6 +39,7 @@ VENV_PATH="${USER_HOME}/.venv"
 LOG_PATH="${USER_HOME}/pump_controller.log"
 ADC_SERVICE="sugar-adc.service"
 WATCHDOG_SERVICE="sugar-adc-watchdog.service"
+LED_SERVICE="sugar-led-controller.service"
 PUMP_SERVICES=("sugar-pump-controller.service" "sugar-vacuum.service" "sugar-uploader.service")
 
 render_unit() {
@@ -110,6 +111,13 @@ if [[ "$1" == "-on" ]]; then
   systemctl disable --now "${WATCHDOG_SERVICE}" || true
   wait_inactive "${WATCHDOG_SERVICE}"
   systemctl enable --now sugar-pump.target
+
+  # Enable LED controller if not running
+  if ! systemctl is-active --quiet "${LED_SERVICE}"; then
+    systemctl enable --now "${LED_SERVICE}"
+    wait_active "${LED_SERVICE}"
+  fi
+
   echo "Enabled sugar-pump.target (logs -> ${LOG_PATH})"
 elif [[ "$1" == "-off" ]]; then
   install_units
@@ -125,7 +133,8 @@ else
   systemctl disable --now sugar-pump.target || true
   systemctl disable --now "${WATCHDOG_SERVICE}" || true
   systemctl disable --now "${ADC_SERVICE}" || true
+  systemctl disable --now "${LED_SERVICE}" || true
   systemctl stop "${PUMP_SERVICES[@]}" || true
-  systemctl reset-failed "${ADC_SERVICE}" "${WATCHDOG_SERVICE}" "${PUMP_SERVICES[@]}" sugar-pump.target || true
+  systemctl reset-failed "${ADC_SERVICE}" "${WATCHDOG_SERVICE}" "${LED_SERVICE}" "${PUMP_SERVICES[@]}" sugar-pump.target || true
   echo "Disabled sugar-pump.target and stopped all services"
 fi

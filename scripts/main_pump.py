@@ -989,6 +989,11 @@ class PumpRelayWorker:
                 state = self.controller.get_state()
                 pump_on = (state.current_state in {"pumping", "manual_pumping"}) and not state.fatal_error
                 self.relay.set_state(pump_on)
+
+                # Write state cache for LED controller (if writer available)
+                if hasattr(self, 'state_cache_writer') and hasattr(self, 'adc_stale_fatal_seconds'):
+                    self.state_cache_writer.write_state(state, self.adc_stale_fatal_seconds)
+
             except Exception as exc:  # pragma: no cover
                 LOGGER.exception("Pump relay loop error: %s", exc)
             self.stop_event.wait(self.loop_delay)
