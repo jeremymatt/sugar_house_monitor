@@ -39,8 +39,19 @@ class StatusLED:
             import RPi.GPIO as GPIO
             self.GPIO = GPIO
 
+            # Disable warnings (pins may already be configured from previous run)
+            GPIO.setwarnings(False)
+
             # Set BCM numbering mode
             GPIO.setmode(GPIO.BCM)
+
+            # Cleanup pins first in case they're in use from previous run
+            # This is safe - it only cleans up if the pins were already configured
+            try:
+                GPIO.cleanup(red_pin)
+                GPIO.cleanup(green_pin)
+            except Exception:
+                pass  # Ignore errors if pins weren't in use
 
             # CRITICAL SAFETY: Set initial=GPIO.LOW for BOTH pins
             # Prevents LED damage if both accidentally set HIGH during startup
