@@ -2,7 +2,7 @@
 Interactive helper that bootstraps config/*.env files.
 
 The script generates a shared API key and writes populated env files for the
-server, Tank Pi, Pump Pi, and O2 Pi using the templates in config/example/.
+server, Tank Pi, Pump Pi, Display Pi, and O2 Pi using the templates in config/example/.
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def main() -> None:
     config_dir = get_config_dir()
     config_dir.mkdir(parents=True, exist_ok=True)
 
-    default_base = "https://example.com/sugar_house_monitor"
+    default_base = "https://mattsmaplesyrup.com/sugar_house_monitor"
     api_base = prompt("Public base URL for the API (no trailing slash)", default_base)
     api_base = api_base.rstrip("/")
     api_key = secrets.token_urlsafe(32)
@@ -103,10 +103,21 @@ def main() -> None:
         """
     ).strip()
 
+    display_env = textwrap.dedent(
+        f"""
+        ROLE=display_pi
+        DISPLAY_API_BASE={api_base}/api
+        DISPLAY_REFRESH_SEC=15
+        DISPLAY_HISTORY_SCOPE=display
+        NUM_PLOT_BINS=800
+        """
+    ).strip()
+
     targets = {
         "server.env": server_env,
         "tank_pi.env": tank_env,
         "pump_pi.env": pump_env,
+        "display_pi.env": display_env,
         "oh_two_pi.env": oh_two_env,
     }
 
