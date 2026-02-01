@@ -1,37 +1,62 @@
-# O2 Pi systemd setup
+# O2 Pi setup
 
-This folder provides systemd units and setup scripts for the O2 monitor Pi.
+## Overview
+The O2 Pi samples an oxygen sensor through an MCP3008 ADC (SPI) and uploads readings to the server. A status LED shows normal vs error states.
 
-## Quick start
-Production mode (enable auto-restart):
+## Setup
+1) Enable SPI (required for MCP3008):
 ```bash
-sudo /home/pi/sugar_house_monitor/scripts/oh_two_pi_setup/systemd_setup.sh -on
+sudo raspi-config nonint do_spi 0
 ```
 
-Testing mode (stop service, disable auto-restart):
-```bash
-sudo /home/pi/sugar_house_monitor/scripts/oh_two_pi_setup/systemd_setup.sh -off
-```
-
-## Environment setup
-1) Copy the config template and edit it:
+2) Copy the env template and edit it:
 ```bash
 cp /home/pi/sugar_house_monitor/config/example/oh_two_pi.env /home/pi/sugar_house_monitor/config/oh_two_pi.env
 ```
 
-2) Create the venv and install dependencies:
+3) Create the venv and install dependencies:
 ```bash
 /home/pi/sugar_house_monitor/scripts/oh_two_pi_setup/setup_environment.sh
 ```
 
-## Logs
+4) Install and enable the service:
 ```bash
-tail -f ~/oh_two.log
-journalctl -u sugar-oh-two.service -f
+sudo /home/pi/sugar_house_monitor/scripts/oh_two_pi_setup/systemd_setup.sh -on
 ```
-Log rotation is installed by `systemd_setup.sh -on` at `/etc/logrotate.d/sugar-oh-two` (2MB, keep 5).
 
-## Status LED
-- Solid on: service running.
-- Blinking (1 Hz): error state detected in sampling or upload.
-- Off: service stopped.
+## Controls summary
+- systemd_setup.sh flags:
+  - -on: install/update units and enable auto-restart (production).
+  - -off: stop service and disable auto-restart (testing).
+- Status LED behavior is described in Additional details below.
+
+## Hardware overview
+- MCP3008 on SPI0, CS on GPIO5 (BCM).
+- O2 sensor analog output into MCP3008 channel P0.
+- Status LED on GPIO23 (BCM).
+
+Wiring diagram (BCM numbering):
+```
+Raspberry Pi                    MCP3008 / Sensor / LED
+------------------------------------------------------
+3.3V -------------------------- VDD, VREF
+GND  -------------------------- AGND, DGND, sensor GND, LED cathode
+GPIO10 (MOSI) ----------------- DIN
+GPIO9  (MISO) ----------------- DOUT
+GPIO11 (SCLK) ----------------- CLK
+GPIO5  (CE1) ------------------ CS
+MCP3008 P0 -------------------- O2 sensor analog out
+GPIO23 ------------------------ Status LED anode (via resistor)
+```
+
+## Additional details
+- Calibration is read from scripts/oh_two_cal.csv (update it with your sensor calibration data).
+- The service uploads to ingest_oh_two.php and keeps a local SQLite queue for retries.
+- Status LED:
+  - Solid on: normal operation.
+  - Blinking 1 Hz: error detected in sampling or upload.
+
+## Error info
+- Sampling failures trigger LED blinking and a retry loop; the service attempts to continue sampling.
+- Upload failures are retried on the next upload interval; backlog size is logged.
+- Systemd restarts the service on crash; check the journal for repeated failures.

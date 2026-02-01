@@ -1,53 +1,48 @@
 # Server setup (WordPress host)
 
-This doc assumes the server hosts the WordPress site and serves the repo's `web/` directory via a symlink.
+## Overview
+The server hosts the WordPress site, serves the repo's web/ assets via a symlink, and runs the ingest APIs that trigger scripts/process_status.py.
 
-## Clone location
-Clone the repo into your home directory:
+## Setup
+1) Clone the repo:
 ```bash
 git clone https://github.com/jeremymatt/sugar_house_monitor.git ~/sugar_house_monitor
 ```
 
-## Configure server env
-Copy the example env file and edit it:
+2) Copy the env template and edit it:
 ```bash
 cp ~/sugar_house_monitor/config/example/server.env ~/sugar_house_monitor/config/server.env
 ```
-Update the paths in `config/server.env` (DB locations, export dir, status JSON path).
+Update DB paths, export directory, and status JSON path in config/server.env.
 
-## Symlink the web assets into WordPress
-Create a symlink from the WordPress document root to the repo’s `web/` folder.
-
-1) Find the WordPress document root (where `wp-content/` lives).
-2) Create the symlink from that directory:
+3) Symlink the web assets into WordPress:
 ```bash
-ln -s /home/dh_m958u5/sugar_house_monitor/web /path/to/wordpress_root/sugar_house_monitor
-```
-After creation, the symlink should look like this:
-```
-lrwxrwxrwx 1 {username} {usergroup} 43 Nov 16 16:03 sugar_house_monitor -> /home/{username}/sugar_house_monitor/web
+ln -s /home/<user>/sugar_house_monitor/web /path/to/wordpress_root/sugar_house_monitor
 ```
 
-## Do you need a Python venv?
-The server-triggered scripts (`scripts/process_status.py`, `scripts/export_db_to_csv.py`) use only the Python standard library, so **a venv is not required** for the default server workflow.
+## Controls summary
+- There is no systemd_setup.sh for the server by default; PHP ingest endpoints trigger scripts/process_status.py after uploads.
+- If you add any custom cron/systemd jobs, document them locally and ensure they run under the same repo + config paths.
 
-If you run any other Python services on the server (for example `scripts/web_app.py` or tank replay), you may want a venv. In that case, use the appropriate setup folder (tank/pump) or add a server-specific `requirements.txt` and `setup_environment.sh` here.
+## Hardware overview
+- No special hardware requirements beyond the WordPress host.
 
-## How to check what runs server-side
-- Check for systemd services:
+Wiring diagram:
+```
+N/A (server-side only)
+```
+
+## Additional details
+- The default server scripts use only the Python standard library; a venv is not required unless you run other services.
+- To check what runs server-side:
 ```bash
 systemctl list-units --type=service | grep sugar
-```
-- Check user + system crontabs:
-```bash
 crontab -l
 ls /etc/cron.*
-```
-- Check for Python processes:
-```bash
 ps aux | grep -E "python|process_status" | grep -v grep
 ```
-- Look for PHP calls that trigger Python (in `web/api/`):
-```bash
-grep -RIn "process_status.py" ~/sugar_house_monitor/web/api
-```
+- The ingest endpoints live under web/api/ and accept the shared API key in the X-API-Key header or api_key field.
+
+## Error info
+- PHP errors will surface in the web server logs; check the WordPress/PHP error log first.
+- If status JSON files are missing, confirm process_status.py can read config/server.env paths and has write access to web/data/.

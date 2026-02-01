@@ -1,37 +1,57 @@
-# Display Pi systemd setup
+# Display Pi setup
 
-This folder documents the fullscreen display setup with a single systemd service.
+## Overview
+The Display Pi renders a fullscreen status dashboard (pygame) from the server status JSON and history endpoints.
 
-## Quick start
-Production mode (enable auto-restart):
+## Setup
+1) Create the venv and install dependencies:
+```bash
+/home/pump/sugar_house_monitor/scripts/display_pi_setup/setup_environment.sh
+```
+
+2) (Optional) Copy the env template and edit it:
+```bash
+cp /home/pump/sugar_house_monitor/config/example/display_pi.env /home/pump/sugar_house_monitor/config/display_pi.env
+```
+The systemd unit loads config/display_pi.env automatically when present.
+
+3) Install and enable the service:
 ```bash
 sudo /home/pump/sugar_house_monitor/scripts/display_pi_setup/systemd_setup.sh -on
 ```
 
-Testing mode (disable auto-restart, run manually):
+## Controls summary
+- systemd_setup.sh flags:
+  - -on: install/update units and enable auto-restart (production).
+  - -off: stop service and disable auto-restart (testing).
+- Manual run in testing mode:
 ```bash
 sudo /home/pump/sugar_house_monitor/scripts/display_pi_setup/systemd_setup.sh -off
 python /home/pump/sugar_house_monitor/scripts/main_display.py
 ```
 
-## Unit template
-The unit template lives in `scripts/display_pi_setup/systemd/sugar-display.service`. The setup script installs it into `/etc/systemd/system` and fills in the repo path, user, venv path, and log location.
+## Hardware overview
+- Raspberry Pi connected to a display via HDMI.
+- Network access to the WordPress host (for status JSON and history endpoints).
 
-## Logs
+Wiring diagram:
+```
+Raspberry Pi ---- HDMI ---- Display
+Raspberry Pi ---- Ethernet/WiFi ---- Network
+Raspberry Pi ---- 5V power
+```
+
+## Additional details
+- Key env vars: DISPLAY_API_BASE, DISPLAY_REFRESH_SEC, DISPLAY_HISTORY_SCOPE, NUM_PLOT_BINS.
+- By default the display uses server-side display settings (scope=display). Manage those from /sugar_house_monitor/shm_admin/ on the server.
+- Optional snapshots: DISPLAY_SNAPSHOT_PATH and DISPLAY_SNAPSHOT_INTERVAL_SEC.
+- Unit template lives in scripts/display_pi_setup/systemd/sugar-display.service.
+- Logs:
 ```bash
 tail -f ~/display_controller.log
 journalctl -u sugar-display.service -f
 ```
-Log rotation is installed by `systemd_setup.sh -on` at `/etc/logrotate.d/sugar-display` (2MB, keep 5).
 
-## Environment setup
-Create the venv and install dependencies:
-```bash
-/home/pump/sugar_house_monitor/scripts/display_pi_setup/setup_environment.sh
-```
-
-## Runtime config
-The display reads its configuration from environment variables (e.g. `DISPLAY_API_BASE`, `DISPLAY_REFRESH_SEC`, `NUM_PLOT_BINS`, `DISPLAY_SNAPSHOT_PATH`). See `scripts/main_display.py` for defaults.
-If you create `config/display_pi.env`, the systemd unit will load it automatically.
-
-By default the display uses the server-side display settings (scope=display). You can manage those from `/sugar_house_monitor/shm_admin/`.
+## Error info
+- Network/API failures show up in the service logs; the display continues to render the most recent data it can fetch.
+- Systemd restarts the service on crash; check the journal for repeated failures.

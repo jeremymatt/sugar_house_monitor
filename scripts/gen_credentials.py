@@ -2,7 +2,8 @@
 Interactive helper that bootstraps config/*.env files.
 
 The script generates a shared API key and writes populated env files for the
-server, Tank Pi, Pump Pi, and O2 Pi using the templates in config/example/.
+server, Tank Pi, Pump Pi, Display Pi, and O2 Pi using the templates in
+config/example/.
 """
 from __future__ import annotations
 
@@ -37,9 +38,8 @@ def main() -> None:
     config_dir = get_config_dir()
     config_dir.mkdir(parents=True, exist_ok=True)
 
-    default_base = "https://example.com/sugar_house_monitor"
-    api_base = prompt("Public base URL for the API (no trailing slash)", default_base)
-    api_base = api_base.rstrip("/")
+    default_api = "https://mattsmaplesyrup.com/sugar_house_monitor/api"
+    api_base = prompt("Public API base URL", default_api).rstrip("/")
     api_key = secrets.token_urlsafe(32)
 
     server_env = textwrap.dedent(
@@ -60,7 +60,7 @@ def main() -> None:
     tank_env = textwrap.dedent(
         f"""
         ROLE=tank_pi
-        API_BASE_URL={api_base}/api
+        API_BASE_URL={api_base}
         API_KEY={api_key}
         DB_PATH=data/tank_pi.db
         UPLOAD_BATCH_SIZE=10
@@ -78,7 +78,7 @@ def main() -> None:
     pump_env = textwrap.dedent(
         f"""
         ROLE=pump_pi
-        API_BASE_URL={api_base}/api
+        API_BASE_URL={api_base}
         API_KEY={api_key}
         DB_PATH=data/pump_pi.db
         UPLOAD_BATCH_SIZE=10
@@ -89,7 +89,7 @@ def main() -> None:
     oh_two_env = textwrap.dedent(
         f"""
         ROLE=oh_two_pi
-        API_BASE_URL={api_base}/api
+        API_BASE_URL={api_base}
         API_KEY={api_key}
         DB_PATH=data/oh_two_pi.db
         SAMPLE_INTERVAL_SECONDS=5
@@ -103,10 +103,20 @@ def main() -> None:
         """
     ).strip()
 
+    display_env = textwrap.dedent(
+        f"""
+        DISPLAY_API_BASE={api_base}
+        DISPLAY_REFRESH_SEC=15
+        DISPLAY_HISTORY_SCOPE=display
+        NUM_PLOT_BINS=800
+        """
+    ).strip()
+
     targets = {
         "server.env": server_env,
         "tank_pi.env": tank_env,
         "pump_pi.env": pump_env,
+        "display_pi.env": display_env,
         "oh_two_pi.env": oh_two_env,
     }
 
