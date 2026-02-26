@@ -1317,20 +1317,20 @@
 		)
 	)
 	(junction
-		(at 186.69 124.46)
+		(at 162.56 55.88)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "65b2047c-7e6e-40d1-b46f-277af0644601")
+		(uuid "4f830f08-09bc-4c4e-a973-67de2a50e952")
 	)
 	(junction
-		(at 163.83 55.88)
+		(at 175.26 124.46)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "de2a4728-0b1c-4332-926e-f36ff2ea7f51")
+		(uuid "a164ee84-959b-49e2-939f-28387fff0279")
 	)
 	(wire
 		(pts
-			(xy 181.61 71.12) (xy 154.94 71.12)
+			(xy 170.18 71.12) (xy 154.94 71.12)
 		)
 		(stroke
 			(width 0)
@@ -1340,7 +1340,7 @@
 	)
 	(wire
 		(pts
-			(xy 217.17 87.63) (xy 217.17 90.17)
+			(xy 205.74 87.63) (xy 205.74 90.17)
 		)
 		(stroke
 			(width 0)
@@ -1350,13 +1350,13 @@
 	)
 	(wire
 		(pts
-			(xy 186.69 124.46) (xy 121.92 124.46)
+			(xy 175.26 124.46) (xy 121.92 124.46)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "0edb04d9-fa2d-48a6-8e6e-9fa06449fc17")
+		(uuid "158660a5-c8ba-4972-a880-0c5fe1fefd6f")
 	)
 	(wire
 		(pts
@@ -1380,7 +1380,7 @@
 	)
 	(wire
 		(pts
-			(xy 181.61 76.2) (xy 154.94 76.2)
+			(xy 170.18 76.2) (xy 154.94 76.2)
 		)
 		(stroke
 			(width 0)
@@ -1390,7 +1390,17 @@
 	)
 	(wire
 		(pts
-			(xy 186.69 95.25) (xy 186.69 124.46)
+			(xy 162.56 55.88) (xy 175.26 55.88)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5a134575-8784-4fca-b71d-99aa1bd0bd18")
+	)
+	(wire
+		(pts
+			(xy 175.26 95.25) (xy 175.26 124.46)
 		)
 		(stroke
 			(width 0)
@@ -1400,27 +1410,7 @@
 	)
 	(wire
 		(pts
-			(xy 163.83 55.88) (xy 186.69 55.88)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "62d4f32d-c292-457b-80db-c0f61bb1b576")
-	)
-	(wire
-		(pts
-			(xy 223.52 124.46) (xy 186.69 124.46)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "65f74a0c-eef1-4ffc-afd4-423221c53185")
-	)
-	(wire
-		(pts
-			(xy 186.69 72.39) (xy 223.52 72.39)
+			(xy 175.26 72.39) (xy 209.55 72.39)
 		)
 		(stroke
 			(width 0)
@@ -1430,7 +1420,7 @@
 	)
 	(wire
 		(pts
-			(xy 186.69 58.42) (xy 177.8 58.42)
+			(xy 175.26 58.42) (xy 166.37 58.42)
 		)
 		(stroke
 			(width 0)
@@ -1450,7 +1440,7 @@
 	)
 	(wire
 		(pts
-			(xy 215.9 55.88) (xy 215.9 58.42)
+			(xy 204.47 55.88) (xy 204.47 58.42)
 		)
 		(stroke
 			(width 0)
@@ -1460,7 +1450,7 @@
 	)
 	(wire
 		(pts
-			(xy 186.69 63.5) (xy 186.69 72.39)
+			(xy 175.26 63.5) (xy 175.26 72.39)
 		)
 		(stroke
 			(width 0)
@@ -1480,7 +1470,7 @@
 	)
 	(wire
 		(pts
-			(xy 223.52 72.39) (xy 223.52 124.46)
+			(xy 209.55 72.39) (xy 209.55 124.46)
 		)
 		(stroke
 			(width 0)
@@ -1490,7 +1480,7 @@
 	)
 	(wire
 		(pts
-			(xy 83.82 55.88) (xy 163.83 55.88)
+			(xy 83.82 55.88) (xy 162.56 55.88)
 		)
 		(stroke
 			(width 0)
@@ -1500,7 +1490,7 @@
 	)
 	(wire
 		(pts
-			(xy 177.8 68.58) (xy 154.94 68.58)
+			(xy 166.37 68.58) (xy 154.94 68.58)
 		)
 		(stroke
 			(width 0)
@@ -1510,7 +1500,17 @@
 	)
 	(wire
 		(pts
-			(xy 181.61 90.17) (xy 181.61 76.2)
+			(xy 175.26 124.46) (xy 209.55 124.46)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b7df69e0-92e4-4791-ae4a-e673ec45f4ec")
+	)
+	(wire
+		(pts
+			(xy 170.18 90.17) (xy 170.18 76.2)
 		)
 		(stroke
 			(width 0)
@@ -1520,7 +1520,7 @@
 	)
 	(wire
 		(pts
-			(xy 210.82 87.63) (xy 217.17 87.63)
+			(xy 199.39 87.63) (xy 205.74 87.63)
 		)
 		(stroke
 			(width 0)
@@ -1530,7 +1530,7 @@
 	)
 	(wire
 		(pts
-			(xy 186.69 92.71) (xy 158.75 92.71)
+			(xy 175.26 92.71) (xy 158.75 92.71)
 		)
 		(stroke
 			(width 0)
@@ -1540,7 +1540,7 @@
 	)
 	(wire
 		(pts
-			(xy 186.69 87.63) (xy 163.83 87.63)
+			(xy 175.26 87.63) (xy 162.56 87.63)
 		)
 		(stroke
 			(width 0)
@@ -1550,7 +1550,7 @@
 	)
 	(wire
 		(pts
-			(xy 177.8 58.42) (xy 177.8 68.58)
+			(xy 166.37 58.42) (xy 166.37 68.58)
 		)
 		(stroke
 			(width 0)
@@ -1570,7 +1570,7 @@
 	)
 	(wire
 		(pts
-			(xy 210.82 90.17) (xy 217.17 90.17)
+			(xy 199.39 90.17) (xy 205.74 90.17)
 		)
 		(stroke
 			(width 0)
@@ -1580,7 +1580,7 @@
 	)
 	(wire
 		(pts
-			(xy 186.69 90.17) (xy 181.61 90.17)
+			(xy 175.26 90.17) (xy 170.18 90.17)
 		)
 		(stroke
 			(width 0)
@@ -1590,7 +1590,7 @@
 	)
 	(wire
 		(pts
-			(xy 210.82 58.42) (xy 215.9 58.42)
+			(xy 199.39 58.42) (xy 204.47 58.42)
 		)
 		(stroke
 			(width 0)
@@ -1600,7 +1600,7 @@
 	)
 	(wire
 		(pts
-			(xy 186.69 60.96) (xy 181.61 60.96)
+			(xy 175.26 60.96) (xy 170.18 60.96)
 		)
 		(stroke
 			(width 0)
@@ -1610,7 +1610,7 @@
 	)
 	(wire
 		(pts
-			(xy 210.82 55.88) (xy 215.9 55.88)
+			(xy 199.39 55.88) (xy 204.47 55.88)
 		)
 		(stroke
 			(width 0)
@@ -1620,7 +1620,7 @@
 	)
 	(wire
 		(pts
-			(xy 181.61 60.96) (xy 181.61 71.12)
+			(xy 170.18 60.96) (xy 170.18 71.12)
 		)
 		(stroke
 			(width 0)
@@ -1630,7 +1630,7 @@
 	)
 	(wire
 		(pts
-			(xy 163.83 87.63) (xy 163.83 55.88)
+			(xy 162.56 87.63) (xy 162.56 55.88)
 		)
 		(stroke
 			(width 0)
@@ -1826,7 +1826,7 @@
 	(symbol
 		(lib_name "Ultrasonic_distance_sensor_1")
 		(lib_id "shm_symbols:Ultrasonic_distance_sensor")
-		(at 189.23 82.55 0)
+		(at 177.8 82.55 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1835,7 +1835,7 @@
 		(fields_autoplaced yes)
 		(uuid "a3334d9e-7abb-47c3-a725-0f388983da2d")
 		(property "Reference" "U2"
-			(at 198.4787 78.74 0)
+			(at 187.0487 78.74 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1843,7 +1843,7 @@
 			)
 		)
 		(property "Value" "Brookside sensor"
-			(at 198.4787 81.28 0)
+			(at 187.0487 81.28 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1851,7 +1851,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 189.23 82.55 0)
+			(at 177.8 82.55 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1860,7 +1860,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 189.23 82.55 0)
+			(at 177.8 82.55 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1869,7 +1869,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 189.23 82.55 0)
+			(at 177.8 82.55 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1912,7 +1912,7 @@
 	)
 	(symbol
 		(lib_id "shm_symbols:Ultrasonic_distance_sensor")
-		(at 189.23 50.8 0)
+		(at 177.8 50.8 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1921,7 +1921,7 @@
 		(fields_autoplaced yes)
 		(uuid "a609a6f7-5660-4a22-aa14-d6d9d156f27b")
 		(property "Reference" "U1"
-			(at 198.4787 46.99 0)
+			(at 187.0487 46.99 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1929,7 +1929,7 @@
 			)
 		)
 		(property "Value" "Roadside sensor"
-			(at 198.4787 49.53 0)
+			(at 187.0487 49.53 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1937,7 +1937,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 189.23 50.8 0)
+			(at 177.8 50.8 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1946,7 +1946,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 189.23 50.8 0)
+			(at 177.8 50.8 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1955,7 +1955,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 189.23 50.8 0)
+			(at 177.8 50.8 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1998,7 +1998,7 @@
 	)
 	(symbol
 		(lib_id "shm_symbols:16x2_RGB_LCD_Pi_Plate")
-		(at 90.17 134.62 0)
+		(at 100.33 129.54 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -2007,7 +2007,7 @@
 		(fields_autoplaced yes)
 		(uuid "ad533f4a-3d7e-4caf-90e9-88603cab8cfd")
 		(property "Reference" "U3"
-			(at 102.87 141.6049 0)
+			(at 113.03 136.5249 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2016,7 +2016,7 @@
 			)
 		)
 		(property "Value" "Adafruit i2c 16x2 RGB LCD Pi Plate"
-			(at 102.87 144.1449 0)
+			(at 113.03 139.0649 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2025,7 +2025,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 90.17 134.62 0)
+			(at 100.33 129.54 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2034,7 +2034,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 90.17 134.62 0)
+			(at 100.33 129.54 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2043,7 +2043,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 90.17 134.62 0)
+			(at 100.33 129.54 0)
 			(effects
 				(font
 					(size 1.27 1.27)
