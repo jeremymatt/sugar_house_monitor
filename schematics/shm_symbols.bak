@@ -249,8 +249,8 @@
 		)
 		(symbol "5V_DC-DC_converter_0_1"
 			(rectangle
-				(start 8.89 -13.97)
-				(end -8.89 -5.08)
+				(start -3.81 -5.08)
+				(end 8.89 -13.97)
 				(stroke
 					(width 0)
 					(type default)
@@ -262,16 +262,16 @@
 		)
 		(symbol "5V_DC-DC_converter_1_1"
 			(pin input line
-				(at -11.43 -7.62 0)
+				(at -6.35 -7.62 0)
 				(length 2.54)
-				(name "5V_output"
+				(name "5V"
 					(effects
 						(font
 							(size 1.27 1.27)
 						)
 					)
 				)
-				(number ""
+				(number "out"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -280,7 +280,7 @@
 				)
 			)
 			(pin input line
-				(at 0 -16.51 90)
+				(at 2.54 -16.51 90)
 				(length 2.54)
 				(name "GND"
 					(effects
@@ -300,14 +300,14 @@
 			(pin input line
 				(at 11.43 -7.62 180)
 				(length 2.54)
-				(name "Input"
+				(name "5-24V"
 					(effects
 						(font
 							(size 1.27 1.27)
 						)
 					)
 				)
-				(number ""
+				(number "in"
 					(effects
 						(font
 							(size 1.27 1.27)
