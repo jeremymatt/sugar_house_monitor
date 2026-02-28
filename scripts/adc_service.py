@@ -28,6 +28,7 @@ from main_pump import (
     env_float,
     env_int,
     iso_now,
+    parse_active_low_signals,
 )
 
 LOGGER = logging.getLogger("adc_service")
@@ -69,6 +70,9 @@ def main() -> None:
     reference_voltage = env_float(env, "ADC_REFERENCE_VOLTAGE", ADC_REFERENCE_VOLTAGE)
     debounce_samples = env_int(env, "ADC_DEBOUNCE_SAMPLES", ADC_DEBOUNCE_SAMPLES)
     debounce_delay = env_float(env, "ADC_DEBOUNCE_DELAY", ADC_DEBOUNCE_DELAY)
+    active_low = parse_active_low_signals(env)
+    if active_low:
+        LOGGER.info("Active-low signals: %s", ", ".join(sorted(active_low)))
 
     try:
         reader = MCP3008Reader(
@@ -123,6 +127,8 @@ def main() -> None:
             volts = {}
             for key in signal_keys:
                 signal_value, avg_volts = _compute_signal(bool_buffers[key], reader, threshold_v)
+                if key in active_low:
+                    signal_value = not signal_value
                 signals[key] = signal_value
                 volts[key] = avg_volts
 

@@ -125,6 +125,35 @@ def env_bool(env: Dict[str, str], key: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Maps internal signal name -> env variable name for logic polarity config
+_SIGNAL_POLARITY_ENV = {
+    "tank_full": "TANK_FULL_SIGNAL",
+    "manual_start": "MANUAL_PUMP_ON_SIGNAL",
+    "tank_empty": "TANK_EMPTY_SIGNAL",
+    "service_on": "SERVICE_ON_SIGNAL",
+    "service_off": "SERVICE_OFF_SIGNAL",
+    "clear_fatal": "CLEAR_FATAL_SIGNAL",
+}
+
+
+def parse_active_low_signals(env: Dict[str, str]) -> frozenset[str]:
+    """Return the set of internal signal names configured as active-low.
+
+    Each *_SIGNAL variable can be "high" (default) or "low".
+    """
+    active_low: list[str] = []
+    for sig, env_key in _SIGNAL_POLARITY_ENV.items():
+        raw = env.get(env_key, "high").strip().lower()
+        if raw == "low":
+            active_low.append(sig)
+        elif raw != "high":
+            LOGGER.warning(
+                "Invalid value for %s: %r (expected 'high' or 'low'), defaulting to 'high'",
+                env_key, raw,
+            )
+    return frozenset(active_low)
+
+
 class FatalPrefixFilter(logging.Filter):
     def __init__(self, controller: "PumpController"):
         super().__init__()
@@ -363,12 +392,14 @@ class MCP3008Reader:
         calibration_path: Path,
         debounce_samples: int = ADC_DEBOUNCE_SAMPLES,
         debounce_delay: float = ADC_DEBOUNCE_DELAY,
+        active_low_signals: frozenset[str] = frozenset(),
     ):
         self.adc_threshold_v = adc_threshold_v
         self.reference_voltage = reference_voltage
         self.calibration_path = calibration_path
         self.debounce_samples = max(1, int(debounce_samples))
         self.debounce_delay = max(0.0, float(debounce_delay))
+        self.active_low_signals = active_low_signals
         self._setup_hardware()
         self._load_calibration()
         self.adc_value_range = (0, 65535)
@@ -442,7 +473,10 @@ class MCP3008Reader:
                 votes += 1
             if idx + 1 < self.debounce_samples and self.debounce_delay > 0:
                 time.sleep(self.debounce_delay)
-        return votes >= math.ceil(self.debounce_samples / 2)
+        is_high = votes >= math.ceil(self.debounce_samples / 2)
+        if channel in self.active_low_signals:
+            return not is_high
+        return is_high
 
     def read_signals(self, return_volts: bool = False):
         volts: Dict[str, float] = {}
@@ -466,7 +500,11 @@ class MCP3008Reader:
                     time.sleep(self.debounce_delay)
             avg_volts = float(np.mean(samples))
             volts[key] = avg_volts
-            signals[key] = high_votes >= math.ceil(self.debounce_samples / 2)
+            is_high = high_votes >= math.ceil(self.debounce_samples / 2)
+            if key in self.active_low_signals:
+                signals[key] = not is_high
+            else:
+                signals[key] = is_high
         if return_volts:
             vacuum_raw = self.channels["vacuum"].value
             volts["vacuum"] = self._voltage_from_raw(vacuum_raw)
@@ -1341,6 +1379,7 @@ class PumpApp:
             calibration_path=repo_path_from_config(env.get("VACUUM_CAL_PATH", str(CALIBRATION_PATH))),
             debounce_samples=env_int(env, "ADC_DEBOUNCE_SAMPLES", ADC_DEBOUNCE_SAMPLES),
             debounce_delay=env_float(env, "ADC_DEBOUNCE_DELAY", ADC_DEBOUNCE_DELAY),
+            active_low_signals=parse_active_low_signals(env),
         )
         self.controller = PumpController(
             db=self.db,
