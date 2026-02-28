@@ -556,7 +556,7 @@ void startWifiAttempt(unsigned long nowMs) {
   WiFi.end();
   delay(100);
   if (strlen(WIFI_PASSWORD) == 0) {
-    WiFi.begin(WIFI_SSID);
+    WiFi.begin(WIFI_SSID, "");
   } else {
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   }
