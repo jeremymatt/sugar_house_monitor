@@ -591,7 +591,10 @@ function updatePumpCard(pumpData, staleSec, thresholdSec) {
 
   if (runElem) {
     if (runTime != null && interval != null) {
-      runElem.textContent = `Run: ${runTime.toFixed(0)} s / Interval: ${interval.toFixed(0)} s`;
+      const intMin = Math.floor(interval / 60);
+      const intSec = Math.round(interval % 60);
+      const intStr = `${String(intMin).padStart(2, "0")}:${String(intSec).padStart(2, "0")}`;
+      runElem.textContent = `Run: ${runTime.toFixed(0)} s / Interval: ${intStr}`;
     } else {
       runElem.textContent = "Run --- / Interval ---";
     }
