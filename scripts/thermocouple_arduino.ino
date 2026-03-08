@@ -429,21 +429,19 @@ bool hasValidLocalIp(const IPAddress &ip) {
   return ip != IPAddress(0, 0, 0, 0);
 }
 
-String isoTimestamp() {
+// Write ISO timestamp into buf (must be >= 25 bytes). Returns length, 0 on failure.
+size_t isoTimestamp(char *buf, size_t bufSize) {
   time_t now = WiFi.getTime();
   if (now <= 0) {
-    return "";
+    buf[0] = '\0';
+    return 0;
   }
   tm *tm_info = gmtime(&now);
   if (!tm_info) {
-    return "";
+    buf[0] = '\0';
+    return 0;
   }
-  char buf[25];
-  size_t written = strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", tm_info);
-  if (written == 0) {
-    return "";
-  }
-  return String(buf);
+  return strftime(buf, bufSize, "%Y-%m-%dT%H:%M:%SZ", tm_info);
 }
 
 bool initMcp(bool verbose) {
@@ -556,7 +554,7 @@ void startWifiAttempt(unsigned long nowMs) {
   WiFi.end();
   delay(100);
   if (strlen(WIFI_PASSWORD) == 0) {
-    WiFi.begin(WIFI_SSID, "");
+    WiFi.begin(WIFI_SSID);
   } else {
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   }
@@ -626,26 +624,30 @@ bool sendTemps(float stackF, float ambientF) {
     return false;
   }
 
-  String ts = isoTimestamp();
-  String payload = "{\"api_key\":\"";
-  payload += API_KEY;
-  payload += "\",\"readings\":[{\"stack_temp_f\":";
-  payload += String(stackF, 1);
-  payload += ",\"ambient_temp_f\":";
-  payload += String(ambientF, 1);
-  if (ts.length()) {
-    payload += ",\"source_timestamp\":\"";
-    payload += ts;
-    payload += '"';
-  }
-  payload += "}]}";
+  // Build payload in a stack buffer — no heap String fragmentation
+  char ts[25];
+  isoTimestamp(ts, sizeof(ts));
 
-  String path = String(API_PATH);
-  // Also pass api_key as query param in case headers are stripped by proxies.
-  if (path.indexOf("api_key=") < 0) {
-    path += path.indexOf('?') >= 0 ? "&" : "?";
-    path += "api_key=";
-    path += API_KEY;
+  char payload[256];
+  int payloadLen;
+  if (ts[0]) {
+    payloadLen = snprintf(payload, sizeof(payload),
+      "{\"api_key\":\"%s\",\"readings\":[{\"stack_temp_f\":%.1f,"
+      "\"ambient_temp_f\":%.1f,\"source_timestamp\":\"%s\"}]}",
+      API_KEY, stackF, ambientF, ts);
+  } else {
+    payloadLen = snprintf(payload, sizeof(payload),
+      "{\"api_key\":\"%s\",\"readings\":[{\"stack_temp_f\":%.1f,"
+      "\"ambient_temp_f\":%.1f}]}",
+      API_KEY, stackF, ambientF);
+  }
+
+  // Build path in a stack buffer
+  char path[128];
+  if (strchr(API_PATH, '?')) {
+    snprintf(path, sizeof(path), "%s&api_key=%s", API_PATH, API_KEY);
+  } else {
+    snprintf(path, sizeof(path), "%s?api_key=%s", API_PATH, API_KEY);
   }
 
   Serial.print("POST ");
@@ -659,13 +661,13 @@ bool sendTemps(float stackF, float ambientF) {
   httpClient.post(path);
   httpClient.sendHeader("Content-Type", "application/json");
   httpClient.sendHeader("X-API-Key", API_KEY);
-  httpClient.sendHeader("Content-Length", payload.length());
+  httpClient.sendHeader("Content-Length", payloadLen);
   httpClient.beginBody();
   httpClient.print(payload);
   httpClient.endRequest();
 
   int status = httpClient.responseStatusCode();
-  String resp = httpClient.responseBody();
+  httpClient.responseBody();  // drain response
   httpClient.stop();
 
   if (status < 200 || status >= 300) {
@@ -675,7 +677,6 @@ bool sendTemps(float stackF, float ambientF) {
     Serial.print("Upload failed (HTTP ");
     Serial.print(status);
     Serial.println(")");
-    Serial.println(resp);
 
     // Attempt WiFi recovery after repeated HTTP/TLS failures.
     httpFailureCount += 1;
@@ -701,10 +702,21 @@ bool sendTemps(float stackF, float ambientF) {
 void setup()
 {
   Serial.begin(115200);
-  while (!Serial) {
-    delay(10);
+  // Wait for Serial but time out after 3s so board works without USB
+  {
+    unsigned long serialWait = millis();
+    while (!Serial && millis() - serialWait < 3000) {
+      delay(10);
+    }
   }
   Serial.println("MCP9600 HW test");
+
+  if (WiFi.status() == WL_NO_MODULE) {
+    Serial.println("ERROR: WiFi module not found!");
+    while (true);
+  }
+  Serial.print("WiFi firmware version: ");
+  Serial.println(WiFi.firmwareVersion());
 
   netClient.setTimeout(15000);
   Wire.begin();
@@ -737,6 +749,7 @@ void loop()
     advanceMinuteBuckets(now);
 
     float hotC  = mcp.readThermocouple();
+    delay(5);
     float coldC = mcp.readAmbient();
 
     if (isnan(hotC) || isnan(coldC)) {
@@ -767,10 +780,6 @@ void loop()
       Serial.print("Ambient (cold junction): ");
       Serial.print(coldF, 2);
       Serial.println(" F");
-
-      Serial.print("ADC: ");
-      Serial.print(mcp.readADC() * 2);
-      Serial.println(" uV");
 
       if (wifiConnected && now >= nextUploadAttemptMs) {
         const bool uploadOk = sendTemps(hotF, coldF);
@@ -817,6 +826,11 @@ void loop()
   }
   lastStale = stale;
 
+  // Brief gap between sensor I2C reads and LCD I2C writes
+  if (newReadingOk) {
+    delay(5);
+  }
+
   const bool netOk = wifiConnected && lastUploadOk;
   const bool displayUpdateNeeded = newReadingOk || displayToggle || (netOk != lastNetOk);
   if (displayUpdateNeeded) {
@@ -833,4 +847,7 @@ void loop()
     }
     lastNetOk = netOk;
   }
+
+  // Prevent tight-looping; 50ms is plenty responsive for 1Hz sampling
+  delay(50);
 }
