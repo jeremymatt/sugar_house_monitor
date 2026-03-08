@@ -64,6 +64,19 @@ SAMPLE_TIMING_LOG = Path(__file__).resolve().parents[1] / "data" / "sample_proce
 DEBUG_SAMPLE_PROCESS_TIMING = False
 
 
+def _json_default(obj):
+    """Convert numpy/pandas types to native Python for json.dumps."""
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 def set_sample_process_timing(enabled: bool) -> None:
     global DEBUG_SAMPLE_PROCESS_TIMING
     DEBUG_SAMPLE_PROCESS_TIMING = bool(enabled)
@@ -562,7 +575,7 @@ class TankStatusFileWriter:
         if not self.path:
             return
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, indent=2))
+        tmp.write_text(json.dumps(payload, indent=2, default=_json_default))
         tmp.replace(self.path)
 
 
