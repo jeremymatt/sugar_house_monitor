@@ -23,17 +23,13 @@ import pygame
 import requests
 
 # ---- LOGGING ----
-LOG_FILE = os.environ.get("DISPLAY_LOG_FILE", "").strip() or os.path.expanduser("~/display_controller.log")
+# Log to stderr only; systemd StandardError=append: handles file output.
 LOG_LEVEL = os.environ.get("DISPLAY_LOG_LEVEL", "INFO").strip().upper()
 
 logger = logging.getLogger("display")
 logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
 
 _fmt = logging.Formatter("%(asctime)s %(levelname)-5s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-_file_handler = logging.FileHandler(LOG_FILE)
-_file_handler.setFormatter(_fmt)
-logger.addHandler(_file_handler)
-
 _stderr_handler = logging.StreamHandler(sys.stderr)
 _stderr_handler.setFormatter(_fmt)
 logger.addHandler(_stderr_handler)
@@ -740,7 +736,7 @@ def main():
         os.environ["DISPLAY"] = ":0"
     logger.info("Starting display controller (PID %d)", os.getpid())
     logger.info("API_BASE=%s  STATUS_URL=%s  REFRESH_SEC=%s", API_BASE, STATUS_URL, REFRESH_SEC)
-    logger.info("LOG_FILE=%s  LOG_LEVEL=%s", LOG_FILE, LOG_LEVEL)
+    logger.info("LOG_LEVEL=%s", LOG_LEVEL)
     logger.debug("HAS_FONT=%s  HAS_FREETYPE=%s", HAS_FONT, HAS_FREETYPE)
     pygame.init()
     disable_screen_blanking()
