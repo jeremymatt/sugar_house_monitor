@@ -14,6 +14,7 @@ import sys
 import time
 import math
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
@@ -21,6 +22,21 @@ from typing import List, Optional, Tuple
 import pygame
 import requests
 
+# ---- LOGGING ----
+LOG_FILE = os.environ.get("DISPLAY_LOG_FILE", "").strip() or os.path.expanduser("~/display_controller.log")
+LOG_LEVEL = os.environ.get("DISPLAY_LOG_LEVEL", "INFO").strip().upper()
+
+logger = logging.getLogger("display")
+logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+
+_fmt = logging.Formatter("%(asctime)s %(levelname)-5s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+_file_handler = logging.FileHandler(LOG_FILE)
+_file_handler.setFormatter(_fmt)
+logger.addHandler(_file_handler)
+
+_stderr_handler = logging.StreamHandler(sys.stderr)
+_stderr_handler.setFormatter(_fmt)
+logger.addHandler(_stderr_handler)
 
 # ---- CONFIG ----
 DEBUG = os.environ.get("DISPLAY_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -123,8 +139,7 @@ _WARN_RENDER_FAIL = False
 
 
 def debug_log(message: str) -> None:
-    if DEBUG:
-        print(f"[display debug] {message}", file=sys.stderr, flush=True)
+    logger.debug(message)
 
 
 def save_snapshot(surface, path: str) -> None:
@@ -142,7 +157,7 @@ def save_snapshot(surface, path: str) -> None:
         pygame.image.save(surface, tmp_path)
         os.replace(tmp_path, path)
     except Exception as exc:
-        debug_log(f"Snapshot save failed: {exc}")
+        logger.warning("Snapshot save failed: %s", exc)
         try:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
@@ -190,14 +205,15 @@ def fetch_json(url: str, params: Optional[dict] = None) -> Optional[dict]:
     try:
         resp = requests.get(url, params=params, timeout=10)
         if resp.status_code != 200:
-            print(f"HTTP {resp.status_code} for {url}", file=sys.stderr)
+            logger.warning("HTTP %d for %s", resp.status_code, url)
             return None
         text = resp.text.strip()
         if not text:
+            logger.warning("Empty response for %s", url)
             return None
         return json.loads(text)
     except Exception as exc:
-        print(f"Fetch failed for {url}: {exc}", file=sys.stderr)
+        logger.error("Fetch failed for %s: %s", url, exc)
         return None
 
 
@@ -722,10 +738,10 @@ def disable_screen_blanking():
 def main():
     if not os.environ.get("DISPLAY"):
         os.environ["DISPLAY"] = ":0"
-    debug_log(
-        f"Init display with HAS_FONT={HAS_FONT} HAS_FREETYPE={HAS_FREETYPE} "
-        f"API_BASE={API_BASE} STATUS_URL={STATUS_URL}"
-    )
+    logger.info("Starting display controller (PID %d)", os.getpid())
+    logger.info("API_BASE=%s  STATUS_URL=%s  REFRESH_SEC=%s", API_BASE, STATUS_URL, REFRESH_SEC)
+    logger.info("LOG_FILE=%s  LOG_LEVEL=%s", LOG_FILE, LOG_LEVEL)
+    logger.debug("HAS_FONT=%s  HAS_FREETYPE=%s", HAS_FONT, HAS_FREETYPE)
     pygame.init()
     disable_screen_blanking()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN)
@@ -763,8 +779,13 @@ def main():
                 fetched = fetch_state()
                 if fetched:
                     settings, points, stack_points, status = fetched
+                    logger.info(
+                        "Fetch OK – %d flow pts, %d stack pts, evap_flow=%s",
+                        len(points), len(stack_points),
+                        status.evap_flow,
+                    )
             except Exception as exc:
-                debug_log(f"fetch_state error: {exc}")
+                logger.error("fetch_state error: %s", exc)
             last_fetch = now
 
         screen.fill(BACKGROUND)
@@ -792,6 +813,7 @@ def main():
             last_snapshot = now
         clock.tick(30)
 
+    logger.info("Display controller shutting down")
     pygame.quit()
 
 
