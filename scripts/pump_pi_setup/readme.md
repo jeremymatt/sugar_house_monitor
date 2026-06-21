@@ -15,7 +15,6 @@ The Pump Pi controls a transfer pump for maple sap using a safety-focused state 
 - **Safety-first**: Pump controller is the sole authority for relay on/off decisions
 - **Stale data protection**: Incoherent or stale sensor data forces pump off; escalates to fatal after 10 seconds
 - **Service isolation**: Each process can be restarted independently; failures don't cascade
-- **Shared memory IPC**: Services communicate via `/dev/shm/*.json` cache files
 
 ## 2. Setup Instructions
 
@@ -25,8 +24,6 @@ The Pump Pi controls a transfer pump for maple sap using a safety-focused state 
    ```bash
    sudo raspi-config nonint do_spi 0
    ```
-
-2. **Hardware wiring** (see [Hardware Overview](#4-hardware-overview-wiring) below)
 
 ### Environment Configuration
 
@@ -166,28 +163,7 @@ Full config reference: `config/example/pump_pi.env`
 
 **Reference voltage**: 5V (configurable via `ADC_REFERENCE_VOLTAGE`)
 
-### Status LED Wiring
-
-**Component**: Common-cathode dual-color (red/green) LED
-
-**CRITICAL SAFETY CONSTRAINT**: Only ONE color can be active at a time due to shared cathode with single current-limiting resistor. Software enforces mutual exclusivity.
-
-**Wiring Diagram**:
-```
-                 150Ω resistor
-                      │
-    GPIO17 (Red) ─────┤>├──┐
-                 Red LED    │
-                            ├─── GND (Common Cathode)
-    GPIO4 (Green) ────┤>├──┘
-                Green LED
-```
-
-**Component selection**:
-- Typical forward voltage (Vf): 2.0V
-- Typical forward current (If): 10mA
-- Resistor calculation: R = (3.3V - Vf) / If = (3.3 - 2.0) / 0.01 = 130Ω → use 150Ω standard value
-- **Do not exceed 16mA** per GPIO pin (Raspberry Pi limit)
+### Status LED
 
 **LED State Patterns**:
 
@@ -212,8 +188,6 @@ Full config reference: `config/example/pump_pi.env`
 - IN: GPIO22
 - NO (Normally Open): To pump hot wire
 - COM (Common): From 120VAC hot
-
-**Safety**: Relay module provides optical isolation between Pi logic and AC power.
 
 ## 5. Additional Details
 

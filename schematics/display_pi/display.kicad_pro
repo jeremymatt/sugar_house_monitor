@@ -265,7 +265,7 @@
     "pinned_symbol_libs": []
   },
   "meta": {
-    "filename": "tank_pi.kicad_pro",
+    "filename": "display.kicad_pro",
     "version": 3
   },
   "net_settings": {
@@ -432,18 +432,18 @@
     "subpart_id_separator": 0,
     "top_level_sheets": [
       {
-        "filename": "tank_pi.kicad_sch",
-        "name": "tank_pi",
-        "uuid": "f3cee939-4aa5-45a3-a8df-8ddd7da86b9a"
+        "filename": "display.kicad_sch",
+        "name": "o2_pi",
+        "uuid": "1b2f84d5-266a-4901-af4f-250e70ba90d8"
       }
     ],
-    "used_designators": "U3",
+    "used_designators": "J4,U1",
     "variants": []
   },
   "sheets": [
     [
-      "f3cee939-4aa5-45a3-a8df-8ddd7da86b9a",
-      "tank_pi"
+      "1b2f84d5-266a-4901-af4f-250e70ba90d8",
+      "o2_pi"
     ]
   ],
   "text_variables": {},
